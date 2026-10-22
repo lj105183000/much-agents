@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# uv / virtual environments
+.venv/
+venv/
+# uv.lock 需要提交，不要忽略
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Application data
+chroma_db/
+upload/
+*.log
+
+# Node / frontend / Electron（后续步骤使用）
+node_modules/
+dist/
