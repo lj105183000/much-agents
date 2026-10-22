@@ -28,3 +28,8 @@ upload/
 # Node / frontend / Electron（后续步骤使用）
 node_modules/
 dist/
+
+# Frontend / Electron build artifacts
+release/
+*.tsbuildinfo
+.vite/
