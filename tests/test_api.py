@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.config import ApiSettings
-from api.jobs import JobStore
+from api.jobs import JobStore, JobStoreError
 from api.runner import InlineRunner, ThreadJobRunner
 from src.parsing.config import Settings
 from src.parsing.errors import ParseError
@@ -401,3 +401,10 @@ def test_job_store_prunes_terminal_jobs() -> None:
     store.mark_failed(job.job_id, error="boom", exit_code=3)
     now[0] = 11
     assert store.get("j1") is None
+
+
+def test_job_store_rejects_invalid_kind() -> None:
+    store = JobStore()
+    with pytest.raises(JobStoreError):
+        store.create(job_id="bad", filename="a.pdf", doc_id="a", kind="bogus")
+    assert store.get("bad") is None

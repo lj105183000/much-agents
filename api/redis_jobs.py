@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping
 import redis
 
 from .config import ApiSettings
-from .jobs import Job, JobStoreError, JobStoreProtocol, JobState, utcnow
+from .jobs import JOB_KINDS, Job, JobKind, JobStoreError, JobStoreProtocol, JobState, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class RedisJobStore(JobStoreProtocol):
             if status not in JOB_STATES:
                 raise ValueError(f"invalid status {status!r}")
             kind = raw.get("kind") or "parse"
-            if kind not in ("parse", "bid"):
+            if kind not in JOB_KINDS:
                 raise ValueError(f"invalid kind {kind!r}")
             result = json.loads(raw["result"]) if raw.get("result") else None
             payload = json.loads(raw["payload"]) if raw.get("payload") else None
@@ -211,9 +211,11 @@ class RedisJobStore(JobStoreProtocol):
         extract: bool = False,
         ingest: bool = False,
         source_path: Path | None = None,
-        kind: str = "parse",
+        kind: JobKind = "parse",
         payload: dict[str, Any] | None = None,
     ) -> Job:
+        if kind not in JOB_KINDS:
+            raise JobStoreError(f"invalid job kind: {kind!r}")
         job = Job(
             job_id=job_id,
             filename=filename,
@@ -223,7 +225,7 @@ class RedisJobStore(JobStoreProtocol):
             ingest=ingest,
             created_at=self._clock(),
             source_path=source_path,
-            kind=kind,  # type: ignore[arg-type]
+            kind=kind,
             payload=payload,
         )
         key = self._key(job_id)
@@ -319,7 +321,7 @@ class RedisJobStore(JobStoreProtocol):
             finished_at=self._clock(),
             stage="done",
             percent=100,
-            message="parse completed",
+            message="bid completed" if job.kind == "bid" else "parse completed",
             exit_code=0,
             result=summary,
             error=None,

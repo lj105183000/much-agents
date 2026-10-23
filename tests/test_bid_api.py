@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from api.bids import execute_bid_job
+from api.jobs import JobStore
 from api.runner import InlineRunner
 from tests.fakes import (
     FakeDispatcher,
@@ -126,7 +128,7 @@ def test_bid_api_dispatch_failure_returns_503(tmp_path: Path) -> None:
 
 def test_bid_celery_task_wiring(monkeypatch) -> None:
     import api.tasks as tasks
-    from api.task_names import BID_TASK_NAME
+    from api.task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE
 
     calls: list[tuple] = []
     fake_store = object()
@@ -136,8 +138,36 @@ def test_bid_celery_task_wiring(monkeypatch) -> None:
         lambda job_id, **kwargs: calls.append((job_id, kwargs)),
     )
     tasks.write_bid_task.run("bid-job-1")
-    assert BID_TASK_NAME == "much_agents.write_bid"
+    assert BID_TASK_NAME == "bidding.write_bid"
+    assert tasks.write_bid_task.name == BID_TASK_NAME
+    assert BID_QUEUE == PARSE_QUEUE == "parse"
     assert calls
     job_id, kwargs = calls[0]
     assert job_id == "bid-job-1"
     assert kwargs["store"] is fake_store
+
+
+def test_execute_bid_job_rejects_invalid_max_sections_payload(tmp_path: Path) -> None:
+    store = JobStore()
+    store.create(
+        job_id="bid-bad",
+        filename="doc-1",
+        doc_id="doc-1",
+        kind="bid",
+        payload={"doc_id": "doc-1", "max_sections": "two"},
+    )
+    calls: list[tuple] = []
+
+    execute_bid_job(
+        "bid-bad",
+        store=store,
+        bid_settings=make_bid_settings(tmp_path),
+        run_func=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    failed = store.get("bid-bad")
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.exit_code == 2
+    assert "max_sections" in (failed.error or "")
+    assert calls == []

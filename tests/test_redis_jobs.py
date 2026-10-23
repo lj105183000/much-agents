@@ -64,6 +64,7 @@ def test_claim_progress_and_terminal_guards(tmp_path: Path) -> None:
     succeeded = store.mark_succeeded("job-1", summary)
     assert succeeded is not None
     assert succeeded.status == "succeeded"
+    assert succeeded.message == "parse completed"
     assert succeeded.result is not None
     assert succeeded.result["doc_id"] == "tender-abc123"
     assert store.get("job-1").stage == "done"  # type: ignore[union-attr]
@@ -168,3 +169,26 @@ def test_from_settings_wires_url_and_ttl(tmp_path: Path, monkeypatch) -> None:
     assert store._ttl == 120
     assert captured["args"][0] == "redis://example:6379/3"
     assert captured["kwargs"]["decode_responses"] is True
+
+
+def test_bid_success_message(tmp_path: Path) -> None:
+    store, _client, _clock = make_store(tmp_path)
+    store.create(
+        job_id="bid-1",
+        filename="doc-1",
+        doc_id="doc-1",
+        kind="bid",
+        payload={"doc_id": "doc-1", "max_sections": 1},
+    )
+    store.mark_running("bid-1")
+    succeeded = store.mark_succeeded("bid-1", {"kind": "bid"})
+    assert succeeded is not None
+    assert succeeded.status == "succeeded"
+    assert succeeded.message == "bid completed"
+
+
+def test_create_rejects_invalid_kind(tmp_path: Path) -> None:
+    store, client, _clock = make_store(tmp_path)
+    with pytest.raises(JobStoreError):
+        store.create(job_id="bad", filename="x.pdf", doc_id="x", kind="bogus")
+    assert f"{JOB_KEY_PREFIX}bad" not in client.hashes

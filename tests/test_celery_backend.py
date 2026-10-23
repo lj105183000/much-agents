@@ -12,14 +12,16 @@ from api.dispatch import CeleryDispatcher
 from api.jobs import JobStore
 from api.runner import InlineRunner
 from api.service import UploadError
-from api.task_names import PARSE_QUEUE, PARSE_TASK_NAME
+from api.task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
 from tests.fakes import (
     FakeCeleryApp,
     FakeDispatcher,
     FailingStore,
     make_api_settings,
+    make_bid_settings,
     make_parse_result,
     make_parse_settings,
+    write_parsed_fixture,
 )
 
 
@@ -202,3 +204,54 @@ def test_task_backend_settings_defaults_and_validation() -> None:
     assert invalid.task_backend == "celery"
     broker = ApiSettings.from_env(env={"CELERY_BROKER_URL": "redis://broker:6379/1"})
     assert broker.celery_broker_url == "redis://broker:6379/1"
+
+
+def test_celery_mode_bid_submit_publishes_write_bid_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    write_parsed_fixture(tmp_path)
+    fake = FakeCeleryApp()
+    monkeypatch.setattr("api.celery_app.create_celery_app", lambda settings: fake)
+    store = JobStore()
+    app = create_app(
+        api_settings=make_api_settings(tmp_path, TASK_BACKEND="celery"),
+        parse_settings=make_parse_settings(tmp_path),
+        bid_settings=make_bid_settings(tmp_path),
+        store=store,
+    )
+    assert app.state.task_backend == "celery"
+    assert app.state.bid_dispatcher.task_name == BID_TASK_NAME
+    assert app.state.bid_dispatcher.queue == BID_QUEUE
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/bids",
+            json={
+                "doc_id": "doc-1",
+                "profile": {"company": {"name": "ACME"}},
+                "max_sections": 1,
+            },
+        )
+        assert response.status_code == 202
+        body = response.json()
+        assert body["kind"] == "bid"
+        job_id = body["job_id"]
+        assert fake.calls == [
+            {
+                "name": BID_TASK_NAME,
+                "args": [job_id],
+                "task_id": job_id,
+                "queue": BID_QUEUE,
+                "ignore_result": True,
+            }
+        ]
+        view = client.get(body["poll_url"]).json()
+        assert view["status"] == "queued"
+        assert view["kind"] == "bid"
+        assert "payload" not in view
+
+    job = store.get(job_id)
+    assert job is not None
+    assert job.payload == {"doc_id": "doc-1", "max_sections": 1}
+    assert "profile" not in job.payload
+    assert (tmp_path / "bids" / "doc-1" / job_id / "profile.json").is_file()

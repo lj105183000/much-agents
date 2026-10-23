@@ -10,6 +10,7 @@ from typing import Any, Callable, Literal, Protocol
 
 JobState = Literal["queued", "running", "succeeded", "failed"]
 JobKind = Literal["parse", "bid"]
+JOB_KINDS = frozenset({"parse", "bid"})
 
 
 class JobStoreError(RuntimeError):
@@ -141,6 +142,8 @@ class JobStore:
         kind: JobKind = "parse",
         payload: dict[str, Any] | None = None,
     ) -> Job:
+        if kind not in JOB_KINDS:
+            raise JobStoreError(f"invalid job kind: {kind!r}")
         with self._lock:
             self._prune_locked()
             job = Job(

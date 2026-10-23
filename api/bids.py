@@ -135,6 +135,13 @@ def execute_bid_job(
 
     payload = job.payload or {}
     max_sections = payload.get("max_sections")
+    if max_sections is not None and (
+        isinstance(max_sections, bool)
+        or not isinstance(max_sections, int)
+        or max_sections < 0
+    ):
+        _fail(store, job_id, "invalid max_sections in job payload", 2)
+        return
     root = bid_settings.bids_dir.resolve()
     run_dir = (bid_settings.bids_dir / job.doc_id / job.job_id).resolve()
     if not run_dir.is_relative_to(root):

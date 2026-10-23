@@ -1,4 +1,4 @@
-"""HTTP routes for uploading and polling parse jobs."""
+"""HTTP routes for uploading, polling, and bid-writing jobs."""
 
 from __future__ import annotations
 

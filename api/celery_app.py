@@ -1,4 +1,4 @@
-"""Celery application for background parse jobs."""
+"""Celery application for background parse and bid jobs."""
 
 from __future__ import annotations
 

@@ -25,7 +25,7 @@ uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽�
 uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
 uv run uvicorn api.main:app --host 0.0.0.0 --port 8001          # 启动 API（单进程）
 uv run python -m api                                            # 读取 API_HOST/API_PORT
-uv run celery -A api.celery_app:celery_app worker -Q parse --pool=solo --loglevel=INFO  # Celery worker
+uv run celery -A api.celery_app:celery_app worker -Q parse --pool=solo --loglevel=INFO  # parse 队列同时消费 parse 与 bidding.write_bid
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
 ```
@@ -77,7 +77,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
 - `GET /api/health`。
 - 上传落盘 `upload/inbox/<job_id>/source.pdf`；`doc_id = <文件名>-<内容 sha256 前 12 位>`，相同内容重复上传可命中解析缓存。
-- 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash，Celery worker 消费 `parse` 队列；API 重启后仍可轮询，任务记录 24h TTL。
+- 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash，Celery worker 消费 `parse` 队列（同时承载 parse 与 bid 任务，按 `Job.kind` 区分）；API 重启后仍可轮询，任务记录 24h TTL。
 - Worker 与 API 必须同一 checkout、共享 `upload/` 与 `.env`；Windows 用 `--pool=solo`（单任务串行，保护 MinerU 配额），不自动重试（`acks_late=False`），`mark_running` 原子 claim 防重复解析。
 - Redis 不可用时 `POST /api/parse` 与 `GET /api/jobs/{id}` 返回 503，health 为 `status=degraded, redis_ok=false`。
 - `TASK_BACKEND=local` 使用进程内 `JobStore` + `ThreadJobRunner`，无需 Redis/worker，但 API 重启即丢任务；测试与本地离线开发用它。
@@ -85,7 +85,13 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 多 Agent 投标文件编写（已实现，`src/bidding/`）
 
-- 入口：CLI `uv run python -m src.cli write <doc_id>`，以及 `POST /api/bids`（JSON `{doc_id, profile, max_sections}`），复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `parse` 队列（任务名 `much_agents.write_bid`）。
+- 入口：CLI `uv run python -m src.cli write <doc_id>`，以及 `POST /api/bids`（JSON `{doc_id, profile, max_sections}`），复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `parse` 队列（任务名 `bidding.write_bid`）。
+
+  ```bash
+  curl -X POST http://127.0.0.1:8001/api/bids \
+    -H "Content-Type: application/json" \
+    -d '{"doc_id":"6055594244948","profile":{},"max_sections":1}'
+  ```
 - 产物：`upload/bids/<doc_id>/<run_id>/` 下的 `profile.json`、`outline.json`、`bid.md`、`bid.docx`、`report.json`、`sections/*.md`。
 - LangGraph 流程：确定性 plan → 逐节检索（Chroma/关键词兜底）→ 并行 Writer → 并行 Reviewer → 条件 Reviser → 确定性 assemble；只有施工组织设计的 11 个 narrative 子章节经过 LLM，其余表单/附件为确定性模板。
 - 投标人资料：`bidder_profile.example.json` 模板；缺失字段一律 `【待填写：...】`，严禁编造公司、人员、证书、业绩、报价、日期。Writer/Reviewer 不接收完整 profile；profile 快照只落本地 run 目录，不进入 Redis/Celery 消息。
