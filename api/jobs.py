@@ -6,9 +6,13 @@ import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Protocol
 
 JobState = Literal["queued", "running", "succeeded", "failed"]
+
+
+class JobStoreError(RuntimeError):
+    """The job store is unreachable or contains an invalid record."""
 
 
 def utcnow() -> datetime:
@@ -55,6 +59,44 @@ class Job:
             "result": self.result,
             "error": self.error,
         }
+
+
+class JobStoreProtocol(Protocol):
+    def create(
+        self,
+        *,
+        job_id: str,
+        filename: str,
+        doc_id: str,
+        parser: str,
+        extract: bool,
+        ingest: bool,
+        source_path: Path | None = None,
+    ) -> Job: ...
+
+    def get(self, job_id: str) -> Job | None: ...
+
+    def get_view(self, job_id: str) -> dict[str, Any] | None: ...
+
+    def count(self) -> int: ...
+
+    def ping(self) -> bool: ...
+
+    def mark_running(self, job_id: str) -> Job | None: ...
+
+    def update_progress(self, job_id: str, stage: str, percent: int, message: str) -> None: ...
+
+    def mark_succeeded(self, job_id: str, summary: dict[str, Any]) -> Job | None: ...
+
+    def mark_failed(
+        self,
+        job_id: str,
+        *,
+        error: str,
+        exit_code: int = 1,
+        summary: dict[str, Any] | None = None,
+        only_if_queued: bool = False,
+    ) -> Job | None: ...
 
 
 class JobStore:
@@ -120,11 +162,15 @@ class JobStore:
             self._prune_locked()
             return len(self._jobs)
 
+    def ping(self) -> bool:
+        return True
+
     def mark_running(self, job_id: str) -> Job | None:
+        """Atomically claim a queued job. Returns None if it was already claimed."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is None or job.status in ("succeeded", "failed"):
-                return job
+            if job is None or job.status != "queued":
+                return None
             updated = replace(
                 job,
                 status="running",
@@ -176,10 +222,13 @@ class JobStore:
         error: str,
         exit_code: int = 1,
         summary: dict[str, Any] | None = None,
+        only_if_queued: bool = False,
     ) -> Job | None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job.status in ("succeeded", "failed"):
+                return job
+            if only_if_queued and job.status != "queued":
                 return job
             updated = replace(
                 job,

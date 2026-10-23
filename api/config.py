@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 
 from dotenv import load_dotenv
 
@@ -31,6 +31,16 @@ def _int(env: Mapping[str, str], key: str, default: int, minimum: int = 1) -> in
     return value if value >= minimum else default
 
 
+def _choice(
+    env: Mapping[str, str],
+    key: str,
+    default: str,
+    allowed: set[str],
+) -> str:
+    value = _str(env, key, default).strip().lower()
+    return value if value in allowed else default
+
+
 @dataclass(frozen=True, slots=True)
 class ApiSettings:
     project_root: Path
@@ -40,6 +50,11 @@ class ApiSettings:
     max_upload_mb: int = 200
     job_workers: int = 1
     cors_origins: tuple[str, ...] = ("*",)
+    task_backend: Literal["celery", "local"] = "celery"
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str | None = None
+    celery_worker_pool: str = "solo"
+    job_ttl_seconds: int = 24 * 3600
 
     @property
     def inbox_dir(self) -> Path:
@@ -71,6 +86,7 @@ class ApiSettings:
         origins = tuple(
             item.strip() for item in raw_origins.split(",") if item.strip()
         ) or ("*",)
+        broker = _str(env, "CELERY_BROKER_URL", "")
 
         return cls(
             project_root=root,
@@ -80,4 +96,9 @@ class ApiSettings:
             max_upload_mb=_int(env, "MAX_UPLOAD_MB", 200),
             job_workers=_int(env, "API_JOB_WORKERS", 1),
             cors_origins=origins,
+            task_backend=_choice(env, "TASK_BACKEND", "celery", {"celery", "local"}),
+            redis_url=_str(env, "REDIS_URL", "redis://localhost:6379/0"),
+            celery_broker_url=broker or None,
+            celery_worker_pool=_str(env, "CELERY_WORKER_POOL", "solo"),
+            job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
         )
