@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。Celery/Redis 任务后端、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）与测试 `tests/`。多 Agent 投标文件编写、PostgreSQL 持久化仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -25,10 +25,12 @@ uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽�
 uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
 uv run uvicorn api.main:app --host 0.0.0.0 --port 8001          # 启动 API（单进程）
 uv run python -m api                                            # 读取 API_HOST/API_PORT
+uv run celery -A api.celery_app:celery_app worker -Q parse --pool=solo --loglevel=INFO  # Celery worker
+TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write <doc_id>      # CLI 运行多 Agent 编写（规划中）
 ```
 
-FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；Celery worker 在 Windows 上默认用 `solo` 池。
+FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；默认使用 Celery + Redis，Windows worker 必须 `--pool=solo`。
 
 ### 前端（`frontend/`）
 
@@ -75,18 +77,20 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
 - `GET /api/health`。
 - 上传落盘 `upload/inbox/<job_id>/source.pdf`；`doc_id = <文件名>-<内容 sha256 前 12 位>`，相同内容重复上传可命中解析缓存。
-- 任务表在内存（`api/jobs.py`），后台执行用 `ThreadJobRunner`（`API_JOB_WORKERS=1`）；进程重启、`--reload` 或多 worker 都会丢任务，必须单进程运行。
+- 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash，Celery worker 消费 `parse` 队列；API 重启后仍可轮询，任务记录 24h TTL。
+- Worker 与 API 必须同一 checkout、共享 `upload/` 与 `.env`；Windows 用 `--pool=solo`（单任务串行，保护 MinerU 配额），不自动重试（`acks_late=False`），`mark_running` 原子 claim 防重复解析。
+- Redis 不可用时 `POST /api/parse` 与 `GET /api/jobs/{id}` 返回 503，health 为 `status=degraded, redis_ok=false`。
+- `TASK_BACKEND=local` 使用进程内 `JobStore` + `ThreadJobRunner`，无需 Redis/worker，但 API 重启即丢任务；测试与本地离线开发用它。
 - CORS 默认 `*`、无 credentials，兼容 Vite dev 与 Electron `file://`；对外暴露前需改成显式来源并加鉴权。`result.output_dir` 是绝对路径，仅适合本地桌面端。
 
 ### 尚未实现（后续阶段）
 
-- **任务后端**：Celery/Redis（`TASK_BACKEND=celery` 默认，Redis 不可用返回 503）；当前 API 使用进程内线程 + 内存任务表。
 - **投标接口与多 Agent**：`POST /api/bids` 接收 profile JSON；LangGraph 编写；缺失字段生成【待填写】，绝不编造；输出 Markdown + docx。
 - **待办**：PostgreSQL 公司信息、检索接口、MinIO、Nginx。
 
 ### 配置与数据
 
-- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU 参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`）。
+- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU 参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`）。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
 - 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与解析产物的根目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/` 为后续规划）。
