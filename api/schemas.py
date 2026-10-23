@@ -109,3 +109,45 @@ class JobStatusResponse(BaseModel):
     exit_code: int | None = None
     result: JobResult | None = None
     error: str | None = None
+
+
+class BidRunSummary(BaseModel):
+    run_id: str
+    modified_at: datetime
+    has_markdown: bool = False
+    has_docx: bool = False
+
+
+class DocumentSummary(BaseModel):
+    doc_id: str
+    project_name: str | None = None
+    tenderer: str | None = None
+    page_count: int | None = None
+    toc_entries: int | None = None
+    chunk_count: int | None = None
+    parser_used: str | None = None
+    parsed_at: datetime | None = None
+    bid_ready: bool = False
+    bid_runs: list[BidRunSummary] = Field(default_factory=list)
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentSummary] = Field(default_factory=list)
+
+
+class ArtifactInfo(BaseModel):
+    name: str
+    path: str
+    size: int
+    modified_at: datetime
+    content_type: str
+    previewable: bool
+    download_url: str
+
+
+class ArtifactListResponse(BaseModel):
+    job_id: str | None = None
+    doc_id: str | None = None
+    run_id: str | None = None
+    kind: JobKind | None = None
+    artifacts: list[ArtifactInfo] = Field(default_factory=list)
