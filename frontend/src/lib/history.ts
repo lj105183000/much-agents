@@ -33,14 +33,37 @@ function isJobStatus(value: unknown): value is JobStatus {
   )
 }
 
-function isEntry(value: unknown): value is HistoryEntry {
-  if (!value || typeof value !== 'object') return false
+function normalizeEntry(value: unknown): HistoryEntry | null {
+  if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
-  return (
-    typeof record.jobId === 'string' &&
-    (record.kind === 'parse' || record.kind === 'bid') &&
-    isJobStatus(record.status)
-  )
+  if (
+    typeof record.jobId !== 'string' ||
+    (record.kind !== 'parse' && record.kind !== 'bid') ||
+    !isJobStatus(record.status)
+  ) {
+    return null
+  }
+  return {
+    jobId: record.jobId,
+    kind: record.kind,
+    docId: typeof record.docId === 'string' ? record.docId : '',
+    filename: typeof record.filename === 'string' ? record.filename : '',
+    createdAt:
+      typeof record.createdAt === 'string'
+        ? record.createdAt
+        : new Date().toISOString(),
+    status: record.status,
+    stage: typeof record.stage === 'string' ? record.stage : null,
+    percent:
+      typeof record.percent === 'number' && Number.isFinite(record.percent)
+        ? record.percent
+        : 0,
+    result:
+      record.result && typeof record.result === 'object'
+        ? (record.result as JobResult)
+        : null,
+    error: typeof record.error === 'string' ? record.error : null,
+  }
 }
 
 export function loadHistory(): HistoryEntry[] {
@@ -49,7 +72,10 @@ export function loadHistory(): HistoryEntry[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(isEntry).slice(0, MAX_ENTRIES)
+    return parsed
+      .map(normalizeEntry)
+      .filter((entry): entry is HistoryEntry => entry !== null)
+      .slice(0, MAX_ENTRIES)
   } catch {
     return []
   }
