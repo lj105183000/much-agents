@@ -2,7 +2,12 @@ import type {
   ArtifactInfo,
   ArtifactListResponse,
   ArtifactSource,
+  BidComplianceResponse,
+  BidConsistencyResponse,
   BidCreatedResponse,
+  BidFixApplyRequest,
+  BidFixPlanRequest,
+  BidFixPlanResponse,
   BidGateResponse,
   BidGenerateRequest,
   BidGenerateResponse,
@@ -379,6 +384,53 @@ export const api = {
   getBidGate(runId: string): Promise<BidGateResponse> {
     return request<BidGateResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  getBidCompliance(runId: string): Promise<BidComplianceResponse> {
+    return request<BidComplianceResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/compliance`,
+    )
+  },
+
+  checkBidCompliance(runId: string): Promise<BidComplianceResponse> {
+    return request<BidComplianceResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/compliance/check`,
+      { method: 'POST' },
+    )
+  },
+
+  getBidConsistency(runId: string): Promise<BidConsistencyResponse> {
+    return request<BidConsistencyResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/consistency`,
+    )
+  },
+
+  generateBidFixPlan(
+    runId: string,
+    payload: BidFixPlanRequest = {},
+  ): Promise<BidFixPlanResponse> {
+    return request<BidFixPlanResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/compliance/fix-plan`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  applyBidFix(
+    runId: string,
+    payload: BidFixApplyRequest,
+  ): Promise<BidSectionDetail> {
+    return request<BidSectionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/compliance/fixes/apply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
   },
 

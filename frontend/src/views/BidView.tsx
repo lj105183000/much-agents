@@ -9,6 +9,7 @@ import type {
 } from '../api/types'
 import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
+import { BidCompliancePanel } from '../components/BidCompliancePanel'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
@@ -94,6 +95,7 @@ export function BidView({
   const [gate, setGate] = useState<BidGateResponse | null>(null)
   const [gateLoading, setGateLoading] = useState(false)
   const [gateError, setGateError] = useState<string | null>(null)
+  const [complianceRefresh, setComplianceRefresh] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [preview, setPreview] = useState<BidSectionDetail | null>(null)
@@ -266,6 +268,9 @@ export function BidView({
       })
       setOutlineDirty(false)
       setInvalidated(response.invalidated_sections)
+      if (response.invalidated_sections.length) {
+        setComplianceRefresh((value) => value + 1)
+      }
       setOutlineDraft((current) =>
         current
           ? {
@@ -364,6 +369,7 @@ export function BidView({
     try {
       const response = await api.assembleBidRun(runId)
       setGate(response)
+      setComplianceRefresh((value) => value + 1)
       setNotice('已组装并生成检查报告。')
       bidRun.refresh()
       onDocumentsRefresh()
@@ -465,7 +471,8 @@ export function BidView({
       setGate(null)
       setGateError(null)
       setExportError(null)
-      setNotice('正文已保存；旧门禁已失效，请重新组装并检查。')
+      setComplianceRefresh((value) => value + 1)
+      setNotice('正文已保存；旧门禁与合规报告已失效，请重新组装并检查。')
       bidRun.refresh()
       return true
     } catch (caught) {
@@ -496,6 +503,10 @@ export function BidView({
     try {
       const response = await api.regenerateBidSection(runId, sectionId)
       enqueueJob(response)
+      setGate(null)
+      setGateError(null)
+      setExportError(null)
+      setComplianceRefresh((value) => value + 1)
       setNotice('已请求重新生成本节；新稿完成前旧稿仍保留。')
       closeSectionModal()
       bidRun.refresh()
@@ -506,6 +517,14 @@ export function BidView({
     } finally {
       setSectionRegenerating(false)
     }
+  }
+
+  const handleFixApplied = () => {
+    setGate(null)
+    setGateError(null)
+    setExportError(null)
+    setNotice('修复已应用；旧门禁已失效，请重新组装并检查。')
+    bidRun.refresh()
   }
 
   const resetRun = () => {
@@ -821,6 +840,15 @@ export function BidView({
               exporting={exporting}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}
+            />
+          ) : null}
+
+          {run ? (
+            <BidCompliancePanel
+              key={`${run.run_id}:${complianceRefresh}`}
+              runId={run.run_id}
+              active={active}
+              onApplied={handleFixApplied}
             />
           ) : null}
 

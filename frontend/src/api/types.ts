@@ -378,6 +378,125 @@ export interface BidGateCheck {
   hint: string
 }
 
+export interface BidComplianceSummary {
+  total: number
+  pass: number
+  warn: number
+  fail: number
+  blocked: number
+}
+
+export interface BidConsistencySummary {
+  total: number
+  consistent: number
+  conflict: number
+  critical_conflict: number
+  missing: number
+  not_found: number
+}
+
+export interface BidComplianceEvidence {
+  label?: string | null
+  canonical?: string | null
+  section_id?: string | null
+  section_title?: string | null
+  value?: string | null
+  quote?: string | null
+}
+
+export interface BidComplianceCheck {
+  id: string
+  title: string
+  category: string
+  level: 'block' | 'warn'
+  status: 'pass' | 'warn' | 'fail'
+  message: string
+  section_ids: string[]
+  hint: string
+  evidence: BidComplianceEvidence[]
+}
+
+export interface BidComplianceReport {
+  schema_version: string
+  status: 'pass' | 'warn' | 'block'
+  generated_at: string
+  summary: BidComplianceSummary
+  checks: BidComplianceCheck[]
+  warnings: string[]
+}
+
+export interface BidConsistencyOccurrence {
+  section_id: string
+  section_title: string
+  value: string
+  normalized: string
+  quote: string
+  source: string
+  match: 'exact' | 'conflict'
+}
+
+export interface BidConsistencyFact {
+  key: string
+  label: string
+  canonical: string
+  kind: string
+  critical: boolean
+  hint: string
+  status: 'consistent' | 'conflict' | 'missing' | 'unverified' | 'not_found'
+  conflicting_values: string[]
+  occurrences: BidConsistencyOccurrence[]
+}
+
+export interface BidConsistencyReport {
+  schema_version: string
+  generated_at: string
+  status: 'consistent' | 'warning' | 'conflict'
+  summary: BidConsistencySummary
+  facts: BidConsistencyFact[]
+}
+
+export interface BidComplianceResponse {
+  run_id: string
+  compliance: BidComplianceReport
+  consistency: BidConsistencyReport
+}
+
+export interface BidConsistencyResponse {
+  run_id: string
+  consistency: BidConsistencyReport
+}
+
+export interface BidFixPlanRequest {
+  check_ids?: string[]
+  max_items?: number
+}
+
+export interface BidFixPlanItem {
+  id: string
+  check_id: string
+  title: string
+  section_id: string | null
+  action: 'replace' | 'manual'
+  find: string
+  replace: string
+  reason: string
+  confidence: number
+}
+
+export interface BidFixPlanResponse {
+  run_id: string
+  generated_at: string
+  method: 'deterministic' | 'llm'
+  items: BidFixPlanItem[]
+  warnings: string[]
+}
+
+export interface BidFixApplyRequest {
+  section_id: string
+  find: string
+  replace: string
+}
+
 export interface BidGateResponse {
   run_id: string
   status: 'pass' | 'warn' | 'block'
@@ -385,4 +504,8 @@ export interface BidGateResponse {
   checked_at: string | null
   page_limit: number
   checks: BidGateCheck[]
+  compliance_status: 'pass' | 'warn' | 'block' | null
+  compliance_summary: BidComplianceSummary | null
+  consistency_status: 'consistent' | 'warning' | 'conflict' | null
+  consistency_summary: BidConsistencySummary | null
 }

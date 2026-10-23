@@ -33,6 +33,20 @@ const CHECK_LABEL: Record<string, string> = {
   missing_profile_fields: '投标人资料完整性',
   coverage_missing_factors: '评分因素覆盖',
   selected_narratives: '已选正文章节',
+  compliance_block: '合规检查阻止项',
+  compliance_warnings: '合规检查警告',
+}
+
+const COMPLIANCE_LABEL: Record<string, string> = {
+  pass: '通过',
+  warn: '有警告',
+  block: '已阻止',
+}
+
+const CONSISTENCY_LABEL: Record<string, string> = {
+  consistent: '一致',
+  warning: '有警告',
+  conflict: '存在冲突',
 }
 
 export function BidGatePanel({
@@ -76,6 +90,14 @@ export function BidGatePanel({
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-[11px] leading-5 text-slate-500">
             检查时间：{gate.checked_at ? new Date(gate.checked_at).toLocaleString('zh-CN') : '—'}
             · 页数上限 {gate.page_limit}
+            · 合规：
+            {gate.compliance_status
+              ? (COMPLIANCE_LABEL[gate.compliance_status] ?? gate.compliance_status)
+              : '未检查'}
+            · 一致性：
+            {gate.consistency_status
+              ? (CONSISTENCY_LABEL[gate.consistency_status] ?? gate.consistency_status)
+              : '未检查'}
           </div>
           <ul className="space-y-2">
             {gate.checks.map((check) => {
