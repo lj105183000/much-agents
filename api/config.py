@@ -41,6 +41,15 @@ def _choice(
     return value if value in allowed else default
 
 
+def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
+    value = _str(env, key, "true" if default else "false").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 @dataclass(frozen=True, slots=True)
 class ApiSettings:
     project_root: Path
@@ -53,9 +62,12 @@ class ApiSettings:
     task_backend: Literal["celery", "local"] = "celery"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = ""
+    db_auto_migrate: bool = True
     celery_broker_url: str | None = None
     celery_worker_pool: str = "solo"
     job_ttl_seconds: int = 24 * 3600
+    bid_run_max_attempts: int = 2
+    bid_run_stale_seconds: int = 900
 
     @property
     def inbox_dir(self) -> Path:
@@ -100,7 +112,10 @@ class ApiSettings:
             task_backend=_choice(env, "TASK_BACKEND", "celery", {"celery", "local"}),
             redis_url=_str(env, "REDIS_URL", "redis://localhost:6379/0"),
             database_url=_str(env, "DATABASE_URL", ""),
+            db_auto_migrate=_bool(env, "DB_AUTO_MIGRATE", True),
             celery_broker_url=broker or None,
             celery_worker_pool=_str(env, "CELERY_WORKER_POOL", "solo"),
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
+            bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
+            bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
         )

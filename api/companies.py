@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from src.bidding.errors import BidInputError
 from src.bidding.profile import BidderProfile
 
-from .database import CompanyRow, init_schema, make_engine, make_session_factory
+from .database import CompanyRow, make_engine, make_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +73,12 @@ class CompanyService:
         if not self.enabled or self._engine is None:
             return
         try:
-            await init_schema(self._engine)
+            # Schema changes are owned by Alembic; this is a connection and
+            # schema check so company endpoints can surface a clear 503.
+            async with self._engine.connect() as connection:
+                await connection.execute(text("SELECT 1 FROM companies LIMIT 1"))
         except Exception as exc:  # noqa: BLE001 - endpoints surface 503
-            logger.warning("could not initialize company database: %s", exc)
+            logger.warning("company database is not ready: %s", exc)
 
     async def close(self) -> None:
         if self._engine is not None:
