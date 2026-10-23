@@ -113,6 +113,9 @@ def test_format_checklist_from_toc() -> None:
     )
     items = format_checklist_from_toc(doc)
     assert [item.title for item in items] == ["一、投标函", "九、资格审查资料"]
+    assert items[0].source_section == "一、投标函"
+    assert items[0].source_page == 2
+    assert items[1].source_page == 3
 
 
 def test_merge_prefers_llm_and_fills_regex() -> None:

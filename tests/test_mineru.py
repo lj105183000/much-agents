@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import io
 import json
+import stat
 import zipfile
 from dataclasses import replace
 from pathlib import Path
 
 import httpx
+import pymupdf
 import pytest
 
 from src.parsing.config import Settings
 from src.parsing.errors import MineruError, MineruErrorKind
 from src.parsing.parsers.mineru.client import BatchFileResult, BatchInfo, MineruClient, UploadSpec
 from src.parsing.parsers.mineru.parser import MineruParser
+from src.parsing.parsers.mineru.split import split_pdf
 from src.parsing.parsers.mineru.zip_utils import locate_artifacts, safe_extract
 
 
@@ -139,14 +142,79 @@ def test_download_zip(settings: Settings, tmp_path: Path) -> None:
     assert path.read_bytes() == payload
 
 
-def test_zip_traversal_rejected(tmp_path: Path) -> None:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("../evil.txt", "x")
+@pytest.mark.parametrize(
+    "name",
+    ["../evil.txt", "/abs.txt", "C:/evil.txt", "..\\evil.txt"],
+)
+def test_zip_rejects_unsafe_entries(tmp_path: Path, name: str) -> None:
     zip_path = tmp_path / "bad.zip"
-    zip_path.write_bytes(buffer.getvalue())
-    with pytest.raises(MineruError):
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        info = zipfile.ZipInfo("placeholder")
+        info.filename = name
+        archive.writestr(info, "x")
+    out_dir = tmp_path / "out"
+    with pytest.raises(MineruError) as exc:
+        safe_extract(zip_path, out_dir)
+    assert exc.value.kind is MineruErrorKind.OUTPUT
+    if out_dir.exists():
+        assert not any(out_dir.iterdir())
+
+
+def test_zip_rejects_symlink_entry(tmp_path: Path) -> None:
+    zip_path = tmp_path / "symlink.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        info = zipfile.ZipInfo("link")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, "target")
+    with pytest.raises(MineruError) as exc:
         safe_extract(zip_path, tmp_path / "out")
+    assert exc.value.kind is MineruErrorKind.OUTPUT
+    assert "symlink" in str(exc.value)
+
+
+def test_zip_rejects_bad_archive_and_enforces_limits(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"not a zip")
+    with pytest.raises(MineruError) as exc:
+        safe_extract(bad, tmp_path / "bad")
+    assert exc.value.kind is MineruErrorKind.OUTPUT
+
+    count = tmp_path / "count.zip"
+    with zipfile.ZipFile(count, "w") as archive:
+        for index in range(3):
+            archive.writestr(f"file{index}.txt", "x")
+    with pytest.raises(MineruError) as exc:
+        safe_extract(count, tmp_path / "count", max_files=2)
+    assert exc.value.kind is MineruErrorKind.OUTPUT
+
+    size = tmp_path / "size.zip"
+    with zipfile.ZipFile(size, "w") as archive:
+        archive.writestr("big.txt", "x" * 64)
+    with pytest.raises(MineruError) as exc:
+        safe_extract(size, tmp_path / "size", max_bytes=10)
+    assert exc.value.kind is MineruErrorKind.OUTPUT
+
+
+def _pdf_page_count(path: Path) -> int:
+    document = pymupdf.open(str(path))
+    try:
+        return document.page_count
+    finally:
+        document.close()
+
+
+def test_split_pdf_boundaries_and_validation(sample_pdf: Path, tmp_path: Path) -> None:
+    parts = split_pdf(sample_pdf, tmp_path / "parts_a", 3)
+    assert [(part.start_page, part.end_page) for part in parts] == [(1, 3), (4, 4)]
+    assert [_pdf_page_count(part.path) for part in parts] == [3, 1]
+
+    parts = split_pdf(sample_pdf, tmp_path / "parts_b", 2, total_pages=3)
+    assert [(part.start_page, part.end_page) for part in parts] == [(1, 2), (3, 3)]
+    assert [_pdf_page_count(part.path) for part in parts] == [2, 1]
+
+    with pytest.raises(ValueError, match="positive"):
+        split_pdf(sample_pdf, tmp_path / "parts_c", 0)
 
 
 def test_locate_artifacts(tmp_path: Path) -> None:

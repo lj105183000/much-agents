@@ -3,7 +3,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.parsing.cli import main
+from src.parsing.errors import IngestError
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cli_env(monkeypatch, tmp_path: Path) -> None:
+    """Keep CLI tests independent from the developer's .env and real keys."""
+    monkeypatch.setattr("src.parsing.config.load_dotenv", lambda *args, **kwargs: False)
+    for name in (
+        "MINERU_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ZHIPU_API_KEY",
+        "EXTRACTION_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PARSED_DIR", str(tmp_path / "parsed"))
 
 
 def _json_output(capsys) -> dict:
@@ -58,3 +75,41 @@ def test_forced_mineru_without_key_returns_3(
     )
     assert code == 3
     assert _json_output(capsys)["exit_code"] == 3
+
+
+def test_empty_extraction_returns_4(sample_pdf: Path, tmp_path: Path, capsys) -> None:
+    out_dir = tmp_path / "out"
+    code = main(
+        [
+            str(sample_pdf),
+            "--parser", "pymupdf",
+            "--no-ingest",
+            "--out-dir", str(out_dir),
+        ]
+    )
+    assert code == 4
+    summary = _json_output(capsys)
+    assert summary["ok"] is False
+    assert summary["exit_code"] == 4
+    assert summary["status"] == "failed"
+    assert summary["extraction_method"] == "regex_fallback"
+    payload = json.loads(
+        (out_dir / summary["doc_id"] / "extraction.json").read_text(encoding="utf-8")
+    )
+    assert payload["status"] == "empty"
+
+
+@pytest.mark.parametrize(("skipped", "expected"), [(False, 5), (True, 6)])
+def test_ingest_error_maps_to_exit_code(
+    sample_pdf: Path, monkeypatch, capsys, skipped: bool, expected: int
+) -> None:
+    def boom(*args, **kwargs):
+        raise IngestError("boom", skipped=skipped)
+
+    monkeypatch.setattr("src.parsing.cli.parse_document", boom)
+    code = main([str(sample_pdf)])
+    assert code == expected
+    summary = _json_output(capsys)
+    assert summary["ok"] is False
+    assert summary["exit_code"] == expected
+    assert summary["error"] == "boom"

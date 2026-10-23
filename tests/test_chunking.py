@@ -65,3 +65,39 @@ def test_section_heading_in_embed_text(document: ParsedDocument) -> None:
     chunks = chunk_document(document, size=200, overlap=30, min_size=30, project_name="测试项目")
     assert chunks[0].embed_text.startswith("[项目名] 测试项目")
     assert "章节:" in chunks[0].embed_text
+
+
+def test_chunk_metadata_provenance_exact(blocks, sample_toc) -> None:
+    markdown, sections, _ = assemble_document(blocks, sample_toc, "prov-doc", 4)
+    doc = ParsedDocument(
+        doc_id="prov-doc",
+        source_path=Path("sample.pdf"),
+        markdown=markdown,
+        content_list=blocks,
+        toc=sample_toc,
+        sections=sections,
+        page_count=4,
+        parser_used="pymupdf",
+    )
+    chunks = chunk_document(doc, size=500, overlap=0, min_size=10)
+    by_section: dict[str, list[dict]] = {}
+    for chunk in chunks:
+        by_section.setdefault(chunk.metadata["section"], []).append(chunk.metadata)
+
+    front = by_section["投标人须知前附表"]
+    assert {item["chapter"] for item in front} == {"第二章 投标人须知"}
+    assert {item["section_path"] for item in front} == {
+        "第一章 招标公告 > 第二章 投标人须知 > 投标人须知前附表"
+    }
+    assert {(item["page_start"], item["page_end"]) for item in front} == {(2, 2)}
+
+    table = by_section["表11 评审打分表"]
+    assert {item["chapter"] for item in table} == {"第三章 评标办法"}
+    assert {item["section_path"] for item in table} == {
+        "第一章 招标公告 > 第三章 评标办法 > 表11 评审打分表"
+    }
+    assert {(item["page_start"], item["page_end"]) for item in table} == {(3, 3)}
+
+    first = by_section["第一章 招标公告"]
+    assert {item["section_path"] for item in first} == {"第一章 招标公告"}
+    assert {(item["page_start"], item["page_end"]) for item in first} == {(1, 1)}
