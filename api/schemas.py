@@ -17,6 +17,7 @@ class HealthResponse(BaseModel):
     jobs: int = 0
     task_backend: Literal["celery", "local"] = "celery"
     redis_ok: bool | None = None
+    database_ok: bool | None = None
 
 
 class JobCreatedResponse(BaseModel):
@@ -40,6 +41,112 @@ class BidCreatedResponse(BaseModel):
     poll_url: str
     doc_id: str
     kind: Literal["bid"] = "bid"
+
+
+class BidRunCounts(BaseModel):
+    selected: int = 0
+    final: int = 0
+    failed: int = 0
+    pending: int = 0
+
+
+class BidRunCreatedResponse(BaseModel):
+    run_id: str
+    doc_id: str
+    status: str
+    revision: int
+    outline_url: str
+
+
+class BidRunSummary(BaseModel):
+    run_id: str
+    doc_id: str
+    project_name: str | None = None
+    company_id: str | None = None
+    status: str
+    stage: str | None = None
+    percent: int = 0
+    revision: int = 0
+    job_id: str | None = None
+    gate_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    counts: BidRunCounts = Field(default_factory=BidRunCounts)
+
+
+class BidRunDetail(BidRunSummary):
+    message: str | None = None
+    missing_profile_fields: list[str] = Field(default_factory=list)
+    attempt: int = 0
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class BidRunListResponse(BaseModel):
+    runs: list[BidRunSummary] = Field(default_factory=list)
+
+
+class BidOutlineSectionView(BaseModel):
+    section_id: str
+    parent_section_id: str | None = None
+    title: str
+    kind: str
+    level: int
+    order: int
+    template_key: str | None = None
+    target_words: int = 0
+    selected: bool = True
+    editable: bool = False
+    requirements: list[str] = Field(default_factory=list)
+    evaluation_factors: list[dict[str, Any]] = Field(default_factory=list)
+    source_pages: list[int] | None = None
+    content_plan: dict[str, Any] | None = None
+    writing_focus: str = ""
+    status: str = "pending"
+    attempt: int = 0
+    char_count: int = 0
+    final_source: str | None = None
+    error: str | None = None
+
+
+class BidOutlineResponse(BaseModel):
+    run_id: str
+    doc_id: str
+    project_name: str | None = None
+    status: str
+    revision: int
+    counts: BidRunCounts = Field(default_factory=BidRunCounts)
+    sections: list[BidOutlineSectionView] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidOutlineSectionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str = Field(min_length=1, max_length=64)
+    selected: bool | None = None
+    title: str | None = Field(default=None, max_length=255)
+    target_words: int | None = Field(default=None, ge=200, le=8000)
+    requirements: list[str] | None = Field(default=None, max_length=50)
+    content_plan: dict[str, Any] | None = None
+    writing_focus: str | None = Field(default=None, max_length=2000)
+
+
+class BidOutlinePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=0)
+    sections: list[BidOutlineSectionPatch] = Field(min_length=1, max_length=100)
+
+
+class BidOutlinePatchResponse(BaseModel):
+    run_id: str
+    revision: int
+    status: str
+    invalidated_sections: list[str] = Field(default_factory=list)
+    outline_url: str
 
 
 class ParseSummary(BaseModel):
@@ -112,7 +219,7 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
 
 
-class BidRunSummary(BaseModel):
+class DocumentBidRunSummary(BaseModel):
     run_id: str
     modified_at: datetime
     has_markdown: bool = False
@@ -129,7 +236,7 @@ class DocumentSummary(BaseModel):
     parser_used: str | None = None
     parsed_at: datetime | None = None
     bid_ready: bool = False
-    bid_runs: list[BidRunSummary] = Field(default_factory=list)
+    bid_runs: list[DocumentBidRunSummary] = Field(default_factory=list)
 
 
 class DocumentListResponse(BaseModel):

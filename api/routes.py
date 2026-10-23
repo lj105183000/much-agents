@@ -21,6 +21,7 @@ from .artifacts import (
     list_artifacts,
     resolve_artifact,
 )
+from .bid_runs import BidRunService
 from .bids import BidService
 from .companies import CompanyError, CompanyRecord, CompanyService
 from .documents import list_documents
@@ -28,7 +29,13 @@ from .jobs import JobStoreError
 from .schemas import (
     ArtifactListResponse,
     BidCreatedResponse,
+    BidOutlinePatchRequest,
+    BidOutlinePatchResponse,
+    BidOutlineResponse,
     BidRequest,
+    BidRunCreatedResponse,
+    BidRunDetail,
+    BidRunListResponse,
     CompanyDetail,
     CompanyListResponse,
     CompanySummary,
@@ -52,6 +59,10 @@ def get_service(request: Request) -> ParseService:
 
 def get_bid_service(request: Request) -> BidService:
     return request.app.state.bid_service
+
+
+def get_bid_run_service(request: Request) -> BidRunService:
+    return request.app.state.bid_run_service
 
 
 def get_search_service(request: Request) -> SearchService:
@@ -106,11 +117,12 @@ def build_router() -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/health", response_model=HealthResponse)
-    def health(request: Request) -> HealthResponse:
+    async def health(request: Request) -> HealthResponse:
         store = request.app.state.job_store
         backend = request.app.state.task_backend
         jobs = 0
         redis_ok: bool | None = None
+        database_ok: bool | None = None
         status_value: Literal["ok", "degraded"] = "ok"
         try:
             jobs = store.count()
@@ -123,6 +135,11 @@ def build_router() -> APIRouter:
             status_value = "degraded"
             if backend == "celery":
                 redis_ok = False
+        database = getattr(request.app.state, "database", None)
+        if database is not None and database.enabled:
+            database_ok = await database.ping()
+            if not database_ok:
+                status_value = "degraded"
         return HealthResponse(
             status=status_value,
             service="much-agents-api",
@@ -130,6 +147,7 @@ def build_router() -> APIRouter:
             jobs=jobs,
             task_backend=backend,
             redis_ok=redis_ok,
+            database_ok=database_ok,
         )
 
     @router.post(
@@ -180,6 +198,58 @@ def build_router() -> APIRouter:
             doc_id=job.doc_id,
             kind="bid",
         )
+
+    @router.post(
+        "/bid-runs",
+        status_code=status.HTTP_201_CREATED,
+        response_model=BidRunCreatedResponse,
+    )
+    async def create_bid_run(
+        payload: BidRequest,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidRunCreatedResponse:
+        return await service.create(payload)
+
+    @router.get("/bid-runs", response_model=BidRunListResponse)
+    async def list_bid_runs(
+        doc_id: str | None = Query(default=None, max_length=128),
+        status_value: str | None = Query(default=None, alias="status", max_length=24),
+        limit: int = Query(default=50, ge=1, le=200),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidRunListResponse:
+        return await service.list_runs(
+            doc_id=doc_id,
+            status=status_value,
+            limit=limit,
+        )
+
+    @router.get(
+        "/bid-runs/{run_id}/outline",
+        response_model=BidOutlineResponse,
+    )
+    async def get_bid_run_outline(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidOutlineResponse:
+        return await service.get_outline(run_id)
+
+    @router.patch(
+        "/bid-runs/{run_id}/outline",
+        response_model=BidOutlinePatchResponse,
+    )
+    async def patch_bid_run_outline(
+        run_id: str,
+        payload: BidOutlinePatchRequest,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidOutlinePatchResponse:
+        return await service.patch_outline(run_id, payload)
+
+    @router.get("/bid-runs/{run_id}", response_model=BidRunDetail)
+    async def get_bid_run(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidRunDetail:
+        return await service.get_detail(run_id)
 
     @router.get("/bids/profile-template")
     def get_profile_template(request: Request) -> JSONResponse:

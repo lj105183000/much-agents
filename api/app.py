@@ -16,9 +16,12 @@ from src.parsing.config import Settings
 from src.parsing.models import ParseResult
 from src.parsing.pipeline import parse_document
 
+from .bid_run_repo import BidRunRepository
+from .bid_runs import BidRunError, BidRunService
 from .bids import BidService, execute_bid_job
 from .companies import CompanyService
 from .config import ApiSettings
+from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
 from .routes import build_router
@@ -44,6 +47,7 @@ def create_app(
     bid_dispatcher: LocalDispatcher | CeleryDispatcher | None = None,
     search_service: SearchService | None = None,
     company_service: CompanyService | None = None,
+    bid_run_service: BidRunService | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     parse_func_injected = parse_func is not None
@@ -61,6 +65,7 @@ def create_app(
     )
     parse_settings = parse_settings or Settings.from_env()
     bid_settings = bid_settings or BidSettings.from_env()
+    database = Database(api_settings.database_url)
     parse_func = parse_func or parse_document
     bid_func = bid_func or run_bid_writing
     local_runners: list[JobRunner] = []
@@ -135,6 +140,20 @@ def create_app(
     company_service = company_service or CompanyService(
         api_settings.database_url,
         profile_max_mb=bid_settings.profile_max_mb,
+        engine=database.engine,
+        session_factory=database.session_factory,
+    )
+    bid_run_repo = (
+        BidRunRepository(database.session_factory)
+        if database.session_factory is not None
+        else None
+    )
+    bid_run_service = bid_run_service or BidRunService(
+        bid_settings=bid_settings,
+        repo=bid_run_repo,
+        company_service=company_service,
+        store=store,
+        dispatch=bid_dispatcher.dispatch,
     )
     bid_service = BidService(
         api_settings=api_settings,
@@ -151,9 +170,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
+        await database.init(auto_migrate=api_settings.db_auto_migrate)
         await company_service.init()
         yield
         await company_service.close()
+        await database.close()
         for job_runner in local_runners:
             job_runner.shutdown(wait=False)
 
@@ -177,6 +198,9 @@ def create_app(
     app.state.bid_func = bid_func
     app.state.parse_service = parse_service
     app.state.bid_service = bid_service
+    app.state.bid_run_service = bid_run_service
+    app.state.bid_run_repo = bid_run_repo
+    app.state.database = database
     app.state.search_service = search_service
     app.state.company_service = company_service
     app.add_middleware(
@@ -189,6 +213,12 @@ def create_app(
 
     @app.exception_handler(UploadError)
     async def handle_upload_error(_request: Request, exc: UploadError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(BidRunError)
+    async def handle_bid_run_error(
+        _request: Request, exc: BidRunError
+    ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(JobStoreError)

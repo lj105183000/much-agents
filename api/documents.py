@@ -12,7 +12,7 @@ from src.parsing.artifacts import read_json
 from src.parsing.config import Settings
 
 from .artifacts import is_safe_id
-from .schemas import BidRunSummary, DocumentSummary
+from .schemas import DocumentBidRunSummary, DocumentSummary
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +60,11 @@ def _chunk_count(path: Path) -> int | None:
         return None
 
 
-def _bid_runs(bid_settings: BidSettings, doc_id: str) -> list[BidRunSummary]:
+def _bid_runs(bid_settings: BidSettings, doc_id: str) -> list[DocumentBidRunSummary]:
     base = bid_settings.bids_dir / doc_id
     if not base.is_dir():
         return []
-    runs: list[BidRunSummary] = []
+    runs: list[DocumentBidRunSummary] = []
     try:
         children = list(base.iterdir())
     except OSError as exc:
@@ -82,7 +82,7 @@ def _bid_runs(bid_settings: BidSettings, doc_id: str) -> list[BidRunSummary]:
         except OSError:
             continue
         runs.append(
-            BidRunSummary(
+            DocumentBidRunSummary(
                 run_id=child.name,
                 modified_at=modified,
                 has_markdown=has_markdown,

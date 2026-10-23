@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,11 @@ from uuid import uuid4
 
 import redis
 
+from api.bid_run_repo import (
+    BidRunRecord,
+    OutlineSectionRecord,
+    SectionStateRecord,
+)
 from api.companies import CompanyError, CompanyRecord
 from api.config import ApiSettings
 from api.jobs import Job, JobStore, JobStoreError
@@ -414,6 +420,108 @@ class FakeSemanticRetriever:
 
     def retrieve(self, query: str, doc_id: str | None, k: int) -> list[Evidence]:
         return self.fetch(query, doc_id, k)
+
+
+class FakeBidRunRepository:
+    """In-memory repository used by service/API tests without PostgreSQL."""
+
+    def __init__(self) -> None:
+        self.runs: dict[str, BidRunRecord] = {}
+        self.sections: dict[str, list[OutlineSectionRecord]] = {}
+        self.states: dict[str, list[SectionStateRecord]] = {}
+
+    async def create(
+        self,
+        run: BidRunRecord,
+        sections: list[OutlineSectionRecord],
+        states: list[SectionStateRecord],
+    ) -> None:
+        self.runs[run.run_id] = run
+        self.sections[run.run_id] = list(sections)
+        self.states[run.run_id] = list(states)
+
+    async def list_runs(
+        self,
+        *,
+        doc_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[BidRunRecord]:
+        rows = [
+            run
+            for run in self.runs.values()
+            if (doc_id is None or run.doc_id == doc_id)
+            and (status is None or run.status == status)
+        ]
+        rows.sort(key=lambda run: run.created_at, reverse=True)
+        return rows[:limit]
+
+    async def get_run(self, run_id: str) -> BidRunRecord | None:
+        return self.runs.get(run_id)
+
+    async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
+        return sorted(
+            self.sections.get(run_id, []),
+            key=lambda section: section.order_index,
+        )
+
+    async def get_states(self, run_id: str) -> list[SectionStateRecord]:
+        return list(self.states.get(run_id, []))
+
+    async def get_state(
+        self, run_id: str, section_id: str
+    ) -> SectionStateRecord | None:
+        return next(
+            (
+                state
+                for state in self.states.get(run_id, [])
+                if state.section_id == section_id
+            ),
+            None,
+        )
+
+    async def update_outline(
+        self,
+        run_id: str,
+        *,
+        expected_revision: int,
+        new_revision: int,
+        section_updates: dict[str, dict[str, Any]],
+        invalidated_ids: list[str],
+        new_status: str | None = None,
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if run is None or run.revision != expected_revision:
+            return False
+        now = datetime.now(timezone.utc)
+        self.sections[run_id] = [
+            replace(section, **section_updates[section.section_id])
+            if section.section_id in section_updates
+            else section
+            for section in self.sections.get(run_id, [])
+        ]
+        invalidated = set(invalidated_ids)
+        self.states[run_id] = [
+            replace(
+                state,
+                status="pending",
+                final_markdown=None,
+                final_source=None,
+                updated_at=now,
+            )
+            if state.section_id in invalidated
+            else state
+            for state in self.states.get(run_id, [])
+        ]
+        clear_gate = bool(invalidated) or new_status == "outline_ready"
+        self.runs[run_id] = replace(
+            run,
+            revision=new_revision,
+            status=new_status or run.status,
+            gate_status=None if clear_gate else run.gate_status,
+            gate=None if clear_gate else run.gate,
+        )
+        return True
 
 
 class FakeCompanyService:
