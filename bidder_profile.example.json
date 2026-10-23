@@ -1,0 +1,85 @@
+{
+  "company": {
+    "name": null,
+    "credit_code": null,
+    "registered_capital": null,
+    "company_type": null,
+    "established_date": null,
+    "business_term": null,
+    "address": null,
+    "postal_code": null,
+    "phone": null,
+    "fax": null,
+    "website": null,
+    "qualification_name": null,
+    "qualification_grade": null,
+    "qualification_certificate": null,
+    "safety_license": null,
+    "bank_name": null,
+    "bank_branch": null,
+    "bank_account": null
+  },
+  "legal_representative": {
+    "name": null,
+    "gender": null,
+    "age": null,
+    "id_number": null,
+    "position": null
+  },
+  "authorized_agent": {
+    "name": null,
+    "gender": null,
+    "age": null,
+    "id_number": null,
+    "position": null
+  },
+  "project_manager": {
+    "name": null,
+    "gender": null,
+    "age": null,
+    "id_number": null,
+    "position": null,
+    "education": null,
+    "title": null,
+    "certificate_name": null,
+    "certificate_grade": null,
+    "certificate_number": null,
+    "specialty": null,
+    "safety_certificate": null,
+    "social_security": null,
+    "similar_projects": null
+  },
+  "personnel": [],
+  "similar_projects": [],
+  "ongoing_projects": [],
+  "financials": {
+    "years": [],
+    "liquid_funds": null,
+    "line_of_credit": null
+  },
+  "credit": {
+    "rating": null,
+    "authority": null,
+    "certificates": []
+  },
+  "management_certificates": [],
+  "litigation": [],
+  "consortium": {
+    "is_consortium": null,
+    "leader": null,
+    "members": []
+  },
+  "subcontracting": {
+    "has_subcontracting": null,
+    "items": []
+  },
+  "bid": {
+    "bid_bond_amount": null,
+    "bid_bond_method": null,
+    "bid_validity_days": null,
+    "planned_start": null,
+    "planned_end": null,
+    "quality_commitment": null
+  },
+  "other": {}
+}
