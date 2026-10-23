@@ -6,6 +6,7 @@
 
 - **上传解析**：拖入招标 PDF，选择解析器与抽取/入库选项，查看解析进度、统计与产物。
 - **编写标书**：从文档库选择已解析文档，填写 14 个必需资料字段或导入完整 JSON，选择 `max_sections`，启动多 Agent 编写并查看进度与结果。
+- **公司库**：完整投标人资料保存到 PostgreSQL；新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入 profile。
 - **文档检索**：在已解析招标文件 chunks 中检索原文片段，展示章节/页码/相关度；语义优先，Chroma/智谱不可用时自动回退关键词。
 - **文档库**：扫描后端 `upload/parsed`，查看解析产物、历史投标文件和 bid run 产物。
 - **任务历史**：localStorage 记录本机提交的任务，支持筛选、继续轮询、查看详情和删除。
@@ -21,6 +22,12 @@
 uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
 # 或无需 Redis/worker 的本地模式
 TASK_BACKEND=local uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
+```
+
+公司库需要 PostgreSQL（Docker 容器 `much-agents-postgres`，端口 5433）：
+
+```bash
+docker start much-agents-postgres
 ```
 
 再启动前端：
