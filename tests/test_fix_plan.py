@@ -160,3 +160,36 @@ def test_plan_rejects_unknown_check_filter(tmp_path: Path) -> None:
             "投标人：测试建设有限公司\n",
             check_ids=["not-a-check"],
         )
+
+
+def test_deterministic_plan_skips_non_editable_sections(tmp_path: Path) -> None:
+    planned, profile, allowed, _assembly, _evaluation = _plan_inputs(
+        tmp_path,
+        "投标人：测试建设有限公司\n",
+    )
+    consistency = {
+        "facts": [
+            {
+                "key": "company_name",
+                "label": "投标人名称",
+                "canonical": "测试建设有限公司",
+                "status": "conflict",
+                "occurrences": [
+                    {
+                        "section_id": "form-09-01",
+                        "value": "错误建设有限公司",
+                        "match": "conflict",
+                    }
+                ],
+            }
+        ]
+    }
+    plan = generate_fix_plan(
+        compliance={"checks": []},
+        consistency=consistency,
+        outline=planned.outline,
+        section_markdowns={"form-09-01": "投标人：错误建设有限公司"},
+        allowed=allowed,
+        known_facts=profile.facts(),
+    )
+    assert not any(item["action"] == "replace" for item in plan["items"])

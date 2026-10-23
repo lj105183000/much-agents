@@ -86,6 +86,7 @@ def _deterministic_items(
     section_markdowns: dict[str, str],
     allowed: AllowedFacts,
     *,
+    editable_section_ids: set[str],
     check_ids: set[str] | None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
@@ -102,6 +103,8 @@ def _deterministic_items(
             if not isinstance(occurrence, dict) or occurrence.get("match") != "conflict":
                 continue
             section_id = str(occurrence.get("section_id") or "")
+            if section_id not in editable_section_ids:
+                continue
             find = str(occurrence.get("value") or "").strip()
             markdown = section_markdowns.get(section_id, "")
             if not find or not markdown or markdown.count(find) != 1:
@@ -356,10 +359,16 @@ def generate_fix_plan(
         if unknown:
             raise ValueError(f"unknown compliance check: {unknown[0]}")
 
+    editable_section_ids = {
+        section.id
+        for section in outline.sections
+        if section.kind == "narrative" and section.selected
+    }
     deterministic = _deterministic_items(
         consistency,
         section_markdowns,
         allowed,
+        editable_section_ids=editable_section_ids,
         check_ids=wanted,
     )
     manual = _manual_items(compliance, check_ids=wanted)
