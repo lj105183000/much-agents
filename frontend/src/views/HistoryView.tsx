@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ViewKey } from '../api/types'
+import type { BidRunSummary, ViewKey } from '../api/types'
 import type { HistoryEntry } from '../lib/history'
 import {
   formatDate,
@@ -11,6 +11,7 @@ import { Icon } from '../components/icons'
 import { JobProgress } from '../components/JobProgress'
 import { JobResultPanel } from '../components/JobResultPanel'
 import { Modal } from '../components/Modal'
+import { useBidRuns } from '../hooks/useBidRuns'
 import { useJobPolling } from '../hooks/useJobPolling'
 import {
   Badge,
@@ -25,12 +26,15 @@ import {
 
 type KindFilter = 'all' | 'parse' | 'bid'
 type StatusFilter = 'all' | 'active' | 'succeeded' | 'failed'
+type RunFilter = 'all' | 'active' | 'assembled' | 'failed'
 
 interface HistoryViewProps {
+  apiBase: string
   entries: HistoryEntry[]
   onRemove: (jobId: string) => void
   onClear: () => void
   onSelectDoc: (docId: string) => void
+  onOpenRun: (run: BidRunSummary) => void
   onNavigate: (view: ViewKey) => void
 }
 
@@ -43,15 +47,66 @@ function statusTone(
   return 'neutral'
 }
 
+function runTone(
+  status: BidRunSummary['status'],
+): 'neutral' | 'cyan' | 'green' | 'amber' | 'red' {
+  if (status === 'assembled') return 'green'
+  if (status === 'failed') return 'red'
+  if (status === 'paused') return 'amber'
+  if (status === 'queued' || status === 'generating' || status === 'assembling') {
+    return 'cyan'
+  }
+  return 'neutral'
+}
+
+function runLabel(status: BidRunSummary['status']): string {
+  const labels: Record<string, string> = {
+    draft: '草稿',
+    outline_ready: '大纲就绪',
+    queued: '排队中',
+    generating: '生成中',
+    assembling: '组装中',
+    assembled: '已组装',
+    paused: '已暂停',
+    failed: '失败',
+  }
+  return labels[status] ?? status
+}
+
+function gateTone(
+  status: BidRunSummary['gate_status'],
+): 'neutral' | 'green' | 'amber' | 'red' {
+  if (status === 'pass') return 'green'
+  if (status === 'warn') return 'amber'
+  if (status === 'block') return 'red'
+  return 'neutral'
+}
+
+function matchesRunFilter(run: BidRunSummary, filter: RunFilter): boolean {
+  if (filter === 'active') {
+    return ['queued', 'generating', 'assembling'].includes(run.status)
+  }
+  if (filter === 'assembled') return run.status === 'assembled'
+  if (filter === 'failed') return run.status === 'failed'
+  return true
+}
+
 export function HistoryView({
+  apiBase,
   entries,
   onRemove,
   onClear,
   onSelectDoc,
+  onOpenRun,
   onNavigate,
 }: HistoryViewProps) {
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [runFilter, setRunFilter] = useState<RunFilter>('all')
+  const bidRuns = useBidRuns(apiBase)
+  const filteredRuns = bidRuns.runs.filter((run) =>
+    matchesRunFilter(run, runFilter),
+  )
   const [selected, setSelected] = useState<HistoryEntry | null>(null)
   const detailPolling = useJobPolling(selected?.jobId ?? null, {
     enabled: Boolean(selected),
@@ -80,7 +135,118 @@ export function HistoryView({
     <div className="space-y-4">
       <Card className="p-4">
         <SectionHeader
-          title="本机任务历史"
+          title="投标任务（服务端）"
+          description="来自 PostgreSQL 的持久化 run；可直接打开继续编辑、重写或组装。"
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={bidRuns.refresh}
+              loading={bidRuns.loading}
+            >
+              <Icon name="refresh" className="h-3.5 w-3.5" />
+              刷新
+            </Button>
+          }
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <select
+            className={`${selectClass} w-auto min-w-[9rem]`}
+            value={runFilter}
+            onChange={(event) => setRunFilter(event.target.value as RunFilter)}
+            aria-label="服务端投标任务筛选"
+          >
+            <option value="all">全部投标任务</option>
+            <option value="active">进行中</option>
+            <option value="assembled">已组装</option>
+            <option value="failed">失败</option>
+          </select>
+          <span className="text-[11px] text-slate-500">
+            {filteredRuns.length} / {bidRuns.runs.length} 个 run
+          </span>
+        </div>
+
+        {bidRuns.error ? (
+          <p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-200">
+            {bidRuns.error}
+          </p>
+        ) : null}
+        {bidRuns.loading ? (
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+            <Spinner className="h-4 w-4" />
+            正在读取服务端投标任务…
+          </div>
+        ) : filteredRuns.length === 0 ? (
+          <p className="mt-4 rounded-xl border border-dashed border-slate-800 px-3 py-6 text-center text-xs text-slate-500">
+            {bidRuns.runs.length
+              ? '没有匹配的投标任务，调整筛选试试。'
+              : '还没有服务端投标任务；在「编写标书」创建 run 后会显示在这里。'}
+          </p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {filteredRuns.map((run) => (
+              <div
+                key={run.run_id}
+                className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/30 px-3 py-3"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/60 text-cyan-300">
+                  <Icon name="sparkles" className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-medium text-slate-200">
+                      {run.project_name || run.doc_id}
+                    </span>
+                    <Badge tone={runTone(run.status)}>
+                      {runLabel(run.status)}
+                    </Badge>
+                    {run.gate_status ? (
+                      <Badge tone={gateTone(run.gate_status)}>
+                        门禁 {run.gate_status}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                    <span>{run.doc_id}</span>
+                    <span>·</span>
+                    <span>run {run.run_id.slice(0, 8)}</span>
+                    <span>·</span>
+                    <span>
+                      正文 {run.counts.final}/{run.counts.selected}
+                    </span>
+                    <span>·</span>
+                    <span>{formatDate(run.updated_at)}</span>
+                  </div>
+                  {run.error ? (
+                    <p className="mt-1 truncate text-[10px] text-red-200/80">
+                      {run.error}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  {['queued', 'generating', 'assembling'].includes(run.status) ? (
+                    <span className="w-24">
+                      <ProgressBar percent={run.percent} />
+                    </span>
+                  ) : null}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onOpenRun(run)}
+                  >
+                    <Icon name="chevron-right" className="h-3.5 w-3.5" />
+                    打开
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
+        <SectionHeader
+          title="本机任务记录（解析 / 旧版投标）"
           description="记录保存在当前浏览器/Electron 本地；刷新页面后仍会继续轮询进行中的任务。"
           action={
             entries.length ? (

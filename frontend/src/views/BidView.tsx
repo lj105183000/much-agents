@@ -40,6 +40,8 @@ interface BidViewProps {
   documentsLoading: boolean
   initialDocId: string | null
   initialCompanyId: string | null
+  initialRunId: string | null
+  onRunChange: (runId: string | null) => void
   onNavigate: (view: ViewKey) => void
   onJobCreated: (job: BidCreatedResponse) => void
   onActiveJobChange: (jobId: string | null) => void
@@ -67,6 +69,8 @@ export function BidView({
   documentsLoading,
   initialDocId,
   initialCompanyId,
+  initialRunId,
+  onRunChange,
   onNavigate,
   onJobCreated,
   onActiveJobChange,
@@ -76,7 +80,7 @@ export function BidView({
   const [companyId, setCompanyId] = useState(initialCompanyId ?? '')
   const [profile, setProfile] = useState<ProfileObject>({})
   const [maxSections, setMaxSections] = useState(1)
-  const [runId, setRunId] = useState<string | null>(null)
+  const [runId, setRunId] = useState<string | null>(initialRunId ?? null)
   const [creating, setCreating] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -233,6 +237,7 @@ export function BidView({
         company_id: companyId || null,
       })
       setRunId(created.run_id)
+      onRunChange(created.run_id)
       setNotice('大纲已创建。请检查并编辑大纲，然后再启动生成。')
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : '创建编写任务失败')
@@ -519,6 +524,7 @@ export function BidView({
 
   const resetRun = () => {
     setRunId(null)
+    onRunChange(null)
     setNotice(null)
     onActiveJobChange(null)
   }

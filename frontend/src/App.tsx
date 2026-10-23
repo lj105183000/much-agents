@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { getApiBase, setApiBase as persistApiBase } from './api/client'
-import type { ViewKey } from './api/types'
+import type { BidRunSummary, ViewKey } from './api/types'
 import { Header } from './components/Header'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
@@ -23,6 +23,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const health = useHealth(apiBase)
   const history = useHistory()
@@ -41,6 +42,17 @@ function App() {
   const navigate = (target: ViewKey) => {
     setView(target)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const selectDocument = (docId: string) => {
+    setSelectedDocId(docId)
+    setSelectedRunId(null)
+  }
+
+  const openRun = (run: BidRunSummary) => {
+    setSelectedDocId(run.doc_id)
+    setSelectedRunId(run.run_id)
+    navigate('bid')
   }
 
   const saveBase = (value: string) => {
@@ -100,7 +112,7 @@ function App() {
 
             {view === 'workbench' ? (
               <WorkbenchView
-                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onSelectDoc={selectDocument}
                 onNavigate={navigate}
                 onJobCreated={history.addEntry}
                 onJobUpdate={history.updateFromJob}
@@ -116,6 +128,8 @@ function App() {
                 documentsLoading={documents.loading}
                 initialDocId={selectedDocId}
                 initialCompanyId={selectedCompanyId}
+                initialRunId={selectedRunId}
+                onRunChange={setSelectedRunId}
                 onNavigate={navigate}
                 onJobCreated={history.addEntry}
                 onActiveJobChange={setActiveJobId}
@@ -135,7 +149,7 @@ function App() {
                 documents={documents.documents}
                 documentsLoading={documents.loading}
                 initialDocId={selectedDocId}
-                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onSelectDoc={selectDocument}
                 onNavigate={navigate}
               />
             ) : null}
@@ -145,16 +159,18 @@ function App() {
                 loading={documents.loading}
                 error={documents.error}
                 onRefresh={documents.refresh}
-                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onSelectDoc={selectDocument}
                 onNavigate={navigate}
               />
             ) : null}
             {view === 'history' ? (
               <HistoryView
+                apiBase={apiBase}
                 entries={history.entries}
                 onRemove={history.removeEntry}
                 onClear={history.clear}
-                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onSelectDoc={selectDocument}
+                onOpenRun={openRun}
                 onNavigate={navigate}
               />
             ) : null}
