@@ -518,6 +518,10 @@ class FakeBidRunRepository:
             run,
             revision=new_revision,
             status=new_status or run.status,
+            stage="outline_ready" if new_status == "outline_ready" else run.stage,
+            percent=0 if new_status == "outline_ready" else run.percent,
+            message="outline updated" if new_status == "outline_ready" else run.message,
+            finished_at=None if new_status == "outline_ready" else run.finished_at,
             gate_status=None if clear_gate else run.gate_status,
             gate=None if clear_gate else run.gate,
         )

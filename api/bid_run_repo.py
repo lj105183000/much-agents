@@ -355,6 +355,11 @@ class BidRunRepository:
                 run.updated_at = now
                 if new_status is not None:
                     run.status = new_status
+                    if new_status == "outline_ready":
+                        run.stage = "outline_ready"
+                        run.percent = 0
+                        run.message = "outline updated"
+                        run.finished_at = None
                 if invalidated_ids or new_status == "outline_ready":
                     run.gate_status = None
                     run.gate = None
