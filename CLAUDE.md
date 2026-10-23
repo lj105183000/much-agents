@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。FastAPI、Celery、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现；完整功能规划、需求决策和实现顺序见 `AI编程日志-标书编写.md`，该文件是项目路线图的权威来源。
+**当前状态**：已实现文档解析管线 `src/parsing/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。FastAPI、Celery、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -67,7 +67,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 4. **分块与入库**：`chunking.py` 以 TOC section 为边界，默认 700 字/120 重叠，id 形如 `<doc_id>:<section_id>:<ordinal>`；`ingest.py` 用智谱 `embedding-3` 生成向量，`HttpClient` 写入 Chroma 集合 `bidding_documents`，upsert + 清理旧 id。
 5. **缓存**：`meta.json` 记录源文件 sha256；解析/抽取/入库均有缓存，`--force` 强制重跑。退出码：0 成功、2 输入错误、3 解析失败、4 抽取为空、5 入库失败、6 缺少 key 跳过。
 
-### 尚未实现（依据 AI 编程日志的规划）
+### 尚未实现（后续阶段）
 
 - **API**：FastAPI；`POST /api/parse` 返回 202 + `job_id`，`GET /api/jobs/{id}` 轮询；`POST /api/bids` 接收 profile JSON。`TASK_BACKEND=celery` 默认，Redis 不可用返回 503，保留内存后端。
 - **多 Agent 编写**：LangGraph，输入 `bidder_profile.json`；缺失字段生成【待填写】，绝不编造；输出 Markdown + docx。
@@ -78,7 +78,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU 参数。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
-- 数据目录（均已 gitignore）：`chroma_db/` 向量库、`upload/` 解析与标书产物（规划 `upload/parsed/`、`upload/bids/`）；`招标文件pdf/` 是示例招标文件。
+- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与解析产物的根目录（`upload/parsed/<doc_id>/` 为当前解析输出，`upload/bids/` 为后续规划）。
 
 ## 注意
 
