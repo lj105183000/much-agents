@@ -7,11 +7,15 @@ import pytest
 from src.bidding.agents import normalize_markdown
 from src.bidding.checks import build_allowed, redact_unsupported
 from src.bidding.config import BidSettings
-from src.bidding.context import TenderContext
+from src.bidding.context import ChunkRecord, TenderContext
 from src.bidding.errors import BidContextError
 from src.bidding.outline import build_outline, canonical_checklist
 from src.bidding.profile import BidderProfile, placeholder, resolve
-from src.bidding.retrieval import ChromaTenderRetriever, KeywordTenderRetriever
+from src.bidding.retrieval import (
+    ChromaTenderRetriever,
+    KeywordTenderRetriever,
+    strip_embed_prefix,
+)
 from tests.fakes import make_bid_settings, write_parsed_fixture
 
 
@@ -114,6 +118,87 @@ def test_keyword_retrieval_and_chroma_prefix(tmp_path: Path) -> None:
     result = retriever.retrieve("施工方案", "doc-1", 3)
     assert collection.where == {"doc_id": "doc-1"}
     assert result[0].text == "施工方案正文"
+
+
+def test_chroma_cross_document_query_omits_where(tmp_path: Path) -> None:
+    settings = make_bid_settings(tmp_path)
+
+    class FakeEmbedder:
+        def embed(self, texts):
+            return [[0.1, 0.2]]
+
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def query(self, **kwargs):
+            self.kwargs = kwargs
+            return {
+                "documents": [["章节: 测试章节\n\n跨文档正文"]],
+                "metadatas": [
+                    [
+                        {
+                            "chunk_id": "doc-a:c1",
+                            "doc_id": "doc-a",
+                            "section_path": "测试章节",
+                            "page_start": 1,
+                            "page_end": 2,
+                        }
+                    ]
+                ],
+                "distances": [[0.25]],
+            }
+
+    collection = FakeCollection()
+    retriever = ChromaTenderRetriever(
+        settings,
+        collection=collection,
+        embedder=FakeEmbedder(),
+    )
+    evidence = retriever.fetch("正文", None, 3)
+    assert collection.kwargs is not None
+    assert "where" not in collection.kwargs
+    assert evidence[0].doc_id == "doc-a"
+    assert evidence[0].text == "跨文档正文"
+
+
+def test_strip_embed_prefix_without_project_name() -> None:
+    assert strip_embed_prefix("章节: 第八章 > 六\n\n正文内容") == "正文内容"
+    assert strip_embed_prefix("[项目名] X\n章节: 第八章\n\n正文内容") == "正文内容"
+    assert strip_embed_prefix("正文内容") == "正文内容"
+
+
+def test_keyword_cross_document_rank_and_filter() -> None:
+    chunks = [
+        ChunkRecord(
+            chunk_id="doc-a:c1",
+            text="施工组织设计质量安全措施",
+            embed_text="施工组织设计质量安全措施",
+            metadata={
+                "doc_id": "doc-a",
+                "section_path": "施工组织设计",
+                "page_start": 1,
+                "page_end": 2,
+            },
+        ),
+        ChunkRecord(
+            chunk_id="doc-b:c1",
+            text="施工组织设计进度计划",
+            embed_text="施工组织设计进度计划",
+            metadata={
+                "doc_id": "doc-b",
+                "section_path": "施工组织设计",
+                "page_start": 3,
+                "page_end": 4,
+            },
+        ),
+    ]
+    retriever = KeywordTenderRetriever(chunks, max_evidence_chars=10000)
+    all_hits = retriever.rank("施工组织设计", None, 10)
+    assert {hit.doc_id for hit in all_hits} == {"doc-a", "doc-b"}
+    filtered = retriever.rank("施工组织设计", "doc-b", 10)
+    assert [hit.doc_id for hit in filtered] == ["doc-b"]
+    assert filtered[0].score is not None and filtered[0].score > 0
 
 
 def test_redaction_of_unsupported_facts(tmp_path: Path) -> None:

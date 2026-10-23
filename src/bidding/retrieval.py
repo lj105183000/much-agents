@@ -13,19 +13,38 @@ from .models import Evidence
 
 logger = logging.getLogger(__name__)
 
-_PREFIX_RE = re.compile(r"^\[项目名\][^\n]*\n章节:[^\n]*\n\n", re.DOTALL)
+_PREFIX_RE = re.compile(r"^(?:\[项目名\][^\n]*\n)?章节:[^\n]*\n\n", re.DOTALL)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]+|[一-鿿]{2,}")
 
 
 class TenderRetriever(Protocol):
-    def retrieve(self, query: str, doc_id: str, k: int) -> list[Evidence]: ...
+    def retrieve(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]: ...
 
 
-def _strip_prefix(text: str) -> str:
+class CandidateRetriever(Protocol):
+    """Non-truncating retrieval used by user-facing search."""
+
+    def fetch(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]: ...
+
+
+def strip_embed_prefix(text: str) -> str:
     return _PREFIX_RE.sub("", text or "", count=1).strip()
 
 
-def _truncate(evidence: list[Evidence], max_chars: int) -> list[Evidence]:
+def truncate_evidence(
+    evidence: list[Evidence],
+    max_chars: int,
+) -> list[Evidence]:
     result: list[Evidence] = []
     used = 0
     for item in evidence:
@@ -43,10 +62,16 @@ def _truncate(evidence: list[Evidence], max_chars: int) -> list[Evidence]:
                 page_start=item.page_start,
                 page_end=item.page_end,
                 score=item.score,
+                doc_id=item.doc_id,
             )
         )
         used += len(text)
     return result
+
+
+# Backwards-compatible private aliases used by older callers/tests.
+_strip_prefix = strip_embed_prefix
+_truncate = truncate_evidence
 
 
 @dataclass
@@ -65,15 +90,23 @@ class ChromaTenderRetriever:
 
             self.embedder = ZhipuEmbedder(self.settings.base)
 
-    def retrieve(self, query: str, doc_id: str, k: int) -> list[Evidence]:
+    def fetch(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]:
+        """Return raw Chroma candidates without a global character budget."""
         self._ensure()
         vector = self.embedder.embed([query])[0]  # type: ignore[union-attr]
-        result = self.collection.query(  # type: ignore[union-attr]
-            query_embeddings=[vector],
-            n_results=max(1, k),
-            where={"doc_id": doc_id},
-            include=["documents", "metadatas", "distances"],
-        )
+        kwargs: dict[str, object] = {
+            "query_embeddings": [vector],
+            "n_results": max(1, k),
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if doc_id:
+            kwargs["where"] = {"doc_id": doc_id}
+        result = self.collection.query(**kwargs)  # type: ignore[union-attr]
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
@@ -88,14 +121,26 @@ class ChromaTenderRetriever:
             evidence.append(
                 Evidence(
                     chunk_id=chunk_id,
-                    text=_strip_prefix(str(text or "")),
+                    text=strip_embed_prefix(str(text or "")),
                     section_path=str(metadata.get("section_path") or ""),
                     page_start=int(metadata.get("page_start") or 0),
                     page_end=int(metadata.get("page_end") or 0),
                     score=float(distance) if distance is not None else None,
+                    doc_id=str(metadata.get("doc_id") or doc_id or ""),
                 )
             )
-        return _truncate(evidence, self.settings.max_evidence_chars)
+        return evidence
+
+    def retrieve(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]:
+        return truncate_evidence(
+            self.fetch(query, doc_id, k),
+            self.settings.max_evidence_chars,
+        )
 
 
 @dataclass
@@ -120,14 +165,35 @@ class KeywordTenderRetriever:
                 score += 0.25
         return score
 
-    def retrieve(self, query: str, doc_id: str, k: int) -> list[Evidence]:
-        scored = [
-            (self._score(query, chunk), chunk)
-            for chunk in self.chunks
-            if chunk.metadata.get("doc_id") in (None, doc_id)
-        ]
-        scored.sort(key=lambda item: item[0], reverse=True)
-        evidence = [
+    def rank(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]:
+        """Rank all matching chunks before applying the top-k cut."""
+        candidates = (
+            self.chunks
+            if doc_id is None
+            else [
+                chunk
+                for chunk in self.chunks
+                if chunk.metadata.get("doc_id") in (None, doc_id)
+            ]
+        )
+        scored: list[tuple[float, ChunkRecord]] = []
+        for chunk in candidates:
+            score = self._score(query, chunk)
+            if score > 0:
+                scored.append((score, chunk))
+        scored.sort(
+            key=lambda item: (
+                -item[0],
+                str(item[1].metadata.get("doc_id") or ""),
+                item[1].chunk_id,
+            )
+        )
+        return [
             Evidence(
                 chunk_id=chunk.chunk_id,
                 text=chunk.text,
@@ -135,11 +201,21 @@ class KeywordTenderRetriever:
                 page_start=chunk.page_start,
                 page_end=chunk.page_end,
                 score=round(score, 4),
+                doc_id=str(chunk.metadata.get("doc_id") or ""),
             )
             for score, chunk in scored[: max(1, k)]
-            if score > 0
         ]
-        return _truncate(evidence, self.max_evidence_chars)
+
+    def retrieve(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]:
+        return truncate_evidence(
+            self.rank(query, doc_id, k),
+            self.max_evidence_chars,
+        )
 
 
 @dataclass
@@ -148,7 +224,12 @@ class FallbackTenderRetriever:
     fallback: TenderRetriever
     warnings: list[str] = field(default_factory=list)
 
-    def retrieve(self, query: str, doc_id: str, k: int) -> list[Evidence]:
+    def retrieve(
+        self,
+        query: str,
+        doc_id: str | None,
+        k: int,
+    ) -> list[Evidence]:
         if self.primary is not None:
             try:
                 evidence = self.primary.retrieve(query, doc_id, k)

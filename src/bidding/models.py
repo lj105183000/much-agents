@@ -17,6 +17,7 @@ class Evidence:
     page_start: int = 0
     page_end: int = 0
     score: float | None = None
+    doc_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -26,6 +27,7 @@ class Evidence:
             "page_start": self.page_start,
             "page_end": self.page_end,
             "score": self.score,
+            "doc_id": self.doc_id,
         }
 
 
