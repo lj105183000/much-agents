@@ -4,13 +4,14 @@ import type { ViewKey } from './api/types'
 import { Header } from './components/Header'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
-import { Card } from './components/ui'
 import { Icon } from './components/icons'
 import { useDocuments } from './hooks/useDocuments'
 import { useHealth } from './hooks/useHealth'
 import { useHistory, useHistoryPoller } from './hooks/useHistory'
 import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
+import { HistoryView } from './views/HistoryView'
+import { LibraryView } from './views/LibraryView'
 import { WorkbenchView } from './views/WorkbenchView'
 
 function App() {
@@ -113,38 +114,23 @@ function App() {
               />
             ) : null}
             {view === 'library' ? (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-cyan-300">
-                    <Icon name="folder" />
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-100">
-                      文档库
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      已发现 {documents.documents.length} 个解析文档
-                    </p>
-                  </div>
-                </div>
-              </Card>
+              <LibraryView
+                documents={documents.documents}
+                loading={documents.loading}
+                error={documents.error}
+                onRefresh={documents.refresh}
+                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onNavigate={navigate}
+              />
             ) : null}
             {view === 'history' ? (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-cyan-300">
-                    <Icon name="history" />
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-100">
-                      任务历史
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      本机记录了 {history.entries.length} 个任务
-                    </p>
-                  </div>
-                </div>
-              </Card>
+              <HistoryView
+                entries={history.entries}
+                onRemove={history.removeEntry}
+                onClear={history.clear}
+                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onNavigate={navigate}
+              />
             ) : null}
           </div>
         </main>
