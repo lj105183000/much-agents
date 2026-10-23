@@ -1,16 +1,145 @@
+import { useState } from 'react'
+import { getApiBase, setApiBase as persistApiBase } from './api/client'
+import type { ViewKey } from './api/types'
+import { Header } from './components/Header'
+import { SettingsDialog } from './components/SettingsDialog'
+import { Sidebar } from './components/Sidebar'
+import { Card, EmptyState } from './components/ui'
+import { Icon } from './components/icons'
+import { useDocuments } from './hooks/useDocuments'
+import { useHealth } from './hooks/useHealth'
+import { useHistory, useHistoryPoller } from './hooks/useHistory'
+import { VIEW_META } from './lib/navigation'
+
 function App() {
+  const [view, setView] = useState<ViewKey>('workbench')
+  const [apiBase, setApiBase] = useState(getApiBase)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const health = useHealth(apiBase)
+  const history = useHistory()
+  const documents = useDocuments(apiBase)
+
+  useHistoryPoller(history.entries, history.updateFromJob, history.markExpired)
+
+  const meta = VIEW_META[view]
+
+  const navigate = (target: ViewKey) => {
+    setView(target)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const saveBase = (value: string) => {
+    setApiBase(persistApiBase(value))
+  }
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-slate-950 px-6 text-slate-100">
-      <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/60 p-10 text-center shadow-2xl">
-        <p className="text-sm font-medium uppercase tracking-[0.3em] text-cyan-400">
-          多 Agent 标书编写系统
-        </p>
-        <h1 className="mt-4 text-4xl font-bold tracking-tight">Much Agents</h1>
-        <p className="mt-4 text-slate-400">
-          前端开发环境已就绪：React + Vite + TypeScript + TailwindCSS + Electron
-        </p>
+    <div className="app-bg flex min-h-screen text-slate-100">
+      <Sidebar
+        active={view}
+        onNavigate={navigate}
+        health={health}
+        apiBase={apiBase}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header
+          title={meta.title}
+          subtitle={meta.subtitle}
+          active={view}
+          onNavigate={navigate}
+          health={health}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">
+          <div className="mx-auto w-full max-w-6xl space-y-5">
+            {health.state === 'offline' ? (
+              <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs leading-6 text-red-200">
+                <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">无法连接后端 API</p>
+                  <p className="text-red-200/70">
+                    请在项目根目录启动
+                    <code className="mx-1 rounded bg-red-950/50 px-1.5 py-0.5 text-red-100">
+                      uv run uvicorn api.main:app --port 8001
+                    </code>
+                    ，或点击右上角设置 API 地址。
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {health.state === 'degraded' ? (
+              <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-6 text-amber-200">
+                <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">后端已连接，但状态降级</p>
+                  <p className="text-amber-200/70">
+                    {health.health?.task_backend === 'celery'
+                      ? 'Redis 或 worker 可能不可用，任务可能停在排队中。'
+                      : '部分依赖服务不可用。'}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {view === 'workbench' ? (
+              <EmptyState
+                icon="upload"
+                title="上传解析工作区"
+                description="拖入招标 PDF，解析、抽取、分块与入库将作为后台任务执行。工作区正在接入 API。"
+              />
+            ) : null}
+            {view === 'bid' ? (
+              <EmptyState
+                icon="sparkles"
+                title="投标文件编写工作区"
+                description="选择已解析文档，填写投标人资料，多 Agent 将生成标书骨架和重点章节。"
+              />
+            ) : null}
+            {view === 'library' ? (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-cyan-300">
+                    <Icon name="folder" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-100">
+                      文档库
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      已发现 {documents.documents.length} 个解析文档
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            ) : null}
+            {view === 'history' ? (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-cyan-300">
+                    <Icon name="history" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-100">
+                      任务历史
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      本机记录了 {history.entries.length} 个任务
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            ) : null}
+          </div>
+        </main>
       </div>
-    </main>
+
+      <SettingsDialog
+        open={settingsOpen}
+        apiBase={apiBase}
+        onClose={() => setSettingsOpen(false)}
+        onSave={saveBase}
+      />
+    </div>
   )
 }
 
