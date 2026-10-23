@@ -7,12 +7,16 @@ dependencies = [
     "celery>=5.6.3",
     "chromadb>=1.5.9",
     "fastapi>=0.159.1",
+    "httpx>=0.28.1",
     "langgraph>=1.2.16",
     "openai>=3.36.1",
+    "pydantic>=2.14.1",
     "pymupdf>=2.0",
     "python-docx>=1.2.0",
+    "python-dotenv>=1.2.4",
     "redis>=8.1.0",
     "sqlalchemy>=2.0,<2.1",
+    "tenacity>=9.1.1",
     "uvicorn[standard]>=0.54.0",
     "zai-sdk>=0.2.3",
 ]
@@ -20,6 +24,10 @@ dependencies = [
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple"
 default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [dependency-groups]
 dev = [
