@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：仓库只有工程脚手架（后端依赖 + 前端/Electron 骨架）。后端 `src/`、`api/`、`tests/` 尚未创建；完整功能规划、需求决策和实现顺序见 `AI编程日志-标书编写.md`，该文件是项目路线图的权威来源。
+**当前状态**：已实现文档解析管线 `src/parsing/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。FastAPI、Celery、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现；完整功能规划、需求决策和实现顺序见 `AI编程日志-标书编写.md`，该文件是项目路线图的权威来源。
 
 ## 常用命令
 
@@ -19,9 +19,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 uv sync                                      # 安装/同步依赖
 uv run chroma run --path ./chroma_db         # 启动 Chroma，监听 8000
-uv run pytest                                # 运行全部测试（规划中）
-uv run pytest tests/test_parsing.py::test_toc_parse   # 单个测试（规划中）
-uv run python -m src.parsing <pdf路径>        # CLI 解析单份招标文件（规划中）
+uv run pytest                                # 运行全部测试（全部 mock 网络）
+uv run pytest tests/test_toc.py::test_hierarchy_and_end_pages   # 单个测试
+uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽取 + 入库
+uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
 uv run python -m src.cli write <doc_id>      # CLI 运行多 Agent 编写（规划中）
 ```
 
@@ -56,14 +57,21 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。规划中的“在资源管理器中打开产物”需要新增 IPC。
 - 界面规划为左侧步骤导航 + 工作区：① 上传解析 ② 编写标书 ③ 文档库 ④ 历史产物；后端 base URL 为 `http://localhost:8001`。
 
-### 后端（依据 AI 编程日志的规划）
+### 文档解析管线（已实现，`src/parsing/`）
 
-1. **解析**（`src.parsing`）：MinerU 云端 vlm 为主，PyMuPDF 兜底；超 200 页自动分片后合并 Markdown，并按原 TOC 对齐章节；产物落到 `upload/parsed/`。
-2. **抽取**：重点抽取评标办法的评审因素/分值/评分标准、投标人须知前附表、资格审查条件、投标文件格式清单、关键时间节点。
-3. **入库**：Markdown 分块后走智谱 `embedding-3` 嵌入，写入 Chroma，供后续 RAG 检索。
-4. **API**：FastAPI；`POST /api/parse` 返回 202 + `job_id`，`GET /api/jobs/{id}` 轮询状态；`POST /api/bids` 直接接收 profile JSON。`TASK_BACKEND=celery` 为默认，Redis 不可用时返回 503；保留内存后端作 local 模式供测试使用。
-5. **多 Agent 编写**：LangGraph 流程，输入 `bidder_profile.json`；缺失字段一律生成【待填写】占位符，**绝不编造事实**；输出 Markdown 并用 python-docx 导出 .docx。
-6. **待办**：PostgreSQL 持久化公司信息、检索功能、MinIO 对象存储、Nginx 生产部署。
+入口 `uv run python -m src.parsing <pdf>`，`parse_document()` 可被后续 API 复用。阶段顺序：解析 → 抽取 → 分块 → 入库；产物在 `upload/parsed/<doc_id>/`（`full.md`、`content_list.json`、`toc.json`、`meta.json`、`extraction.json`、`chunks.jsonl`、`ingest.json`）。
+
+1. **解析**：`parsers/mineru/` 走 v4 批量 API（签名 URL 上传 → 轮询 → 下载 zip），`parsers/pymupdf_parser.py` 兜底。MinerU 实际限制 200 页/文件（文档写 600，接口会拒绝），超过时用 PyMuPDF 按平衡页数分片、同批上传后按页码偏移合并。
+2. **结构对齐**：以 `content_list` 的 `page_idx` + PDF 书签为准；`toc.py` 的 `end_page` 按“下一条同级或更高级目录”计算，避免章级范围被小节截断。页脚哈希水印和页码在 `parsers/footer.py` 清理，不要用 redaction。
+3. **抽取**：`extraction/` 按章节裁剪成 ≤24k 字的 payload，逐段调用 DeepSeek（OpenAI 兼容，JSON 模式），Pydantic 校验；失败或缺少 key 时降级到正则抽取，`method` 会记录 `llm` / `llm+regex` / `regex_fallback`。
+4. **分块与入库**：`chunking.py` 以 TOC section 为边界，默认 700 字/120 重叠，id 形如 `<doc_id>:<section_id>:<ordinal>`；`ingest.py` 用智谱 `embedding-3` 生成向量，`HttpClient` 写入 Chroma 集合 `bidding_documents`，upsert + 清理旧 id。
+5. **缓存**：`meta.json` 记录源文件 sha256；解析/抽取/入库均有缓存，`--force` 强制重跑。退出码：0 成功、2 输入错误、3 解析失败、4 抽取为空、5 入库失败、6 缺少 key 跳过。
+
+### 尚未实现（依据 AI 编程日志的规划）
+
+- **API**：FastAPI；`POST /api/parse` 返回 202 + `job_id`，`GET /api/jobs/{id}` 轮询；`POST /api/bids` 接收 profile JSON。`TASK_BACKEND=celery` 默认，Redis 不可用返回 503，保留内存后端。
+- **多 Agent 编写**：LangGraph，输入 `bidder_profile.json`；缺失字段生成【待填写】，绝不编造；输出 Markdown + docx。
+- **待办**：PostgreSQL 公司信息、检索接口、MinIO、Nginx。
 
 ### 配置与数据
 
