@@ -77,6 +77,17 @@ _NARRATIVE_FIELDS = frozenset(
 _INVALIDATING_FIELDS = frozenset(
     {"title", "target_words", "requirements", "content_plan", "writing_focus"}
 )
+_INTERNAL_WARNING_PREFIXES = (
+    "evaluation factor without a dedicated section:",
+)
+
+
+def _public_warnings(warnings: list[str]) -> list[str]:
+    return [
+        warning
+        for warning in warnings
+        if not warning.startswith(_INTERNAL_WARNING_PREFIXES)
+    ]
 
 
 class BidRunError(Exception):
@@ -367,12 +378,13 @@ class BidRunService:
                 }
             )
 
+        public_warnings = _public_warnings(list(planned.outline.warnings))
         atomic_write_json(
             run_dir / "outline.json",
             {
                 "doc_id": planned.context.doc_id,
                 "project_name": planned.context.facts.project_name,
-                "warnings": list(planned.outline.warnings),
+                "warnings": public_warnings,
                 "sections": artifact_sections,
             },
         )
@@ -407,7 +419,7 @@ class BidRunService:
             attempt=0,
             gate_status=None,
             gate=None,
-            warnings=list(planned.outline.warnings),
+            warnings=public_warnings,
             error=None,
             created_at=now,
             updated_at=now,
