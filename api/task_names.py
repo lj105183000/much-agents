@@ -2,3 +2,6 @@
 
 PARSE_TASK_NAME = "much_agents.parse_document"
 PARSE_QUEUE = "parse"
+
+BID_TASK_NAME = "much_agents.write_bid"
+BID_QUEUE = PARSE_QUEUE

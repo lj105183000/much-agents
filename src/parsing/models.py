@@ -180,6 +180,7 @@ class ParseResult:
 
     def to_summary(self) -> dict[str, Any]:
         return {
+            "kind": "parse",
             "ok": self.ok,
             "status": self.status,
             "exit_code": self.exit_code,

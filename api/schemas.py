@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .jobs import JobState
+from .jobs import JobKind, JobState
 
 
 class HealthResponse(BaseModel):
@@ -24,11 +24,27 @@ class JobCreatedResponse(BaseModel):
     status: JobState
     poll_url: str
     doc_id: str
+    kind: JobKind = "parse"
+
+
+class BidRequest(BaseModel):
+    doc_id: str = Field(min_length=1, max_length=128)
+    profile: dict[str, Any] = Field(default_factory=dict)
+    max_sections: int | None = Field(default=None, ge=0, le=100)
+
+
+class BidCreatedResponse(BaseModel):
+    job_id: str
+    status: JobState
+    poll_url: str
+    doc_id: str
+    kind: Literal["bid"] = "bid"
 
 
 class ParseSummary(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    kind: Literal["parse"] = "parse"
     ok: bool
     status: str
     exit_code: int
@@ -48,8 +64,36 @@ class ParseSummary(BaseModel):
     error: str | None = None
 
 
+class BidSummary(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    kind: Literal["bid"] = "bid"
+    ok: bool
+    status: str
+    exit_code: int
+    doc_id: str
+    run_id: str
+    output_dir: str
+    bid_markdown: str
+    bid_docx: str
+    report_path: str
+    outline_path: str
+    sections_dir: str
+    narrative_sections: int
+    narrative_written: int
+    placeholders: int
+    missing_profile_fields: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timings_seconds: dict[str, float] = Field(default_factory=dict)
+    error: str | None = None
+
+
+JobResult = Annotated[ParseSummary | BidSummary, Field(discriminator="kind")]
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
+    kind: JobKind = "parse"
     status: JobState
     filename: str
     doc_id: str
@@ -63,5 +107,5 @@ class JobStatusResponse(BaseModel):
     percent: int = 0
     message: str | None = None
     exit_code: int | None = None
-    result: ParseSummary | None = None
+    result: JobResult | None = None
     error: str | None = None

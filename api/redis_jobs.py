@@ -28,6 +28,7 @@ _OPTIONAL_FIELDS = (
     "result",
     "error",
     "source_path",
+    "payload",
 )
 
 
@@ -101,6 +102,7 @@ class RedisJobStore(JobStoreProtocol):
             "ingest": "1" if job.ingest else "0",
             "created_at": job.created_at.isoformat(),
             "status": job.status,
+            "kind": job.kind,
             "percent": str(job.percent),
         }
         optional = {
@@ -116,6 +118,11 @@ class RedisJobStore(JobStoreProtocol):
             ),
             "error": job.error or "",
             "source_path": str(job.source_path) if job.source_path else "",
+            "payload": (
+                json.dumps(job.payload, ensure_ascii=False)
+                if job.payload is not None
+                else ""
+            ),
         }
         for key, value in optional.items():
             if value:
@@ -128,7 +135,13 @@ class RedisJobStore(JobStoreProtocol):
             status = raw.get("status") or "queued"
             if status not in JOB_STATES:
                 raise ValueError(f"invalid status {status!r}")
+            kind = raw.get("kind") or "parse"
+            if kind not in ("parse", "bid"):
+                raise ValueError(f"invalid kind {kind!r}")
             result = json.loads(raw["result"]) if raw.get("result") else None
+            payload = json.loads(raw["payload"]) if raw.get("payload") else None
+            if payload is not None and not isinstance(payload, dict):
+                raise ValueError("payload is not a JSON object")
             created_at = RedisJobStore._parse_dt(raw.get("created_at")) or utcnow()
             return Job(
                 job_id=raw.get("job_id") or job_id,
@@ -139,6 +152,8 @@ class RedisJobStore(JobStoreProtocol):
                 ingest=raw.get("ingest") == "1",
                 created_at=created_at,
                 status=status,  # type: ignore[arg-type]
+                kind=kind,  # type: ignore[arg-type]
+                payload=payload,
                 started_at=RedisJobStore._parse_dt(raw.get("started_at")),
                 finished_at=RedisJobStore._parse_dt(raw.get("finished_at")),
                 stage=raw.get("stage") or None,
@@ -192,10 +207,12 @@ class RedisJobStore(JobStoreProtocol):
         job_id: str,
         filename: str,
         doc_id: str,
-        parser: str,
-        extract: bool,
-        ingest: bool,
+        parser: str = "",
+        extract: bool = False,
+        ingest: bool = False,
         source_path: Path | None = None,
+        kind: str = "parse",
+        payload: dict[str, Any] | None = None,
     ) -> Job:
         job = Job(
             job_id=job_id,
@@ -206,6 +223,8 @@ class RedisJobStore(JobStoreProtocol):
             ingest=ingest,
             created_at=self._clock(),
             source_path=source_path,
+            kind=kind,  # type: ignore[arg-type]
+            payload=payload,
         )
         key = self._key(job_id)
         self._call(self._client.hset, key, mapping=self._mapping(job))

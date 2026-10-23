@@ -1,44 +1,25 @@
-"""Dispatch parse jobs to a local thread runner or Celery."""
+"""Dispatch jobs to a local thread runner or Celery."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
-from src.parsing.config import Settings
-
-from .jobs import Job, JobStoreProtocol
+from .jobs import Job
 from .runner import JobRunner
-from .service import ParseFunc, UploadError, execute_parse_job
+from .service import UploadError
 from .task_names import PARSE_QUEUE, PARSE_TASK_NAME
 
 logger = logging.getLogger(__name__)
 
 
 class LocalDispatcher:
-    def __init__(
-        self,
-        *,
-        runner: JobRunner,
-        store: JobStoreProtocol,
-        parse_settings: Settings,
-        parse_func: ParseFunc,
-    ) -> None:
+    def __init__(self, *, runner: JobRunner, executor: Callable[[Job], None]) -> None:
         self.runner = runner
-        self.store = store
-        self.parse_settings = parse_settings
-        self.parse_func = parse_func
+        self.executor = executor
 
     def dispatch(self, job: Job) -> None:
-        self.runner.submit(
-            job.job_id,
-            lambda: execute_parse_job(
-                job.job_id,
-                store=self.store,
-                parse_settings=self.parse_settings,
-                parse_func=self.parse_func,
-            ),
-        )
+        self.runner.submit(job.job_id, lambda: self.executor(job))
 
 
 class CeleryDispatcher:
@@ -63,5 +44,5 @@ class CeleryDispatcher:
                 ignore_result=True,
             )
         except Exception as exc:  # noqa: BLE001 - broker errors vary by transport
-            logger.exception("failed to enqueue parse job %s", job.job_id)
+            logger.exception("failed to enqueue job %s", job.job_id)
             raise UploadError(503, "task queue is unavailable") from exc

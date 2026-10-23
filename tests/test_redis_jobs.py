@@ -124,6 +124,36 @@ def test_missing_job_returns_none(tmp_path: Path) -> None:
     assert store.mark_running("missing") is None
 
 
+def test_bid_job_kind_and_payload_roundtrip(tmp_path: Path) -> None:
+    store, client, _clock = make_store(tmp_path)
+    store.create(
+        job_id="bid-1",
+        filename="doc-1",
+        doc_id="doc-1",
+        kind="bid",
+        payload={"doc_id": "doc-1", "max_sections": 2},
+    )
+    loaded = store.get("bid-1")
+    assert loaded is not None
+    assert loaded.kind == "bid"
+    assert loaded.payload == {"doc_id": "doc-1", "max_sections": 2}
+    view = store.get_view("bid-1")
+    assert view["kind"] == "bid"
+    assert "payload" not in view
+
+    client.hashes[f"{JOB_KEY_PREFIX}legacy"] = {
+        "job_id": "legacy",
+        "filename": "old.pdf",
+        "doc_id": "old",
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "status": "queued",
+    }
+    legacy = store.get("legacy")
+    assert legacy is not None
+    assert legacy.kind == "parse"
+    assert legacy.payload is None
+
+
 def test_from_settings_wires_url_and_ttl(tmp_path: Path, monkeypatch) -> None:
     captured: dict = {}
 

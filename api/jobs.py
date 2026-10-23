@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
 JobState = Literal["queued", "running", "succeeded", "failed"]
+JobKind = Literal["parse", "bid"]
 
 
 class JobStoreError(RuntimeError):
@@ -38,11 +39,14 @@ class Job:
     result: dict[str, Any] | None = None
     error: str | None = None
     source_path: Path | None = None
+    kind: JobKind = "parse"
+    payload: dict[str, Any] | None = None
 
     def to_view(self) -> dict[str, Any]:
-        """JSON-safe snapshot. ``source_path`` is intentionally not exposed."""
+        """JSON-safe snapshot. ``source_path``/``payload`` are not exposed."""
         return {
             "job_id": self.job_id,
+            "kind": self.kind,
             "status": self.status,
             "filename": self.filename,
             "doc_id": self.doc_id,
@@ -68,10 +72,12 @@ class JobStoreProtocol(Protocol):
         job_id: str,
         filename: str,
         doc_id: str,
-        parser: str,
-        extract: bool,
-        ingest: bool,
+        parser: str = "",
+        extract: bool = False,
+        ingest: bool = False,
         source_path: Path | None = None,
+        kind: JobKind = "parse",
+        payload: dict[str, Any] | None = None,
     ) -> Job: ...
 
     def get(self, job_id: str) -> Job | None: ...
@@ -128,10 +134,12 @@ class JobStore:
         job_id: str,
         filename: str,
         doc_id: str,
-        parser: str,
-        extract: bool,
-        ingest: bool,
+        parser: str = "",
+        extract: bool = False,
+        ingest: bool = False,
         source_path: Path | None = None,
+        kind: JobKind = "parse",
+        payload: dict[str, Any] | None = None,
     ) -> Job:
         with self._lock:
             self._prune_locked()
@@ -144,6 +152,8 @@ class JobStore:
                 ingest=ingest,
                 created_at=self._clock(),
                 source_path=source_path,
+                kind=kind,
+                payload=payload,
             )
             self._jobs[job_id] = job
             return job
@@ -207,7 +217,7 @@ class JobStore:
                 finished_at=self._clock(),
                 stage="done",
                 percent=100,
-                message="parse completed",
+                message="bid completed" if job.kind == "bid" else "parse completed",
                 exit_code=0,
                 result=summary,
                 error=None,

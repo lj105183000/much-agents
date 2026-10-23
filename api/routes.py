@@ -7,8 +7,15 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 
+from .bids import BidService
 from .jobs import JobStoreError
-from .schemas import HealthResponse, JobCreatedResponse, JobStatusResponse
+from .schemas import (
+    BidCreatedResponse,
+    BidRequest,
+    HealthResponse,
+    JobCreatedResponse,
+    JobStatusResponse,
+)
 from .service import ParseService
 
 logger = logging.getLogger(__name__)
@@ -16,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 def get_service(request: Request) -> ParseService:
     return request.app.state.parse_service
+
+
+def get_bid_service(request: Request) -> BidService:
+    return request.app.state.bid_service
 
 
 def build_router() -> APIRouter:
@@ -71,6 +82,29 @@ def build_router() -> APIRouter:
             status=job.status,
             poll_url=f"/api/jobs/{job.job_id}",
             doc_id=job.doc_id,
+            kind="parse",
+        )
+
+    @router.post(
+        "/bids",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=BidCreatedResponse,
+    )
+    async def create_bid_job(
+        request: BidRequest,
+        service: BidService = Depends(get_bid_service),
+    ) -> BidCreatedResponse:
+        job = await service.submit(
+            doc_id=request.doc_id,
+            profile=request.profile,
+            max_sections=request.max_sections,
+        )
+        return BidCreatedResponse(
+            job_id=job.job_id,
+            status=job.status,
+            poll_url=f"/api/jobs/{job.job_id}",
+            doc_id=job.doc_id,
+            kind="bid",
         )
 
     @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -78,6 +112,8 @@ def build_router() -> APIRouter:
         view = service.store.get_view(job_id)
         if view is None:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        if isinstance(view.get("result"), dict):
+            view["result"].setdefault("kind", view.get("kind") or "parse")
         return JobStatusResponse.model_validate(view)
 
     return router

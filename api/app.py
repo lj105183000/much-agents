@@ -4,22 +4,26 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.bidding.config import BidSettings
+from src.bidding.runner import run_bid_writing
 from src.parsing.config import Settings
 from src.parsing.models import ParseResult
 from src.parsing.pipeline import parse_document
 
+from .bids import BidService, execute_bid_job
 from .config import ApiSettings
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
 from .service import ParseService, UploadError
+from .task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -32,71 +36,132 @@ def create_app(
     parse_func: Callable[..., ParseResult] | None = None,
     store: JobStoreProtocol | None = None,
     dispatcher: LocalDispatcher | CeleryDispatcher | None = None,
+    bid_settings: BidSettings | None = None,
+    bid_runner: JobRunner | None = None,
+    bid_func: Callable[..., Any] | None = None,
+    bid_dispatcher: LocalDispatcher | CeleryDispatcher | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     parse_func_injected = parse_func is not None
+    bid_func_injected = bid_func is not None
     backend = (
         "local"
         if (
             api_settings.task_backend == "local"
             or runner is not None
             or parse_func_injected
+            or bid_runner is not None
+            or bid_func_injected
         )
         else "celery"
     )
-    local_runner: JobRunner | None = None
+    parse_settings = parse_settings or Settings.from_env()
+    bid_settings = bid_settings or BidSettings.from_env()
+    parse_func = parse_func or parse_document
+    bid_func = bid_func or run_bid_writing
+    local_runners: list[JobRunner] = []
+
+    def remember_runner(candidate: JobRunner) -> JobRunner:
+        if all(existing is not candidate for existing in local_runners):
+            local_runners.append(candidate)
+        return candidate
 
     if backend == "local":
-        parse_settings = parse_settings or Settings.from_env()
-        parse_func = parse_func or parse_document
         store = store or JobStore(ttl_seconds=api_settings.job_ttl_seconds)
-        local_runner = runner
+        default_runner: JobRunner | None = None
+
+        def shared_runner() -> JobRunner:
+            nonlocal default_runner
+            if default_runner is None:
+                default_runner = remember_runner(ThreadJobRunner(api_settings.job_workers))
+            return default_runner
+
         if dispatcher is None:
-            local_runner = runner or ThreadJobRunner(api_settings.job_workers)
-            dispatcher = LocalDispatcher(
-                runner=local_runner,
-                store=store,
-                parse_settings=parse_settings,
-                parse_func=parse_func,
+            parse_runner = remember_runner(runner or shared_runner())
+
+            def execute_parse(job) -> None:
+                from .service import execute_parse_job
+
+                execute_parse_job(
+                    job.job_id,
+                    store=store,
+                    parse_settings=parse_settings,
+                    parse_func=parse_func,
+                )
+
+            dispatcher = LocalDispatcher(runner=parse_runner, executor=execute_parse)
+
+        if bid_dispatcher is None:
+            bid_runner_obj = remember_runner(bid_runner or runner or shared_runner())
+
+            def execute_bid(job) -> None:
+                execute_bid_job(
+                    job.job_id,
+                    store=store,
+                    bid_settings=bid_settings,
+                    run_func=bid_func,
+                )
+
+            bid_dispatcher = LocalDispatcher(
+                runner=bid_runner_obj, executor=execute_bid
             )
     else:
         if store is None:
             from .redis_jobs import RedisJobStore
 
             store = RedisJobStore.from_settings(api_settings)
-        if dispatcher is None:
+        if dispatcher is None or bid_dispatcher is None:
             from .celery_app import create_celery_app
 
-            dispatcher = CeleryDispatcher(create_celery_app(api_settings))
+            celery = create_celery_app(api_settings)
+            if dispatcher is None:
+                dispatcher = CeleryDispatcher(
+                    celery, task_name=PARSE_TASK_NAME, queue=PARSE_QUEUE
+                )
+            if bid_dispatcher is None:
+                bid_dispatcher = CeleryDispatcher(
+                    celery, task_name=BID_TASK_NAME, queue=BID_QUEUE
+                )
 
-    service = ParseService(
+    parse_service = ParseService(
         api_settings=api_settings,
         store=store,
         dispatch=dispatcher.dispatch,
+    )
+    bid_service = BidService(
+        api_settings=api_settings,
+        bid_settings=bid_settings,
+        store=store,
+        dispatch=bid_dispatcher.dispatch,
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
         yield
-        if local_runner is not None:
-            local_runner.shutdown(wait=False)
+        for job_runner in local_runners:
+            job_runner.shutdown(wait=False)
 
     app = FastAPI(
         title="Much Agents API",
         version="0.1.0",
-        description="Upload a tender PDF and poll the parsing job.",
+        description="Upload a tender PDF, poll parsing jobs, and write bid documents.",
         lifespan=lifespan,
     )
     api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
     app.state.api_settings = api_settings
     app.state.parse_settings = parse_settings
+    app.state.bid_settings = bid_settings
     app.state.task_backend = backend
     app.state.job_store = store
     app.state.dispatcher = dispatcher
-    app.state.job_runner = local_runner
+    app.state.bid_dispatcher = bid_dispatcher
+    app.state.job_runner = runner
+    app.state.bid_runner = bid_runner
     app.state.parse_func = parse_func
-    app.state.parse_service = service
+    app.state.bid_func = bid_func
+    app.state.parse_service = parse_service
+    app.state.bid_service = bid_service
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(api_settings.cors_origins),
