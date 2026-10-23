@@ -31,10 +31,30 @@ _SNIPPET_CHARS = 240
 _MAX_SEMANTIC_CANDIDATES = 100
 _TERM_SPLIT_RE = re.compile(r"[\s,，。；;、:：/\\|]+")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_NAMES = (
+    r"td|tr|th|table|tbody|thead|tfoot|d|p|a|li|ul|ol|span|div|img|br"
+)
+_BROKEN_TAG_RE = re.compile(
+    rf"<?/?\b(?:{_TAG_NAMES})\b[^<>\n]{{0,100}}>",
+    re.IGNORECASE,
+)
+_OPEN_TAG_FRAGMENT_RE = re.compile(
+    rf"</?(?:{_TAG_NAMES})\b",
+    re.IGNORECASE,
+)
+_FOOTER_HASH_RE = re.compile(r"\b[0-9a-fA-F]{24,}-\d{6,}\b")
+_WATERMARK_NUMBER_RE = re.compile(r"\b20\d{14,}\b")
+_STRAY_ANGLE_RE = re.compile(r"(?<![A-Za-z0-9])[<>]+(?![A-Za-z0-9])")
 
 
 def _clean_text(text: str) -> str:
-    value = html.unescape(_HTML_TAG_RE.sub(" ", text or ""))
+    value = html.unescape(text or "")
+    value = _HTML_TAG_RE.sub(" ", value)
+    value = _BROKEN_TAG_RE.sub(" ", value)
+    value = _OPEN_TAG_FRAGMENT_RE.sub(" ", value)
+    value = _FOOTER_HASH_RE.sub(" ", value)
+    value = _WATERMARK_NUMBER_RE.sub(" ", value)
+    value = _STRAY_ANGLE_RE.sub(" ", value)
     value = re.sub(r"[ \t]+", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()

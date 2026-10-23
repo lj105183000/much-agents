@@ -190,7 +190,10 @@ def test_search_strips_table_markup(tmp_path: Path) -> None:
         "doc-html",
         [
             {
-                "text": "<table><tr><td>施工组织设计</td><td>30 分</td></tr></table>"
+                "text": (
+                    "<table><tr><td>施工组织设计</td><td>30 分</td></tr></table>"
+                    " d> 附件四 </td 4186d096b2a43cf9da76f743e779a9b-20231023203857131"
+                )
             }
         ],
     )
@@ -199,6 +202,9 @@ def test_search_strips_table_markup(tmp_path: Path) -> None:
     )
     hit = response.results[0]
     assert "<table>" not in hit.text
+    assert "td>" not in hit.text
+    assert "d> 附件四" not in hit.text
+    assert "20231023203857131" not in hit.text
     assert "施工组织设计" in hit.text
     assert "30 分" in hit.text
 
