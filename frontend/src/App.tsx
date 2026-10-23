@@ -118,7 +118,6 @@ function App() {
                 initialCompanyId={selectedCompanyId}
                 onNavigate={navigate}
                 onJobCreated={history.addEntry}
-                onJobUpdate={history.updateFromJob}
                 onActiveJobChange={setActiveJobId}
                 onDocumentsRefresh={documents.refresh}
               />

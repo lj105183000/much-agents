@@ -18,6 +18,7 @@ export interface HealthResponse {
   jobs: number
   task_backend: 'celery' | 'local'
   redis_ok: boolean | null
+  database_ok?: boolean | null
 }
 
 export interface JobCreatedResponse {
@@ -101,7 +102,7 @@ export interface JobStatusResponse {
   error: string | null
 }
 
-export interface BidRunSummary {
+export interface DocumentBidRunSummary {
   run_id: string
   modified_at: string
   has_markdown: boolean
@@ -118,7 +119,7 @@ export interface DocumentSummary {
   parser_used: string | null
   parsed_at: string | null
   bid_ready: boolean
-  bid_runs: BidRunSummary[]
+  bid_runs: DocumentBidRunSummary[]
 }
 
 export interface DocumentListResponse {
@@ -222,4 +223,162 @@ export function isParseSummary(result: JobResult | null): result is ParseSummary
 
 export function isBidSummary(result: JobResult | null): result is BidSummary {
   return result?.kind === 'bid'
+}
+
+
+export type BidRunStatus =
+  | 'draft'
+  | 'outline_ready'
+  | 'queued'
+  | 'generating'
+  | 'assembling'
+  | 'assembled'
+  | 'paused'
+  | 'failed'
+
+export interface BidRunCounts {
+  selected: number
+  final: number
+  failed: number
+  pending: number
+}
+
+export interface BidRunSummary {
+  run_id: string
+  doc_id: string
+  project_name: string | null
+  company_id: string | null
+  status: BidRunStatus
+  stage: string | null
+  percent: number
+  revision: number
+  job_id: string | null
+  gate_status: 'pass' | 'warn' | 'block' | null
+  warnings: string[]
+  error: string | null
+  created_at: string
+  updated_at: string
+  counts: BidRunCounts
+}
+
+export interface BidRunDetail extends BidRunSummary {
+  message: string | null
+  missing_profile_fields: string[]
+  attempt: number
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface BidRunListResponse {
+  runs: BidRunSummary[]
+}
+
+export interface BidRunCreatedResponse {
+  run_id: string
+  doc_id: string
+  status: BidRunStatus
+  revision: number
+  outline_url: string
+}
+
+export interface BidOutlineSection {
+  section_id: string
+  parent_section_id: string | null
+  title: string
+  kind: 'index' | 'narrative' | 'form' | 'attachment'
+  level: number
+  order: number
+  template_key: string | null
+  target_words: number
+  selected: boolean
+  editable: boolean
+  requirements: string[]
+  evaluation_factors: Array<Record<string, unknown>>
+  source_pages: number[] | null
+  content_plan: Record<string, unknown> | null
+  writing_focus: string
+  status: string
+  attempt: number
+  char_count: number
+  final_source: string | null
+  error: string | null
+}
+
+export interface BidOutlineResponse {
+  run_id: string
+  doc_id: string
+  project_name: string | null
+  status: BidRunStatus
+  revision: number
+  counts: BidRunCounts
+  sections: BidOutlineSection[]
+  warnings: string[]
+}
+
+export interface BidOutlineSectionPatch {
+  section_id: string
+  selected?: boolean
+  title?: string
+  target_words?: number
+  requirements?: string[]
+  content_plan?: Record<string, unknown> | null
+  writing_focus?: string
+}
+
+export interface BidOutlinePatchRequest {
+  revision: number
+  sections: BidOutlineSectionPatch[]
+}
+
+export interface BidOutlinePatchResponse {
+  run_id: string
+  revision: number
+  status: BidRunStatus
+  invalidated_sections: string[]
+  outline_url: string
+}
+
+export interface BidGenerateRequest {
+  section_ids?: string[]
+  assemble?: boolean
+}
+
+export interface BidGenerateResponse {
+  run_id: string
+  job_id: string
+  status: string
+  poll_url: string
+  run_url: string
+}
+
+export interface BidSectionDetail {
+  run_id: string
+  section_id: string
+  title: string
+  kind: string
+  status: string
+  attempt: number
+  final_markdown: string
+  final_source: string | null
+  issues: Array<Record<string, unknown>>
+  warnings: string[]
+  error: string | null
+}
+
+export interface BidGateCheck {
+  id: string
+  level: 'block' | 'warn'
+  status: 'pass' | 'fail'
+  message: string
+  section_ids: string[]
+  hint: string
+}
+
+export interface BidGateResponse {
+  run_id: string
+  status: 'pass' | 'warn' | 'block'
+  forced: boolean
+  checked_at: string | null
+  page_limit: number
+  checks: BidGateCheck[]
 }

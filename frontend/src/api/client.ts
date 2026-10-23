@@ -3,7 +3,17 @@ import type {
   ArtifactListResponse,
   ArtifactSource,
   BidCreatedResponse,
+  BidGateResponse,
+  BidGenerateRequest,
+  BidGenerateResponse,
+  BidOutlinePatchRequest,
+  BidOutlinePatchResponse,
+  BidOutlineResponse,
   BidRequest,
+  BidRunCreatedResponse,
+  BidRunDetail,
+  BidRunListResponse,
+  BidSectionDetail,
   CompanyDetail,
   CompanyListResponse,
   CompanyUpsertRequest,
@@ -134,6 +144,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  let response: Response
+  try {
+    response = await fetch(apiUrl(path), init)
+  } catch {
+    throw new ApiError(
+      0,
+      `无法连接后端 API：${getApiBase() || window.location.origin}。请确认 uvicorn 已启动。`,
+    )
+  }
+  if (!response.ok) {
+    let detail: unknown = response.statusText
+    try {
+      const body = (await response.json()) as Record<string, unknown>
+      detail = body.detail ?? body
+    } catch {
+      // Keep the HTTP status text when the body is not JSON.
+    }
+    throw new ApiError(response.status, formatDetail(detail) || response.statusText)
+  }
+  return response.blob()
+}
+
 function artifactPath(source: ArtifactSource): string {
   if (source.type === 'job') {
     return `/api/jobs/${encodeURIComponent(source.jobId)}/artifacts`
@@ -222,6 +255,111 @@ export const api = {
     return request<void>(
       `/api/companies/${encodeURIComponent(companyId)}`,
       { method: 'DELETE' },
+    )
+  },
+
+  createBidRun(payload: BidRequest): Promise<BidRunCreatedResponse> {
+    return request<BidRunCreatedResponse>('/api/bid-runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+
+  listBidRuns(params: {
+    docId?: string
+    status?: string
+    limit?: number
+  } = {}): Promise<BidRunListResponse> {
+    const query = new URLSearchParams()
+    if (params.docId) query.set('doc_id', params.docId)
+    if (params.status) query.set('status', params.status)
+    if (params.limit) query.set('limit', String(params.limit))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<BidRunListResponse>(`/api/bid-runs${suffix}`)
+  },
+
+  getBidRun(runId: string): Promise<BidRunDetail> {
+    return request<BidRunDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}`,
+    )
+  },
+
+  getBidOutline(runId: string): Promise<BidOutlineResponse> {
+    return request<BidOutlineResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/outline`,
+    )
+  },
+
+  patchBidOutline(
+    runId: string,
+    payload: BidOutlinePatchRequest,
+  ): Promise<BidOutlinePatchResponse> {
+    return request<BidOutlinePatchResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/outline`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  generateBidRun(
+    runId: string,
+    payload: BidGenerateRequest = {},
+  ): Promise<BidGenerateResponse> {
+    return request<BidGenerateResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/generate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  resumeBidRun(runId: string): Promise<BidGenerateResponse> {
+    return request<BidGenerateResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/resume`,
+      { method: 'POST' },
+    )
+  },
+
+  cancelBidRun(runId: string): Promise<BidRunDetail> {
+    return request<BidRunDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/cancel`,
+      { method: 'POST' },
+    )
+  },
+
+  getBidSection(
+    runId: string,
+    sectionId: string,
+  ): Promise<BidSectionDetail> {
+    return request<BidSectionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}`,
+    )
+  },
+
+  assembleBidRun(runId: string): Promise<BidGateResponse> {
+    return request<BidGateResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/assemble`,
+      { method: 'POST' },
+    )
+  },
+
+  getBidGate(runId: string): Promise<BidGateResponse> {
+    return request<BidGateResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  exportBidRun(runId: string, force = false): Promise<Blob> {
+    const query = force ? '?force=true' : ''
+    return requestBlob(
+      `/api/bid-runs/${encodeURIComponent(runId)}/export${query}`,
+      { method: 'POST' },
     )
   },
 
