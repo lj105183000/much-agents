@@ -43,15 +43,26 @@ npm run electron       # build 后打开 Electron 生产构建
 npm run dist           # electron-builder 打包
 ```
 
+Nginx（Docker，容器 `much-agents-nginx`）托管已构建的 `dist/` 并反代 `/api`：
+
+```bash
+docker start much-agents-nginx
+# 浏览器访问 http://127.0.0.1:8080
+```
+
+修改前端后执行 `npm run build` 即可，Nginx 挂载的是 `frontend/dist`，无需重启容器。Nginx 配置在根目录 `deploy/nginx.conf`。
+
 ## API 地址
 
-默认 `http://127.0.0.1:8001`。可在 `frontend/.env` 设置：
+- 通过 Nginx（8080）或 Vite（5173）访问时，默认使用**同源 `/api`**；Vite 已在 `vite.config.ts` 配置 `/api` 代理。
+- Electron 通过 `file://` 加载时默认使用 `http://127.0.0.1:8001`。
+- 可设置绝对地址覆盖：
 
 ```dotenv
 VITE_API_BASE_URL=http://127.0.0.1:8001
 ```
 
-也可以点击界面右上角设置按钮临时覆盖，值保存在浏览器 localStorage。Electron 生产环境通过 `file://` 加载，必须使用完整 http 地址。
+也可以在界面右上角「API 连接设置」中覆盖（保存到 localStorage）；留空恢复同源。
 
 ## 注意
 

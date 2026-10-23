@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库、React/Electron 前端工作台与测试 `tests/`。其他业务数据持久化、MinIO/Nginx 与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库、React/Electron 前端工作台、Nginx 前端托管/API 反向代理与测试 `tests/`。其他业务数据持久化、MinIO 与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -44,12 +44,13 @@ npm run electron:dev   # 并行启动 Vite 与 Electron（--dev 模式）
 npm run dist           # electron-builder 打包，输出 frontend/release/
 ```
 
-前端默认连接 `http://127.0.0.1:8001`；启动前需先运行后端 API（Celery 模式还需 Redis + worker，或使用 `TASK_BACKEND=local`）。
+浏览器访问 `http://127.0.0.1:8080`（Nginx）或 `http://127.0.0.1:5173`（Vite）时默认使用同源 `/api`；Electron `file://` 自动使用 `http://127.0.0.1:8001`。启动前需先运行后端 API（Celery 模式还需 Redis + worker，或使用 `TASK_BACKEND=local`）。
 
 ### 本地依赖服务
 
 - **Redis**：本机无原生 `redis-server.exe`，使用 Docker 容器 `much-agents-redis`（映射 6379，`--restart unless-stopped`）：`docker start much-agents-redis`。连接串 `redis://localhost:6379/0`。
 - **PostgreSQL**：Docker 容器 `much-agents-postgres`（`postgres:16-alpine`，映射 5433，`--restart unless-stopped`，数据卷 `much-agents-postgres-data`）：`docker start much-agents-postgres`。连接串 `postgresql+asyncpg://much_agents:much_agents_dev@localhost:5433/much_agents`；公司库表由 API 启动时自动创建。
+- **Nginx**：Docker 容器 `much-agents-nginx`（`nginx:alpine`，`127.0.0.1:8080->80`，`--restart unless-stopped`），配置 `deploy/nginx.conf`，静态目录挂载 `frontend/dist`；`http://127.0.0.1:8080` 提供前端页面，`/api/*`、`/docs` 反向代理到 `host.docker.internal:8001`。重建前端后无需重启容器。
 - **Chroma**：`uv run chroma run --path ./chroma_db`，向量数据落在 `chroma_db/`（已 gitignore）。
 - **MinerU**：云端解析，需要 `MINERU_API_KEY`（有效期 90 天）；单文件页数上限 200，超过需先分片。
 
@@ -64,7 +65,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
 - 文档检索：查询已解析招标文件 chunks，展示章节/页码/片段/相关度；语义优先，Chroma/智谱不可用或空结果时自动回退关键词，并提示回退原因。
 - 支持深色/浅色主题切换（Header 按钮），偏好保存在 localStorage，首屏由 `index.html` 内联脚本恢复，避免闪烁。
-- API base 默认 `http://127.0.0.1:8001`，可通过 `VITE_API_BASE_URL` 或界面设置覆盖；Electron 生产环境从 `file://` 加载，因此必须使用完整 http 地址，不能依赖相对 `/api`。任务历史存 localStorage，文档库来自后端扫描。
+- API base：http(s) 页面默认同源 `/api`（Vite 通过 `server.proxy`、Nginx 通过 `/api/` 反代）；Electron `file://` 默认 `http://127.0.0.1:8001`。可用 `VITE_API_BASE_URL` 或界面设置覆盖；留空恢复同源。任务历史存 localStorage，文档库来自后端扫描。
 - 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过后端 artifact 接口访问，浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
 
 ### 文档解析管线（已实现，`src/parsing/`）
@@ -118,12 +119,12 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、MinIO、Nginx。
+- **待办**：前端 IPC（打开本地目录）、MinIO。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
-- 前端默认 API base 为 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到浏览器 localStorage）。
+- 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
 - 公司库：`DATABASE_URL` 指向 `much-agents-postgres`；API 启动时自动 `create_all` 创建 `companies` 表（`profile` JSONB + 公司名/信用代码/地址/电话/银行冗余列）。数据库不可用时公司接口返回 503，不影响解析/标书任务；pytest 使用内存 fake，不连接真实数据库。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
