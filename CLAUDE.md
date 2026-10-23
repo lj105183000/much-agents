@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、导出前门禁、React/Electron 前端工作台、Nginx 前端托管/API 反向代理与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、React/Electron 前端工作台、Nginx 前端托管/API 反向代理与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -64,7 +64,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
 - 工作台为左侧导航 + 六个视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。
-- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。
+- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。门禁下方显示「合规检查与一致性台账」：21 项检查、跨章节事实核对、确定性/AI 修复方案与一键应用（应用等同人工编辑，需重新组装）。
 - 「任务历史」顶部显示服务端 `bid_runs`（可打开继续编辑/重写/组装），下方保留 localStorage 的解析/旧版任务记录；`LibraryView` 仍以磁盘产物为主。
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
 - 文档检索：查询已解析招标文件 chunks，展示章节/页码/片段/相关度；语义优先，Chroma/智谱不可用或空结果时自动回退关键词，并提示回退原因。
@@ -89,7 +89,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/health`。
 - `GET /api/documents`：扫描 `upload/parsed/*`，返回项目名、页数、chunks、bid_ready 与历史 bid run。
 - `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，未知 doc 404。
-- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物；路径穿越返回 404，**`profile.json` 永不暴露**。
+- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`）；路径穿越返回 404，**`profile.json` 永不暴露**。
 - `GET /api/bids/profile-template`：返回 `bidder_profile.example.json` 的 JSON 模板。
 - `GET/POST /api/companies`、`GET/PUT/DELETE /api/companies/{company_id}`：PostgreSQL 公司库 CRUD；`profile` 为完整 BidderProfile；公司名称必填。
 - `POST /api/bids` 支持可选 `company_id`：未提供 profile 时从公司库载入；提供 profile 时使用当前编辑内容，company_id 写入 job payload 便于追踪。
@@ -109,7 +109,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 ### 多 Agent 投标文件编写（已实现，`src/bidding/`）
 
 - 入口：CLI `uv run python -m src.cli write <doc_id>` 与 legacy `POST /api/bids`（一次性创建并立即生成），以及新的持久化流程 `/api/bid-runs`（见下）。两者复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `parse` 队列（任务名 `bidding.write_bid`）。
-- 产物：`upload/bids/<doc_id>/<run_id>/` 下的 `profile.json`、`outline.json`、`bid.md`、`bid.docx`、`report.json`、`gate.json`、`sections/*.md`。
+- 产物：`upload/bids/<doc_id>/<run_id>/` 下的 `profile.json`、`outline.json`、`bid.md`、`bid.docx`、`report.json`、`gate.json`、`compliance.json`、`consistency.json`、`sections/*.md`。
 - LangGraph 流程（legacy/CLI）：确定性 plan → 逐节检索（Chroma/关键词兜底）→ 并行 Writer → 并行 Reviewer → 条件 Reviser → 确定性 assemble；只有施工组织设计的 11 个 narrative 子章节经过 LLM，其余表单/附件为确定性模板。
 - 投标人资料：`bidder_profile.example.json` 模板；缺失字段一律 `【待填写：...】`，严禁编造公司、人员、证书、业绩、报价、日期。Writer/Reviewer 不接收完整 profile；profile 快照只落本地 run 目录，不进入 Redis/Celery 消息。
 - 评标覆盖：`report.json` 记录 55 条评标因素的 covered/partial/template/missing、占位符、缺失资料、审查问题与 token/耗时统计。
@@ -127,11 +127,21 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 最小门禁：缺 selected 内容、失败章节、高危/redaction、估算页数 >150 为 block；占位符、缺资料、评分因素未覆盖为 warn。直接下载产物保持宽松，只有 `POST /export` 严格拦截；`force=true` 会记录 `forced=true`。
 - profile 隐私不变：DB 只存 `profile_source/profile_sha256/profile_relpath` 与缺失字段标签；Redis/Celery payload 只有 `run_id/generation_token/section_ids/assemble/mode`；`profile.json` 继续不在 artifact allowlist。
 - `POST /api/bids`、CLI、旧 artifact 接口保持兼容；staged job 的 artifact 目录通过 job payload 的 `run_id` 解析（`job_id != run_id`）。
-- 仍未实现：全局一致性台账、独立 21 项合规检查/AI 修复、PDF/DOC 导出、RBAC、MinIO、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
+- 仍未实现：PDF/DOC 导出、RBAC、MinIO、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
+
+### 合规检查、一致性台账与修复方案（P1-B，`src/bidding/compliance.py`、`consistency.py`、`fix_plan.py`）
+
+- `assemble` 在组装后额外生成 `compliance.json`（21 项独立检查）与 `consistency.json`（跨章节事实台账），并把状态/summary 写入 `gate.json` 与 `report.json`；两文件也是 run 目录产物，可直接在 artifact 面板预览/下载。
+- 21 项检查固定顺序：公司/项目/招标人/标段/工期/质量/有效期/截止时间/开竣工日期/联系方式/信用代码/法人/授权代理人/项目经理/证书/人员/业绩/财务/保证金/资格/章节完整性/评分覆盖。缺失资料和占位符是 warn，真实矛盾（如公司名、工期不一致）与失败章节是 block。
+- 一致性台账覆盖 21 类事实，逐项记录 canonical 值、每处 occurrence（章节、引用、exact/conflict）与 `consistent|conflict|missing|unverified|not_found`；关键事实冲突使台账为 `conflict`，缺失/未核实为 `warning`。
+- 门禁消费合规结果：任一 block 级检查失败 → gate 新增 `compliance_block` block；warn 级失败 → `compliance_warnings` warn。直接下载产物仍宽松，只有 `POST /export` 严格拦截。
+- 新增接口：`GET /api/bid-runs/{id}/compliance`、`POST .../compliance/check`（重新计算并落盘，不改 run 状态）、`GET .../consistency`、`POST .../compliance/fix-plan`（`check_ids` + `max_items`）、`POST .../compliance/fixes/apply`。
+- 修复方案先由一致性冲突生成确定性 replace 项（找不到唯一原文则不生成）；可选 LLM 只提供候选，所有候选都会重新校验 check id、章节可编辑性、`find` 唯一、`replace` 不含未授权金额/日期/证件与占位符。LLM 失败自动回退确定性方案。
+- 应用修复要求 final 可编辑 narrative、`find` 恰好出现一次；替换后走 `edit_section` 语义（`final_source="manual"`、run `paused/edited`、清空 gate 与两份报告），下一次 assemble 重新计算。大纲失效、人工编辑、单节重写都会删除过期报告。
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、独立投标检查与 AI 修复、全局一致性台账、RBAC/项目实体、Docker Compose。
+- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、RBAC/项目实体、Docker Compose。
 
 ### 配置与数据
 
