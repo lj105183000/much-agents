@@ -503,6 +503,8 @@ class BidRunRepository:
         self,
         run_id: str,
         section_id: str,
+        *,
+        expected_status: str | None = None,
         **fields: Any,
     ) -> bool:
         allowed = {
@@ -525,14 +527,15 @@ class BidRunRepository:
         if not values:
             return False
         values["updated_at"] = _now()
-        statement = (
-            update(BidSectionStateRow)
-            .where(
-                BidSectionStateRow.run_id == run_id,
-                BidSectionStateRow.section_id == section_id,
-            )
-            .values(**values)
+        statement = update(BidSectionStateRow).where(
+            BidSectionStateRow.run_id == run_id,
+            BidSectionStateRow.section_id == section_id,
         )
+        if expected_status is not None:
+            statement = statement.where(
+                BidSectionStateRow.status == expected_status
+            )
+        statement = statement.values(**values)
         async with self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(statement)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -439,3 +440,292 @@ def test_bid_run_export_gate_blocks_and_force_overrides(tmp_path: Path) -> None:
         assert forced.content[:2] == b"PK"
         gate = client.get(f"/api/bid-runs/{run_id}/gate").json()
         assert gate["forced"] is True
+
+
+def test_bid_run_manual_section_edit_and_gate(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.states[run_id] = [
+            replace(
+                item,
+                review={"verdict": "pass", "issues": []},
+                revision={"markdown": "old revision", "accepted": True},
+                warnings=["old warning"],
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+
+        dirty = "本工程施工组织设计正文。" * 40 + "合同金额 999万元。"
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": dirty},
+        )
+        assert edited.status_code == 200, edited.text
+        body = edited.json()
+        assert body["final_source"] == "manual"
+        assert body["warnings"] == []
+        assert any(
+            issue["type"] == "fabrication" and issue["severity"] == "high"
+            for issue in body["issues"]
+        )
+
+        state = next(
+            item for item in repo.states[run_id] if item.section_id == "narr-06-01"
+        )
+        assert state.status == "final"
+        assert state.final_markdown == dirty
+        assert state.review is None
+        assert state.revision is None
+        assert state.warnings == []
+        assert state.issues
+
+        run = repo.runs[run_id]
+        assert run.status == "paused"
+        assert run.stage == "edited"
+        assert run.gate is None
+        assert run.gate_status is None
+        assert run.percent == 90
+        assert client.get(f"/api/bid-runs/{run_id}/gate").status_code == 404
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 409
+
+        blocked = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert blocked.status_code == 200, blocked.text
+        gate = blocked.json()
+        assert gate["status"] == "block"
+        high_check = next(
+            item for item in gate["checks"] if item["id"] == "no_high_severity_issues"
+        )
+        assert high_check["status"] == "fail"
+        assert "narr-06-01" in high_check["section_ids"]
+
+        bid_md = (tmp_path / "bids" / "doc-1" / run_id / "bid.md").read_text(
+            encoding="utf-8"
+        )
+        assert "999万元" not in bid_md
+        assert "【待填写：金额需核实】" in bid_md
+
+        clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 40
+        cleaned = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": clean},
+        )
+        assert cleaned.status_code == 200
+        assert not any(
+            issue["severity"] == "high" for issue in cleaned.json()["issues"]
+        )
+        clean_assembly = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert clean_assembly.status_code == 200
+        clean_gate = clean_assembly.json()
+        clean_high = next(
+            item
+            for item in clean_gate["checks"]
+            if item["id"] == "no_high_severity_issues"
+        )
+        assert clean_high["status"] == "pass"
+
+
+def test_bid_run_manual_edit_guards(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+
+        pending = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "正文"},
+        )
+        assert pending.status_code == 409
+
+        form = client.patch(
+            f"/api/bid-runs/{run_id}/sections/form-09-01",
+            json={"markdown": "正文"},
+        )
+        assert form.status_code == 422
+
+        unselected = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-02",
+            json={"markdown": "正文"},
+        )
+        assert unselected.status_code == 422
+
+        unknown = client.patch(
+            f"/api/bid-runs/{run_id}/sections/unknown",
+            json={"markdown": "正文"},
+        )
+        assert unknown.status_code == 404
+
+        blank = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "   "},
+        )
+        assert blank.status_code == 422
+
+        _mark_section_final(repo, run_id)
+        repo.runs[run_id] = replace(
+            repo.runs[run_id],
+            status="generating",
+            job_id="active",
+            generation_token="token",
+        )
+        active = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "正文"},
+        )
+        assert active.status_code == 409
+
+        repo.runs[run_id] = replace(repo.runs[run_id], status="paused")
+        repo.states[run_id] = [
+            replace(item, status="writing")
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        before = next(
+            item for item in repo.states[run_id] if item.section_id == "narr-06-01"
+        )
+        changed = asyncio.run(
+            repo.update_section(
+                run_id,
+                "narr-06-01",
+                expected_status="final",
+                status="pending",
+            )
+        )
+        after = next(
+            item for item in repo.states[run_id] if item.section_id == "narr-06-01"
+        )
+        assert changed is False
+        assert after == before
+
+
+def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> None:
+    app, repo, _store, dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        old = "旧稿正文" * 100
+        repo.states[run_id] = [
+            replace(
+                item,
+                final_markdown=old,
+                review={"verdict": "pass", "issues": []},
+                revision={"markdown": old, "accepted": True},
+                issues=[{"type": "old", "severity": "low", "message": "old"}],
+                warnings=["old warning"],
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        repo.runs[run_id] = replace(
+            repo.runs[run_id],
+            status="assembled",
+            attempt=2,
+            gate_status="warn",
+            gate={"status": "warn", "checks": []},
+        )
+
+        response = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert response.status_code == 202, response.text
+        job = dispatcher.jobs[-1]
+        assert job.payload["section_ids"] == ["narr-06-01"]
+        assert job.payload["assemble"] is True
+
+        state = next(
+            item for item in repo.states[run_id] if item.section_id == "narr-06-01"
+        )
+        assert state.status == "pending"
+        assert state.final_markdown == old
+        assert state.review is None
+        assert state.revision is None
+        assert state.issues == []
+        assert state.warnings == []
+        run = repo.runs[run_id]
+        assert run.status == "queued"
+        assert run.attempt == 1
+        assert run.gate is None
+        assert run.gate_status is None
+
+        duplicate = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert duplicate.status_code == 409
+
+        repo.runs[run_id] = replace(repo.runs[run_id], status="assembled")
+        repo.states[run_id] = [
+            replace(item, status="final", final_markdown=old)
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        again = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert again.status_code == 202, again.text
+        assert repo.runs[run_id].attempt == 1
+
+
+def test_bid_run_section_regenerate_rolls_back_on_enqueue_failure(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        old = "旧稿正文" * 100
+        old_issues = [{"type": "coverage", "severity": "low", "message": "old"}]
+        repo.states[run_id] = [
+            replace(
+                item,
+                final_markdown=old,
+                review={"verdict": "pass", "issues": []},
+                revision={"markdown": old, "accepted": True},
+                issues=old_issues,
+                warnings=["old warning"],
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        repo.runs[run_id] = replace(repo.runs[run_id], status="assembled")
+        dispatcher.error = RuntimeError("queue down")
+
+        response = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert response.status_code == 503
+
+        state = next(
+            item for item in repo.states[run_id] if item.section_id == "narr-06-01"
+        )
+        assert state.status == "final"
+        assert state.final_markdown == old
+        assert state.issues == old_issues
+        assert state.warnings == ["old warning"]
+        run = repo.runs[run_id]
+        assert run.status == "paused"
+        assert run.stage == "edited"
+        assert run.gate is None

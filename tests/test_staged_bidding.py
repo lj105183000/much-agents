@@ -164,3 +164,85 @@ def test_generate_sections_isolates_writer_failure(tmp_path: Path) -> None:
     assert all(item.status == "failed" for item in result.outcomes)
     assert all(not item.final_markdown for item in result.outcomes)
     assert all(item.error for item in result.outcomes)
+
+
+class StatefulHooks:
+    """A tiny section-state store for the pending-with-old-final cases."""
+
+    def __init__(self, initial: dict[str, dict[str, Any]]) -> None:
+        self.states = initial
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    async def update_section(self, section_id: str, **fields: Any) -> None:
+        self.updates.append((section_id, fields))
+        self.states.setdefault(section_id, {}).update(fields)
+
+    async def heartbeat(self, stage: str, percent: int, message: str) -> None:
+        return None
+
+    async def is_cancelled(self) -> bool:
+        return False
+
+
+def test_regeneration_overwrites_old_final_on_success(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    section = narratives[0]
+    hooks = StatefulHooks(
+        {section.id: {"status": "pending", "final_markdown": "旧稿内容"}}
+    )
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={section.id: "pending"},
+            existing_attempt={section.id: 1},
+            content_plans={section.id: build_content_plan(section)},
+            writing_focus={section.id: "旧稿重写"},
+            settings=settings,
+            llm=FakeChatClient(),
+            retriever=FakeRetriever(),
+            allowed=allowed,
+            hooks=hooks,
+            section_ids=[section.id],
+        )
+    )
+    assert result.outcomes[0].status == "final"
+    assert hooks.states[section.id]["status"] == "final"
+    assert hooks.states[section.id]["final_markdown"] != "旧稿内容"
+    assert hooks.states[section.id]["final_markdown"]
+
+
+def test_regeneration_keeps_old_final_on_writer_failure(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    section = narratives[0]
+    hooks = StatefulHooks(
+        {section.id: {"status": "pending", "final_markdown": "旧稿内容"}}
+    )
+
+    def handler(system: str, user: str, json_mode: bool) -> str:
+        if json_mode:
+            return '{"issues":[],"missing_points":[],"covered_points":[],"revise":false}'
+        raise RuntimeError("writer down")
+
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={section.id: "pending"},
+            existing_attempt={section.id: 1},
+            content_plans={section.id: build_content_plan(section)},
+            writing_focus={},
+            settings=settings,
+            llm=FakeChatClient(handler=handler),
+            retriever=FakeRetriever(),
+            allowed=allowed,
+            hooks=hooks,
+            section_ids=[section.id],
+        )
+    )
+    assert result.outcomes[0].status == "failed"
+    assert hooks.states[section.id]["status"] == "failed"
+    assert hooks.states[section.id]["final_markdown"] == "旧稿内容"
+    assert hooks.states[section.id]["error"]

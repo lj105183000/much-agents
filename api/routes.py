@@ -40,6 +40,7 @@ from .schemas import (
     BidRunDetail,
     BidRunListResponse,
     BidSectionDetail,
+    BidSectionUpdateRequest,
     CompanyDetail,
     CompanyListResponse,
     CompanySummary,
@@ -320,6 +321,30 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidSectionDetail:
         return await service.get_section(run_id, section_id)
+
+    @router.patch(
+        "/bid-runs/{run_id}/sections/{section_id}",
+        response_model=BidSectionDetail,
+    )
+    async def edit_bid_run_section(
+        run_id: str,
+        section_id: str,
+        payload: BidSectionUpdateRequest,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionDetail:
+        return await service.edit_section(run_id, section_id, payload)
+
+    @router.post(
+        "/bid-runs/{run_id}/sections/{section_id}/regenerate",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=BidGenerateResponse,
+    )
+    async def regenerate_bid_run_section(
+        run_id: str,
+        section_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidGenerateResponse:
+        return await service.regenerate_section(run_id, section_id)
 
     @router.get("/bid-runs/{run_id}", response_model=BidRunDetail)
     async def get_bid_run(

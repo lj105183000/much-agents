@@ -619,6 +619,8 @@ class FakeBidRunRepository:
         self,
         run_id: str,
         section_id: str,
+        *,
+        expected_status: str | None = None,
         **fields: Any,
     ) -> bool:
         states = self.states.get(run_id, [])
@@ -626,6 +628,8 @@ class FakeBidRunRepository:
         updated: list[SectionStateRecord] = []
         for state in states:
             if state.section_id == section_id:
+                if expected_status is not None and state.status != expected_status:
+                    return False
                 found = True
                 updated.append(replace(state, **fields))
             else:

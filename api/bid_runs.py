@@ -13,11 +13,12 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
-from src.bidding.checks import build_allowed
+from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.gate import evaluate_gate
+from src.bidding.models import BidOutline
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
 from src.bidding.staged_output import (
@@ -54,6 +55,7 @@ from .schemas import (
     BidRunListResponse,
     BidRunSummary,
     BidSectionDetail,
+    BidSectionUpdateRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -823,6 +825,207 @@ class BidRunService:
             warnings=list(state.warnings),
             error=state.error,
         )
+
+    @staticmethod
+    def _require_editable_section(
+        records: list[OutlineSectionRecord],
+        section_id: str,
+    ) -> OutlineSectionRecord:
+        section = next(
+            (item for item in records if item.section_id == section_id),
+            None,
+        )
+        if section is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        if section.kind != "narrative" or not section.editable:
+            raise BidRunError(422, f"section is not editable: {section_id}")
+        if not section.selected:
+            raise BidRunError(422, f"section is not selected: {section_id}")
+        return section
+
+    def _load_edit_context(
+        self,
+        run: BidRunRecord,
+        records: list[OutlineSectionRecord],
+    ) -> tuple[TenderContext, BidderProfile, BidOutline]:
+        run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        profile_path = run_dir / "profile.json"
+        if not profile_path.is_file():
+            raise BidRunError(409, "bidder profile snapshot is missing")
+        try:
+            context = TenderContext.load(run.doc_id, self.bid_settings)
+            profile = BidderProfile.from_file(profile_path)
+        except BidContextError as exc:
+            raise BidRunError(404, str(exc)) from exc
+        except BidInputError as exc:
+            raise BidRunError(409, "bidder profile snapshot is invalid") from exc
+        outline = outline_from_records(
+            run,
+            records,
+            project_name=context.facts.project_name,
+        )
+        return context, profile, outline
+
+    async def edit_section(
+        self,
+        run_id: str,
+        section_id: str,
+        payload: BidSectionUpdateRequest,
+    ) -> BidSectionDetail:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot edit a section while the run is active")
+        records = await repo.get_outline(run_id)
+        self._require_editable_section(records, section_id)
+        state = await repo.get_state(run_id, section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        if state.status != "final":
+            raise BidRunError(409, "only a final section can be edited")
+
+        context, profile, outline = self._load_edit_context(run, records)
+        section = next(
+            (item for item in outline.sections if item.id == section_id),
+            None,
+        )
+        if section is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        allowed = build_allowed(context, profile, outline)
+        issues = [
+            issue.to_dict()
+            for issue in deterministic_review(section, payload.markdown, allowed)
+        ]
+        updated = await repo.update_section(
+            run_id,
+            section_id,
+            expected_status="final",
+            final_markdown=payload.markdown,
+            final_source="manual",
+            issues=issues,
+            warnings=[],
+            review=None,
+            revision=None,
+            error=None,
+            finished_at=_now(),
+        )
+        if not updated:
+            raise BidRunError(409, "section changed; reload and try again")
+        states = await repo.get_states(run_id)
+        counts = _counts(records, states)
+        percent = (
+            90
+            if counts.selected
+            and counts.final == counts.selected
+            and counts.failed == 0
+            else run.percent
+        )
+        run_updated = await repo.update_run(
+            run_id,
+            status="paused",
+            stage="edited",
+            percent=percent,
+            message="section edited; re-assemble",
+            gate_status=None,
+            gate=None,
+            finished_at=None,
+        )
+        if not run_updated:
+            raise BidRunError(409, "bid run changed; reload and try again")
+        return await self.get_section(run_id, section_id)
+
+    async def regenerate_section(
+        self,
+        run_id: str,
+        section_id: str,
+    ) -> BidGenerateResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot regenerate a section while the run is active")
+        records = await repo.get_outline(run_id)
+        self._require_editable_section(records, section_id)
+        state = await repo.get_state(run_id, section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        if state.status != "final":
+            raise BidRunError(409, "only a final section can be regenerated")
+        prior = state
+
+        updated = await repo.update_section(
+            run_id,
+            section_id,
+            expected_status="final",
+            status="pending",
+            review=None,
+            revision=None,
+            issues=[],
+            warnings=[],
+            error=None,
+            finished_at=None,
+        )
+        if not updated:
+            raise BidRunError(409, "section changed; reload and try again")
+        run_updated = await repo.update_run(
+            run_id,
+            status="paused",
+            stage="edited",
+            percent=run.percent,
+            message="section regeneration requested",
+            attempt=0,
+            gate_status=None,
+            gate=None,
+            finished_at=None,
+            cancel_requested=False,
+        )
+        if not run_updated:
+            await repo.update_section(
+                run_id,
+                section_id,
+                expected_status="pending",
+                status=prior.status,
+                review=prior.review,
+                revision=prior.revision,
+                issues=prior.issues,
+                warnings=prior.warnings,
+                error=prior.error,
+                finished_at=prior.finished_at,
+            )
+            raise BidRunError(409, "bid run changed; reload and try again")
+        try:
+            return await self.generate(
+                run_id,
+                BidGenerateRequest(section_ids=[section_id], assemble=True),
+            )
+        except BidRunError:
+            await repo.update_section(
+                run_id,
+                section_id,
+                expected_status="pending",
+                status=prior.status,
+                review=prior.review,
+                revision=prior.revision,
+                issues=prior.issues,
+                warnings=prior.warnings,
+                error=prior.error,
+                finished_at=prior.finished_at,
+            )
+            await repo.update_run(
+                run_id,
+                status="paused",
+                stage="edited",
+                percent=run.percent,
+                message="section regeneration requested; retry",
+                attempt=0,
+                gate_status=None,
+                gate=None,
+                finished_at=None,
+            )
+            raise
 
     @staticmethod
     def _gate_response(run: BidRunRecord) -> BidGateResponse:

@@ -164,6 +164,20 @@ class BidGenerateResponse(BaseModel):
     run_url: str
 
 
+class BidSectionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    markdown: str = Field(min_length=1, max_length=200_000)
+
+    @field_validator("markdown")
+    @classmethod
+    def _markdown_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("markdown must not be blank")
+        return stripped
+
+
 class BidSectionDetail(BaseModel):
     run_id: str
     section_id: str
