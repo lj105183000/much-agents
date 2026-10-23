@@ -9,6 +9,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.bidding.config import BidSettings
 from src.bidding.runner import run_bid_writing
@@ -223,6 +224,16 @@ def create_app(
         _request: Request, exc: BidRunError
     ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(SQLAlchemyError)
+    async def handle_database_error(
+        _request: Request, exc: SQLAlchemyError
+    ) -> JSONResponse:
+        logger.warning("database operation failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "database is unavailable"},
+        )
 
     @app.exception_handler(JobStoreError)
     async def handle_job_store_error(
