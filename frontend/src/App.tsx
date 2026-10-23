@@ -4,22 +4,31 @@ import type { ViewKey } from './api/types'
 import { Header } from './components/Header'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
-import { Card, EmptyState } from './components/ui'
+import { Card } from './components/ui'
 import { Icon } from './components/icons'
 import { useDocuments } from './hooks/useDocuments'
 import { useHealth } from './hooks/useHealth'
 import { useHistory, useHistoryPoller } from './hooks/useHistory'
 import { VIEW_META } from './lib/navigation'
+import { BidView } from './views/BidView'
+import { WorkbenchView } from './views/WorkbenchView'
 
 function App() {
   const [view, setView] = useState<ViewKey>('workbench')
   const [apiBase, setApiBase] = useState(getApiBase)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const health = useHealth(apiBase)
   const history = useHistory()
   const documents = useDocuments(apiBase)
 
-  useHistoryPoller(history.entries, history.updateFromJob, history.markExpired)
+  useHistoryPoller(
+    history.entries,
+    history.updateFromJob,
+    history.markExpired,
+    activeJobId,
+  )
 
   const meta = VIEW_META[view]
 
@@ -82,17 +91,25 @@ function App() {
             ) : null}
 
             {view === 'workbench' ? (
-              <EmptyState
-                icon="upload"
-                title="上传解析工作区"
-                description="拖入招标 PDF，解析、抽取、分块与入库将作为后台任务执行。工作区正在接入 API。"
+              <WorkbenchView
+                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onNavigate={navigate}
+                onJobCreated={history.addEntry}
+                onJobUpdate={history.updateFromJob}
+                onActiveJobChange={setActiveJobId}
+                onDocumentsRefresh={documents.refresh}
               />
             ) : null}
             {view === 'bid' ? (
-              <EmptyState
-                icon="sparkles"
-                title="投标文件编写工作区"
-                description="选择已解析文档，填写投标人资料，多 Agent 将生成标书骨架和重点章节。"
+              <BidView
+                documents={documents.documents}
+                documentsLoading={documents.loading}
+                initialDocId={selectedDocId}
+                onNavigate={navigate}
+                onJobCreated={history.addEntry}
+                onJobUpdate={history.updateFromJob}
+                onActiveJobChange={setActiveJobId}
+                onDocumentsRefresh={documents.refresh}
               />
             ) : null}
             {view === 'library' ? (
