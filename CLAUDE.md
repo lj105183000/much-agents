@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲与章节级续跑、导出前门禁、React/Electron 前端工作台、Nginx 前端托管/API 反向代理与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、导出前门禁、React/Electron 前端工作台、Nginx 前端托管/API 反向代理与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -64,11 +64,12 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
 - 工作台为左侧导航 + 六个视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。
-- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。任务历史仍只存 localStorage；服务端 run 历史接口已提供，前端迁移留待后续。
+- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。
+- 「任务历史」顶部显示服务端 `bid_runs`（可打开继续编辑/重写/组装），下方保留 localStorage 的解析/旧版任务记录；`LibraryView` 仍以磁盘产物为主。
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
 - 文档检索：查询已解析招标文件 chunks，展示章节/页码/片段/相关度；语义优先，Chroma/智谱不可用或空结果时自动回退关键词，并提示回退原因。
 - 支持深色/浅色主题切换（Header 按钮），偏好保存在 localStorage，首屏由 `index.html` 内联脚本恢复，避免闪烁。
-- API base：http(s) 页面默认同源 `/api`（Vite 通过 `server.proxy`、Nginx 通过 `/api/` 反代）；Electron `file://` 默认 `http://127.0.0.1:8001`。可用 `VITE_API_BASE_URL` 或界面设置覆盖；留空恢复同源。任务历史存 localStorage，文档库来自后端扫描。
+- API base：http(s) 页面默认同源 `/api`（Vite 通过 `server.proxy`、Nginx 通过 `/api/` 反代）；Electron `file://` 默认 `http://127.0.0.1:8001`。可用 `VITE_API_BASE_URL` 或界面设置覆盖；留空恢复同源。解析/旧版任务历史存 localStorage，服务端投标 run 历史来自 `/api/bid-runs`，文档库来自后端扫描。
 - 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过后端 artifact 接口访问，浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
 
 ### 文档解析管线（已实现，`src/parsing/`）
@@ -114,21 +115,23 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 评标覆盖：`report.json` 记录 55 条评标因素的 covered/partial/template/missing、占位符、缺失资料、审查问题与 token/耗时统计。
 - `--max-sections N` 控制生成的 narrative 数量（0=全部 11 个）；表单骨架始终完整。Word 转换支持标题/段落/列表/表格/基本内联样式，复杂排版需人工调整。
 
-### 持久化投标 run 与可编辑大纲（P0，`api/bid_runs.py`、`src/bidding/staged.py`）
+### 持久化投标 run、可编辑大纲与单节编辑（P0/P1-A，`api/bid_runs.py`、`src/bidding/staged.py`）
 
 - PostgreSQL 新增 3 张表：`bid_runs`、`bid_outline_sections`、`bid_section_states`（Alembic `0002`）；Redis 仍是 Celery broker/实时 job 状态，PostgreSQL 是 run/大纲/章节的事实来源。
 - 新流程：`POST /api/bid-runs` 只创建 run/大纲并写 profile 快照，不调用生成 LLM；`PATCH /api/bid-runs/{id}/outline` 用 revision 乐观锁修改 narrative 的标题、目标字数、requirements、content_plan、writing_focus；`POST .../generate|resume|cancel` 入队/续跑/取消；`POST .../assemble` 组装并生成 `gate.json`；`GET .../gate`；`POST .../export?force=false` 严格门禁导出 DOCX。`GET /api/bid-runs?doc_id=&status=`、`GET /api/bid-runs/{id}`、`GET .../outline`、`GET .../sections/{section_id}` 提供查询。
+- 单节编辑：`PATCH /api/bid-runs/{id}/sections/{section_id}` 保存人工正文（仅 final narrative），用 `deterministic_review` 刷新 issues，`final_source="manual"`，run 退回 `paused/edited` 并清空 gate；不调用 LLM、不静默 redact；下一次 assemble 会重新计算门禁。
+- 单节重写：`POST /api/bid-runs/{id}/sections/{section_id}/regenerate` 将节状态置 `pending` 但保留旧 `final_markdown`，重置 run attempt/gate 后复用 staged 生成；成功覆盖，失败保留旧稿并标记 failed，gate 继续 block。入队同步失败时尽力把节恢复为 final。
 - 章节级检查点：每完成 write/review/revise 就写 `bid_section_states`；worker 崩溃后 `resume` 只补 pending/failed/stale 章节，不重复已完成章节。DB lease + heartbeat + `bid_runs(doc_id)` 活跃唯一索引防重复生成；取消在章节边界生效。
 - 内容计划在 P0 是确定性的（requirements + 评分因素 + 目标字数 + 来源页），不额外调用 LLM；Writer 收到 `【本节编写计划】` 与 `【编写重点】`。
 - 大纲编辑只允许 narrative 的白名单字段；不允许增删/重排，`kind/template_key` 等不可篡改；表单/附件保持确定性模板。修改已生成章节的内容字段会把该节重置为 `pending`。
 - 最小门禁：缺 selected 内容、失败章节、高危/redaction、估算页数 >150 为 block；占位符、缺资料、评分因素未覆盖为 warn。直接下载产物保持宽松，只有 `POST /export` 严格拦截；`force=true` 会记录 `forced=true`。
 - profile 隐私不变：DB 只存 `profile_source/profile_sha256/profile_relpath` 与缺失字段标签；Redis/Celery payload 只有 `run_id/generation_token/section_ids/assemble/mode`；`profile.json` 继续不在 artifact allowlist。
 - `POST /api/bids`、CLI、旧 artifact 接口保持兼容；staged job 的 artifact 目录通过 job payload 的 `run_id` 解析（`job_id != run_id`）。
-- P0 不包含：已完成章节手动重写、全局一致性台账、独立 21 项合规检查、PDF/DOC 导出、RBAC、MinIO、Celery beat。
+- 仍未实现：全局一致性台账、独立 21 项合规检查/AI 修复、PDF/DOC 导出、RBAC、MinIO、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、独立投标检查与 AI 修复、全局一致性台账、RBAC/项目实体。
+- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、独立投标检查与 AI 修复、全局一致性台账、RBAC/项目实体、Docker Compose。
 
 ### 配置与数据
 
