@@ -131,7 +131,6 @@ function App() {
                 initialRunId={selectedRunId}
                 onRunChange={setSelectedRunId}
                 onNavigate={navigate}
-                onJobCreated={history.addEntry}
                 onActiveJobChange={setActiveJobId}
                 onDocumentsRefresh={documents.refresh}
               />

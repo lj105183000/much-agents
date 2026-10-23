@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
-  BidCreatedResponse,
   BidGateResponse,
   BidOutlineResponse,
   BidSectionDetail,
@@ -43,7 +42,6 @@ interface BidViewProps {
   initialRunId: string | null
   onRunChange: (runId: string | null) => void
   onNavigate: (view: ViewKey) => void
-  onJobCreated: (job: BidCreatedResponse) => void
   onActiveJobChange: (jobId: string | null) => void
   onDocumentsRefresh: () => void
 }
@@ -72,7 +70,6 @@ export function BidView({
   initialRunId,
   onRunChange,
   onNavigate,
-  onJobCreated,
   onActiveJobChange,
   onDocumentsRefresh,
 }: BidViewProps) {
@@ -291,18 +288,7 @@ export function BidView({
     }
   }
 
-  const enqueueJob = (job: {
-    job_id: string
-    poll_url: string
-  }) => {
-    const createdJob: BidCreatedResponse = {
-      job_id: job.job_id,
-      status: 'queued',
-      poll_url: job.poll_url,
-      doc_id: run?.doc_id || docId,
-      kind: 'bid',
-    }
-    onJobCreated(createdJob)
+  const enqueueJob = (job: { job_id: string }) => {
     onActiveJobChange(job.job_id)
   }
 
