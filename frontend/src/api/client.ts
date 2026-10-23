@@ -4,6 +4,9 @@ import type {
   ArtifactSource,
   BidCreatedResponse,
   BidRequest,
+  CompanyDetail,
+  CompanyListResponse,
+  CompanyUpsertRequest,
   DocumentListResponse,
   HealthResponse,
   JobCreatedResponse,
@@ -161,6 +164,47 @@ export const api = {
 
   listDocuments(): Promise<DocumentListResponse> {
     return request<DocumentListResponse>('/api/documents')
+  },
+
+  listCompanies(): Promise<CompanyListResponse> {
+    return request<CompanyListResponse>('/api/companies')
+  },
+
+  getCompany(companyId: string): Promise<CompanyDetail> {
+    return request<CompanyDetail>(
+      `/api/companies/${encodeURIComponent(companyId)}`,
+    )
+  },
+
+  createCompany(profile: Record<string, unknown>): Promise<CompanyDetail> {
+    const payload: CompanyUpsertRequest = { profile }
+    return request<CompanyDetail>('/api/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+
+  updateCompany(
+    companyId: string,
+    profile: Record<string, unknown>,
+  ): Promise<CompanyDetail> {
+    const payload: CompanyUpsertRequest = { profile }
+    return request<CompanyDetail>(
+      `/api/companies/${encodeURIComponent(companyId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  deleteCompany(companyId: string): Promise<void> {
+    return request<void>(
+      `/api/companies/${encodeURIComponent(companyId)}`,
+      { method: 'DELETE' },
+    )
   },
 
   searchPassages(payload: SearchRequest): Promise<SearchResponse> {

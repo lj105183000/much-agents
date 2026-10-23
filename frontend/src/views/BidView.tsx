@@ -6,6 +6,7 @@ import type {
   JobStatusResponse,
   ViewKey,
 } from '../api/types'
+import { useCompanies } from '../hooks/useCompanies'
 import { ProfileEditor } from '../components/ProfileEditor'
 import { JobProgress } from '../components/JobProgress'
 import { JobResultPanel } from '../components/JobResultPanel'
@@ -28,9 +29,11 @@ import { useJobPolling } from '../hooks/useJobPolling'
 const MAX_PROFILE_BYTES = 5 * 1024 * 1024
 
 interface BidViewProps {
+  apiBase: string
   documents: DocumentSummary[]
   documentsLoading: boolean
   initialDocId: string | null
+  initialCompanyId: string | null
   onNavigate: (view: ViewKey) => void
   onJobCreated: (job: BidCreatedResponse) => void
   onJobUpdate: (job: JobStatusResponse) => void
@@ -39,9 +42,11 @@ interface BidViewProps {
 }
 
 export function BidView({
+  apiBase,
   documents,
   documentsLoading,
   initialDocId,
+  initialCompanyId,
   onNavigate,
   onJobCreated,
   onJobUpdate,
@@ -49,15 +54,48 @@ export function BidView({
   onDocumentsRefresh,
 }: BidViewProps) {
   const [docId, setDocId] = useState(initialDocId ?? '')
+  const [companyId, setCompanyId] = useState(initialCompanyId ?? '')
   const [profile, setProfile] = useState<ProfileObject>({})
   const [maxSections, setMaxSections] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [companyError, setCompanyError] = useState<string | null>(null)
+  const [companyLoading, setCompanyLoading] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
+  const companies = useCompanies(apiBase)
 
   const polling = useJobPolling(jobId, { onUpdate: onJobUpdate })
   const job = polling.job
   const selected = documents.find((document) => document.doc_id === docId)
+
+  const loadCompany = async (id: string) => {
+    if (!id) {
+      setCompanyId('')
+      setCompanyError(null)
+      return
+    }
+    setCompanyLoading(true)
+    setCompanyError(null)
+    try {
+      const detail = await api.getCompany(id)
+      setProfile(detail.profile)
+      setCompanyId(id)
+    } catch (caught) {
+      setCompanyError(
+        caught instanceof ApiError ? caught.message : '公司资料读取失败',
+      )
+    } finally {
+      setCompanyLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (initialCompanyId) {
+      void loadCompany(initialCompanyId)
+    }
+    // Load only when the selected company passed in by the library changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCompanyId])
 
   useEffect(() => {
     if (job?.status === 'succeeded') onDocumentsRefresh()
@@ -88,6 +126,7 @@ export function BidView({
         doc_id: target,
         profile,
         max_sections: maxSections,
+        company_id: companyId || null,
       })
       onJobCreated(created)
       setJobId(created.job_id)
@@ -167,6 +206,64 @@ export function BidView({
             </select>
           </Field>
         </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+          <Field
+            label="从公司库载入"
+            htmlFor="bid-company"
+            hint={
+              companies.loading
+                ? '正在读取公司库…'
+                : companies.companies.length
+                  ? `${companies.companies.length} 家公司已保存`
+                  : '公司库为空，可先新建公司'
+            }
+          >
+            <select
+              id="bid-company"
+              className={selectClass}
+              value={companyId}
+              onChange={(event) => void loadCompany(event.target.value)}
+              disabled={busy || companyLoading}
+            >
+              <option value="">不使用公司库</option>
+              {companies.companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.company_name}
+                  {company.credit_code ? ` · ${company.credit_code}` : ''}
+                </option>
+              ))}
+              {companyId &&
+              !companies.companies.some((company) => company.id === companyId) ? (
+                <option value={companyId}>{companyId}</option>
+              ) : null}
+            </select>
+          </Field>
+          <div className="flex items-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onNavigate('companies')}
+            >
+              <Icon name="building" className="h-3.5 w-3.5" />
+              管理公司库
+            </Button>
+            {companyLoading ? <Spinner className="mb-2 h-4 w-4" /> : null}
+          </div>
+        </div>
+        {companyError ? (
+          <p className="mt-2 text-[11px] text-red-300">{companyError}</p>
+        ) : null}
+        {companies.error ? (
+          <p className="mt-2 text-[11px] text-amber-200/80">
+            公司库暂不可用：{companies.error}
+          </p>
+        ) : null}
+        {companyId ? (
+          <p className="mt-2 text-[11px] leading-5 text-slate-500">
+            已载入公司资料；可继续编辑。提交时会附带 company_id，修改不会自动覆盖公司库中的原始资料。
+          </p>
+        ) : null}
 
         {documentsLoading ? (
           <p className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">

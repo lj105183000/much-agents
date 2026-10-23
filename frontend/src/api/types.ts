@@ -1,7 +1,13 @@
 export type JobKind = 'parse' | 'bid'
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type ParserChoice = 'auto' | 'mineru' | 'pymupdf'
-export type ViewKey = 'workbench' | 'bid' | 'search' | 'library' | 'history'
+export type ViewKey =
+  | 'workbench'
+  | 'bid'
+  | 'companies'
+  | 'search'
+  | 'library'
+  | 'history'
 export type SearchMode = 'auto' | 'semantic' | 'keyword'
 export type SearchMatch = 'semantic' | 'keyword'
 
@@ -119,6 +125,30 @@ export interface DocumentListResponse {
   documents: DocumentSummary[]
 }
 
+export interface CompanySummary {
+  id: string
+  company_name: string
+  credit_code: string | null
+  address: string | null
+  phone: string | null
+  bank_name: string | null
+  bank_account: string | null
+  updated_at: string
+}
+
+export interface CompanyDetail extends CompanySummary {
+  profile: Record<string, unknown>
+  created_at: string
+}
+
+export interface CompanyListResponse {
+  companies: CompanySummary[]
+}
+
+export interface CompanyUpsertRequest {
+  profile: Record<string, unknown>
+}
+
 export interface SearchRequest {
   query: string
   doc_id: string | null
@@ -177,6 +207,7 @@ export interface BidRequest {
   doc_id: string
   profile: Record<string, unknown>
   max_sections: number | null
+  company_id?: string | null
 }
 
 export interface ParseUploadOptions {

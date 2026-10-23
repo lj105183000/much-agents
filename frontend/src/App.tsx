@@ -11,6 +11,7 @@ import { useHistory, useHistoryPoller } from './hooks/useHistory'
 import { useTheme } from './hooks/useTheme'
 import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
+import { CompaniesView } from './views/CompaniesView'
 import { HistoryView } from './views/HistoryView'
 import { LibraryView } from './views/LibraryView'
 import { SearchView } from './views/SearchView'
@@ -21,6 +22,7 @@ function App() {
   const [apiBase, setApiBase] = useState(getApiBase)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const health = useHealth(apiBase)
   const history = useHistory()
@@ -108,15 +110,24 @@ function App() {
             ) : null}
             {view === 'bid' ? (
               <BidView
-                key={selectedDocId ?? 'bid-new'}
+                key={`${selectedDocId ?? 'bid-new'}:${selectedCompanyId ?? 'no-company'}`}
+                apiBase={apiBase}
                 documents={documents.documents}
                 documentsLoading={documents.loading}
                 initialDocId={selectedDocId}
+                initialCompanyId={selectedCompanyId}
                 onNavigate={navigate}
                 onJobCreated={history.addEntry}
                 onJobUpdate={history.updateFromJob}
                 onActiveJobChange={setActiveJobId}
                 onDocumentsRefresh={documents.refresh}
+              />
+            ) : null}
+            {view === 'companies' ? (
+              <CompaniesView
+                apiBase={apiBase}
+                onSelectCompany={(companyId) => setSelectedCompanyId(companyId)}
+                onNavigate={navigate}
               />
             ) : null}
             {view === 'search' ? (

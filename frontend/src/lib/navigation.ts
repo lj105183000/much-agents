@@ -22,6 +22,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'sparkles',
   },
   {
+    key: 'companies',
+    label: '公司库',
+    description: '保存并复用投标人资料',
+    icon: 'building',
+  },
+  {
     key: 'search',
     label: '文档检索',
     description: '语义查找招标原文与页码',
@@ -52,6 +58,10 @@ export const VIEW_META: Record<
   bid: {
     title: '编写标书',
     subtitle: '选择已解析文档，填写投标人资料并启动多 Agent 编写',
+  },
+  companies: {
+    title: '公司库',
+    subtitle: '在 PostgreSQL 中保存、维护并复用投标人资料',
   },
   search: {
     title: '文档检索',
