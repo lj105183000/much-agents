@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 
+from .jobs import JobStoreError
 from .schemas import HealthResponse, JobCreatedResponse, JobStatusResponse
 from .service import ParseService
+
+logger = logging.getLogger(__name__)
 
 
 def get_service(request: Request) -> ParseService:
@@ -19,11 +23,29 @@ def build_router() -> APIRouter:
 
     @router.get("/health", response_model=HealthResponse)
     def health(request: Request) -> HealthResponse:
+        store = request.app.state.job_store
+        backend = request.app.state.task_backend
+        jobs = 0
+        redis_ok: bool | None = None
+        status_value: Literal["ok", "degraded"] = "ok"
+        try:
+            jobs = store.count()
+            if backend == "celery":
+                redis_ok = store.ping()
+                if not redis_ok:
+                    status_value = "degraded"
+        except JobStoreError:
+            logger.warning("health: job store unavailable", exc_info=True)
+            status_value = "degraded"
+            if backend == "celery":
+                redis_ok = False
         return HealthResponse(
-            status="ok",
+            status=status_value,
             service="much-agents-api",
             version="0.1.0",
-            jobs=request.app.state.job_store.count(),
+            jobs=jobs,
+            task_backend=backend,
+            redis_ok=redis_ok,
         )
 
     @router.post(

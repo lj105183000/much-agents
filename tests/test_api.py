@@ -24,6 +24,7 @@ def make_api_settings(tmp_path: Path, **extra: str) -> ApiSettings:
             "MAX_UPLOAD_MB": "1",
             "API_JOB_WORKERS": "1",
             "CORS_ORIGINS": "*",
+            "TASK_BACKEND": "local",
             **extra,
         }
     )

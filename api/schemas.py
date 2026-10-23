@@ -11,10 +11,12 @@ from .jobs import JobState
 
 
 class HealthResponse(BaseModel):
-    status: Literal["ok"] = "ok"
+    status: Literal["ok", "degraded"] = "ok"
     service: str = "much-agents-api"
     version: str = "0.1.0"
     jobs: int = 0
+    task_backend: Literal["celery", "local"] = "celery"
+    redis_ok: bool | None = None
 
 
 class JobCreatedResponse(BaseModel):

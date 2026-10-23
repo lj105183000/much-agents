@@ -1,4 +1,4 @@
-"""Upload persistence and background parse execution."""
+"""Upload persistence and shared parse-job execution."""
 
 from __future__ import annotations
 
@@ -29,8 +29,7 @@ from src.parsing.errors import (
 from src.parsing.models import ParseOptions, ParseResult
 
 from .config import ApiSettings
-from .jobs import Job, JobStore
-from .runner import JobRunner
+from .jobs import Job, JobStoreError, JobStoreProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +57,10 @@ class ParseFunc(Protocol):
         settings: Settings | None = None,
         progress: Callable[[str, int, str], None] | None = None,
     ) -> ParseResult: ...
+
+
+class Dispatcher(Protocol):
+    def dispatch(self, job: Job) -> None: ...
 
 
 def sanitize_pdf_filename(filename: str | None) -> str:
@@ -125,21 +128,118 @@ def _exit_code_for(exc: BaseException) -> int:
     return EXIT_INTERNAL
 
 
+def _mark_failed(
+    store: JobStoreProtocol,
+    job_id: str,
+    *,
+    error: str,
+    exit_code: int,
+    summary: dict | None = None,
+    only_if_queued: bool = False,
+) -> None:
+    try:
+        store.mark_failed(
+            job_id,
+            error=error,
+            exit_code=exit_code,
+            summary=summary,
+            only_if_queued=only_if_queued,
+        )
+    except JobStoreError:
+        logger.exception("could not mark job %s failed", job_id)
+
+
+def execute_parse_job(
+    job_id: str,
+    *,
+    store: JobStoreProtocol,
+    parse_settings: Settings,
+    parse_func: ParseFunc,
+) -> None:
+    """Run one parse job. Shared by the local dispatcher and the Celery task."""
+    job = store.mark_running(job_id)
+    if job is None:
+        logger.info("job %s is missing, already claimed, or terminal", job_id)
+        return
+
+    if job.source_path is None or not Path(job.source_path).is_file():
+        _mark_failed(
+            store,
+            job_id,
+            error="uploaded source file is missing",
+            exit_code=EXIT_INPUT,
+        )
+        return
+
+    options = ParseOptions(
+        parser=job.parser,
+        extract=job.extract,
+        ingest=job.ingest,
+        doc_id=job.doc_id,
+    )
+    progress_failed = False
+
+    def progress(stage: str, percent: int, message: str) -> None:
+        nonlocal progress_failed
+        try:
+            store.update_progress(job_id, stage, percent, message)
+        except JobStoreError:
+            if not progress_failed:
+                logger.warning(
+                    "could not persist progress for job %s", job_id, exc_info=True
+                )
+                progress_failed = True
+
+    try:
+        result = parse_func(
+            job.source_path,
+            options=options,
+            settings=parse_settings,
+            progress=progress,
+        )
+    except ParsingError as exc:
+        logger.warning("parse job %s failed: %s", job_id, exc)
+        _mark_failed(store, job_id, error=str(exc), exit_code=_exit_code_for(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 - never leave a job running
+        logger.exception("parse job %s crashed", job_id)
+        _mark_failed(
+            store,
+            job_id,
+            error=f"{type(exc).__name__}: {exc}",
+            exit_code=EXIT_INTERNAL,
+        )
+        return
+
+    try:
+        summary = result.to_summary()
+        if result.ok:
+            store.mark_succeeded(job_id, summary)
+        else:
+            message = result.error or (
+                f"pipeline exited with code {result.exit_code} ({result.status})"
+            )
+            store.mark_failed(
+                job_id,
+                error=message,
+                exit_code=result.exit_code,
+                summary=summary,
+            )
+    except JobStoreError:
+        logger.exception("could not persist terminal state for job %s", job_id)
+
+
 class ParseService:
     def __init__(
         self,
         *,
         api_settings: ApiSettings,
-        parse_settings: Settings,
-        store: JobStore,
-        runner: JobRunner,
-        parse_func: ParseFunc,
+        store: JobStoreProtocol,
+        dispatch: Callable[[Job], None],
     ) -> None:
         self.api_settings = api_settings
-        self.parse_settings = parse_settings
         self.store = store
-        self.runner = runner
-        self.parse_func = parse_func
+        self.dispatch = dispatch
 
     async def submit(
         self,
@@ -156,82 +256,49 @@ class ParseService:
         job_dir = self.api_settings.inbox_dir / job_id
         destination = job_dir / "source.pdf"
         job_dir.mkdir(parents=True, exist_ok=True)
-        success = False
+        upload_complete = False
         try:
             _size, digest = await save_upload(
                 upload, destination, self.api_settings.max_upload_bytes
             )
             stem = safe_stem(filename)[:60].strip(" .-") or "doc"
             doc_id = f"{stem}-{digest[:12]}"
-            job = self.store.create(
-                job_id=job_id,
-                filename=filename,
-                doc_id=doc_id,
-                parser=parser,
-                extract=extract,
-                ingest=ingest,
-                source_path=destination,
-            )
-            options = ParseOptions(
-                parser=parser,
-                extract=extract,
-                ingest=ingest,
-                doc_id=doc_id,
-            )
             try:
-                self.runner.submit(
-                    job_id, lambda: self._execute(job_id, destination, options)
+                job = self.store.create(
+                    job_id=job_id,
+                    filename=filename,
+                    doc_id=doc_id,
+                    parser=parser,
+                    extract=extract,
+                    ingest=ingest,
+                    source_path=destination,
                 )
-            except RuntimeError as exc:
-                self.store.mark_failed(
-                    job_id,
-                    error=f"job runner unavailable: {exc}",
+            except JobStoreError as exc:
+                raise UploadError(503, "job store is unavailable") from exc
+            upload_complete = True
+
+            try:
+                self.dispatch(job)
+            except Exception as exc:
+                # A publish timeout may still have delivered the message, so keep
+                # the uploaded file and only fail the job if it is still queued.
+                _mark_failed(
+                    self.store,
+                    job.job_id,
+                    error="failed to enqueue parse job",
                     exit_code=EXIT_INTERNAL,
+                    only_if_queued=True,
                 )
-                raise UploadError(503, "job runner is not available") from exc
-            success = True
+                if isinstance(exc, UploadError):
+                    raise
+                raise UploadError(503, "task queue is unavailable") from exc
             return job
+        except UploadError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise UploadError(
+                503, "job store is unavailable"
+            ) from exc
         finally:
-            if not success:
+            if not upload_complete:
                 shutil.rmtree(job_dir, ignore_errors=True)
-
-    def _execute(self, job_id: str, source_path: Path, options: ParseOptions) -> None:
-        self.store.mark_running(job_id)
-
-        def progress(stage: str, percent: int, message: str) -> None:
-            self.store.update_progress(job_id, stage, percent, message)
-
-        try:
-            result = self.parse_func(
-                source_path,
-                options=options,
-                settings=self.parse_settings,
-                progress=progress,
-            )
-            summary = result.to_summary()
-            if result.ok:
-                self.store.mark_succeeded(job_id, summary)
-                return
-            message = result.error or (
-                f"pipeline exited with code {result.exit_code} ({result.status})"
-            )
-            self.store.mark_failed(
-                job_id,
-                error=message,
-                exit_code=result.exit_code,
-                summary=summary,
-            )
-        except ParsingError as exc:
-            logger.warning("parse job %s failed: %s", job_id, exc)
-            self.store.mark_failed(
-                job_id,
-                error=str(exc),
-                exit_code=_exit_code_for(exc),
-            )
-        except Exception as exc:  # noqa: BLE001 - never leave a job running
-            logger.exception("parse job %s crashed", job_id)
-            self.store.mark_failed(
-                job_id,
-                error=f"{type(exc).__name__}: {exc}",
-                exit_code=EXIT_INTERNAL,
-            )
