@@ -49,6 +49,8 @@ export function WorkbenchView({
 
   const polling = useJobPolling(jobId, { onUpdate: onJobUpdate })
   const job = polling.job
+  const busy =
+    submitting || job?.status === 'queued' || job?.status === 'running'
 
   useEffect(() => {
     if (job?.status === 'succeeded') onDocumentsRefresh()
@@ -89,7 +91,7 @@ export function WorkbenchView({
           description="默认执行完整流程：MinerU 解析 → DeepSeek 抽取 → 分块 → Chroma 入库。"
         />
         <div className="mt-4">
-          <Dropzone file={file} onFile={setFile} disabled={submitting} />
+          <Dropzone file={file} onFile={setFile} disabled={busy} />
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -103,7 +105,7 @@ export function WorkbenchView({
               className={selectClass}
               value={parser}
               onChange={(event) => setParser(event.target.value as ParserChoice)}
-              disabled={submitting}
+              disabled={busy}
             >
               <option value="auto">自动</option>
               <option value="mineru">MinerU 云端</option>
@@ -116,14 +118,14 @@ export function WorkbenchView({
               onChange={setExtract}
               label="信息抽取"
               hint="编写标书所必需"
-              disabled={submitting}
+              disabled={busy}
             />
             <Toggle
               checked={ingest}
               onChange={setIngest}
               label="向量入库"
               hint="需要 Chroma 与智谱 key"
-              disabled={submitting}
+              disabled={busy}
             />
           </div>
         </div>
@@ -144,7 +146,7 @@ export function WorkbenchView({
           className="mt-4 w-full"
           onClick={() => void submit()}
           loading={submitting}
-          disabled={!file}
+          disabled={!file || busy}
         >
           <Icon name="play" className="h-4 w-4" />
           开始解析

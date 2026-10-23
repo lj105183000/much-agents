@@ -64,6 +64,7 @@ export function ProfileEditor({ profile, onChange }: ProfileEditorProps) {
     if (!file) return
     try {
       const text = await file.text()
+      setJsonDraft(text)
       const parsed = parseProfileText(text)
       onChange(parsed)
       setJsonDraft(prettyProfile(parsed))
