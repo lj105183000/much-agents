@@ -199,6 +199,56 @@ class BidGateResponse(BaseModel):
     checked_at: str | None = None
     page_limit: int = 150
     checks: list[dict[str, Any]] = Field(default_factory=list)
+    compliance_status: str | None = None
+    compliance_summary: dict[str, Any] | None = None
+    consistency_status: str | None = None
+    consistency_summary: dict[str, Any] | None = None
+
+
+class BidComplianceResponse(BaseModel):
+    run_id: str
+    compliance: dict[str, Any]
+    consistency: dict[str, Any]
+
+
+class BidConsistencyResponse(BaseModel):
+    run_id: str
+    consistency: dict[str, Any]
+
+
+class BidFixPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_ids: list[str] = Field(default_factory=list, max_length=21)
+    max_items: int = Field(default=12, ge=1, le=30)
+
+
+class BidFixPlanItem(BaseModel):
+    id: str
+    check_id: str
+    title: str
+    section_id: str | None = None
+    action: Literal["replace", "manual"]
+    find: str = ""
+    replace: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+
+
+class BidFixPlanResponse(BaseModel):
+    run_id: str
+    generated_at: str
+    method: str
+    items: list[BidFixPlanItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidFixApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str = Field(min_length=1, max_length=128)
+    find: str = Field(min_length=1, max_length=5000)
+    replace: str = Field(min_length=1, max_length=5000)
 
 
 class ParseSummary(BaseModel):

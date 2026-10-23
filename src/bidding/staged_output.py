@@ -111,6 +111,8 @@ def write_staged_outputs(
     gate: dict[str, Any] | None = None,
     outline_data: dict[str, Any] | None = None,
     extra_report: dict[str, Any] | None = None,
+    compliance: dict[str, Any] | None = None,
+    consistency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = ensure_dir(Path(output_dir))
     sections_dir = ensure_dir(root / "sections")
@@ -123,6 +125,18 @@ def write_staged_outputs(
     report = dict(assembly.report)
     if extra_report:
         report.update(extra_report)
+    if compliance is not None:
+        report["compliance"] = {
+            "status": compliance.get("status"),
+            "summary": compliance.get("summary"),
+        }
+        atomic_write_json(root / "compliance.json", compliance)
+    if consistency is not None:
+        report["consistency"] = {
+            "status": consistency.get("status"),
+            "summary": consistency.get("summary"),
+        }
+        atomic_write_json(root / "consistency.json", consistency)
     if gate is not None:
         report["gate"] = gate
         atomic_write_json(root / "gate.json", gate)

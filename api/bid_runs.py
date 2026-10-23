@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -14,18 +15,22 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 
 from src.bidding.checks import build_allowed, deterministic_review
+from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
+from src.bidding.fix_plan import generate_fix_plan
 from src.bidding.gate import evaluate_gate
+from src.bidding.llm import DeepSeekChatClient
 from src.bidding.models import BidOutline
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
 from src.bidding.staged_output import (
+    SectionOutput,
     assemble_staged_bid,
     write_staged_outputs,
 )
-from src.parsing.artifacts import atomic_write_json, ensure_dir
+from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
 
 from .bid_run_mapping import (
     outline_data_from_records,
@@ -41,6 +46,11 @@ from .bid_run_repo import (
 from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
 from .schemas import (
+    BidComplianceResponse,
+    BidConsistencyResponse,
+    BidFixApplyRequest,
+    BidFixPlanRequest,
+    BidFixPlanResponse,
     BidGateResponse,
     BidGenerateRequest,
     BidGenerateResponse,
@@ -248,6 +258,7 @@ class BidRunService:
         dispatch: Callable[[Job], None] | None = None,
         max_attempts: int = 2,
         stale_seconds: int = 900,
+        llm_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.bid_settings = bid_settings
         self.repo = repo
@@ -256,11 +267,41 @@ class BidRunService:
         self.dispatch = dispatch
         self.max_attempts = max(1, int(max_attempts))
         self.stale_seconds = max(1, int(stale_seconds))
+        self.llm_factory = llm_factory
 
     def _repo(self) -> BidRunRepository:
         if self.repo is None:
             raise BidRunError(503, "bid-run database is unavailable")
         return self.repo
+
+    def _run_dir(self, run: BidRunRecord) -> Path:
+        return self.bid_settings.bids_dir / run.doc_id / run.run_id
+
+    def _clear_reports(self, run: BidRunRecord) -> None:
+        """Remove reports that no longer describe the run after an edit."""
+        run_dir = self._run_dir(run)
+        for name in ("compliance.json", "consistency.json"):
+            try:
+                (run_dir / name).unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                logger.warning("could not remove stale %s", name, exc_info=True)
+
+    def _llm_client(self) -> Any | None:
+        if self.llm_factory is not None:
+            try:
+                return self.llm_factory()
+            except Exception:  # noqa: BLE001 - plan falls back to deterministic
+                logger.warning("could not create compliance LLM client", exc_info=True)
+                return None
+        if not self.bid_settings.base.deepseek_api_key:
+            return None
+        try:
+            return DeepSeekChatClient(self.bid_settings, concurrency=1)
+        except Exception:  # noqa: BLE001 - plan falls back to deterministic
+            logger.warning("could not create compliance LLM client", exc_info=True)
+            return None
 
     async def create(self, payload: BidRequest) -> BidRunCreatedResponse:
         try:
@@ -589,6 +630,8 @@ class BidRunService:
         )
         if not updated:
             raise BidRunError(409, "outline revision conflict; reload and try again")
+        if invalidated or new_status == "outline_ready":
+            self._clear_reports(run)
         return BidOutlinePatchResponse(
             run_id=run.run_id,
             revision=new_revision,
@@ -934,6 +977,7 @@ class BidRunService:
         )
         if not run_updated:
             raise BidRunError(409, "bid run changed; reload and try again")
+        self._clear_reports(run)
         return await self.get_section(run_id, section_id)
 
     async def regenerate_section(
@@ -996,6 +1040,7 @@ class BidRunService:
                 finished_at=prior.finished_at,
             )
             raise BidRunError(409, "bid run changed; reload and try again")
+        self._clear_reports(run)
         try:
             return await self.generate(
                 run_id,
@@ -1025,7 +1070,241 @@ class BidRunService:
                 gate=None,
                 finished_at=None,
             )
+            self._clear_reports(run)
             raise
+
+    async def _load_validation_inputs(
+        self,
+        run: BidRunRecord,
+    ) -> tuple[
+        Path,
+        TenderContext,
+        BidderProfile,
+        BidOutline,
+        dict[str, SectionOutput],
+        Any,
+    ]:
+        repo = self._repo()
+        run_dir = self._run_dir(run)
+        profile_path = run_dir / "profile.json"
+        if not profile_path.is_file():
+            raise BidRunError(409, "bidder profile snapshot is missing")
+        try:
+            context = TenderContext.load(run.doc_id, self.bid_settings)
+            profile = BidderProfile.from_file(profile_path)
+        except BidContextError as exc:
+            raise BidRunError(404, str(exc)) from exc
+        except BidInputError as exc:
+            raise BidRunError(409, "bidder profile snapshot is invalid") from exc
+        records = await repo.get_outline(run.run_id)
+        states = await repo.get_states(run.run_id)
+        if not records:
+            raise BidRunError(409, "bid outline is empty")
+        outline = outline_from_records(
+            run,
+            records,
+            project_name=context.facts.project_name,
+        )
+        outputs = outputs_from_states(states)
+        allowed = build_allowed(context, profile, outline)
+        return run_dir, context, profile, outline, outputs, allowed
+
+    async def _review_run(
+        self,
+        run: BidRunRecord,
+    ) -> tuple[
+        Path,
+        TenderContext,
+        BidderProfile,
+        BidOutline,
+        dict[str, SectionOutput],
+        Any,
+        Any,
+        Any,
+    ]:
+        (
+            run_dir,
+            context,
+            profile,
+            outline,
+            outputs,
+            allowed,
+        ) = await self._load_validation_inputs(run)
+        try:
+            assembly = assemble_staged_bid(
+                context=context,
+                profile=profile,
+                outline=outline,
+                outputs=outputs,
+                allowed=allowed,
+                warnings=list(run.warnings),
+            )
+        except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
+            logger.exception("could not review bid run %s", run.run_id)
+            raise BidRunError(500, "bid assembly failed") from exc
+        evaluation = evaluate_compliance(
+            context=context,
+            profile=profile,
+            outline=outline,
+            outputs=outputs,
+            section_markdowns=assembly.section_markdowns,
+            report=assembly.report,
+        )
+        return (
+            run_dir,
+            context,
+            profile,
+            outline,
+            outputs,
+            allowed,
+            assembly,
+            evaluation,
+        )
+
+    def _read_reports(
+        self,
+        run: BidRunRecord,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        run_dir = self._run_dir(run)
+        try:
+            compliance = read_json(run_dir / "compliance.json")
+            consistency = read_json(run_dir / "consistency.json")
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(compliance, dict) or not isinstance(consistency, dict):
+            return None
+        return compliance, consistency
+
+    async def check_compliance(self, run_id: str) -> BidComplianceResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot check compliance while the run is active")
+        run_dir, *_rest, evaluation = await self._review_run(run)
+        try:
+            atomic_write_json(run_dir / "compliance.json", evaluation.compliance)
+            atomic_write_json(run_dir / "consistency.json", evaluation.consistency)
+        except OSError:
+            logger.warning("could not persist compliance reports", exc_info=True)
+        return BidComplianceResponse(
+            run_id=run_id,
+            compliance=evaluation.compliance,
+            consistency=evaluation.consistency,
+        )
+
+    async def get_compliance(self, run_id: str) -> BidComplianceResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        reports = self._read_reports(run)
+        if reports is None:
+            raise BidRunError(
+                404,
+                "compliance report is not available; assemble or run a check first",
+            )
+        compliance, consistency = reports
+        return BidComplianceResponse(
+            run_id=run_id,
+            compliance=compliance,
+            consistency=consistency,
+        )
+
+    async def get_consistency(self, run_id: str) -> BidConsistencyResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        reports = self._read_reports(run)
+        if reports is None:
+            raise BidRunError(
+                404,
+                "consistency report is not available; assemble or run a check first",
+            )
+        return BidConsistencyResponse(run_id=run_id, consistency=reports[1])
+
+    async def fix_plan(
+        self,
+        run_id: str,
+        payload: BidFixPlanRequest,
+    ) -> BidFixPlanResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot plan fixes while the run is active")
+        (
+            _run_dir,
+            context,
+            profile,
+            outline,
+            _outputs,
+            allowed,
+            assembly,
+            evaluation,
+        ) = await self._review_run(run)
+        known_facts = {
+            key: value
+            for key, value in {
+                **context.facts.as_dict(),
+                **profile.facts(),
+            }.items()
+            if value
+            and "【待填写" not in value
+            and len(value) <= 300
+        }
+        try:
+            plan = await asyncio.to_thread(
+                generate_fix_plan,
+                compliance=evaluation.compliance,
+                consistency=evaluation.consistency,
+                outline=outline,
+                section_markdowns=assembly.section_markdowns,
+                allowed=allowed,
+                known_facts=known_facts,
+                llm=self._llm_client(),
+                check_ids=list(payload.check_ids),
+                max_items=payload.max_items,
+            )
+        except ValueError as exc:
+            raise BidRunError(422, str(exc)) from exc
+        return BidFixPlanResponse(run_id=run_id, **plan)
+
+    async def apply_fix(
+        self,
+        run_id: str,
+        payload: BidFixApplyRequest,
+    ) -> BidSectionDetail:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot apply a fix while the run is active")
+        records = await repo.get_outline(run_id)
+        self._require_editable_section(records, payload.section_id)
+        state = await repo.get_state(run_id, payload.section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {payload.section_id}")
+        if state.status != "final":
+            raise BidRunError(409, "only a final section can be fixed")
+        markdown = state.final_markdown or ""
+        if markdown.count(payload.find) != 1:
+            raise BidRunError(
+                409,
+                "the quoted text does not occur exactly once in the section; reload the plan",
+            )
+        updated = markdown.replace(payload.find, payload.replace, 1)
+        if updated == markdown:
+            raise BidRunError(422, "the fix does not change the section")
+        return await self.edit_section(
+            run_id,
+            payload.section_id,
+            BidSectionUpdateRequest(markdown=updated),
+        )
 
     @staticmethod
     def _gate_response(run: BidRunRecord) -> BidGateResponse:
@@ -1037,6 +1316,10 @@ class BidRunService:
             checked_at=gate.get("checked_at"),
             page_limit=int(gate.get("page_limit") or 150),
             checks=list(gate.get("checks") or []),
+            compliance_status=gate.get("compliance_status"),
+            compliance_summary=gate.get("compliance_summary"),
+            consistency_status=gate.get("consistency_status"),
+            consistency_summary=gate.get("consistency_summary"),
         )
 
     async def assemble(
@@ -1082,11 +1365,21 @@ class BidRunService:
                 allowed=allowed,
                 warnings=list(run.warnings),
             )
+            evaluation = evaluate_compliance(
+                context=context,
+                profile=profile,
+                outline=outline,
+                outputs=outputs,
+                section_markdowns=assembly.section_markdowns,
+                report=assembly.report,
+            )
             gate = evaluate_gate(
                 outline=outline,
                 outputs=outputs,
                 report=assembly.report,
                 missing_profile_fields=list(run.missing_profile_fields),
+                compliance=evaluation.compliance,
+                consistency=evaluation.consistency,
             )
             outline_data = outline_data_from_records(outline, records)
             result = write_staged_outputs(
@@ -1097,6 +1390,8 @@ class BidRunService:
                 gate=gate,
                 outline_data=outline_data,
                 extra_report={"run_id": run_id},
+                compliance=evaluation.compliance,
+                consistency=evaluation.consistency,
             )
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)

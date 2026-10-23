@@ -28,7 +28,12 @@ from .documents import list_documents
 from .jobs import JobStoreError
 from .schemas import (
     ArtifactListResponse,
+    BidComplianceResponse,
+    BidConsistencyResponse,
     BidCreatedResponse,
+    BidFixApplyRequest,
+    BidFixPlanRequest,
+    BidFixPlanResponse,
     BidGateResponse,
     BidGenerateRequest,
     BidGenerateResponse,
@@ -301,6 +306,58 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGateResponse:
         return await service.get_gate(run_id)
+
+    @router.get(
+        "/bid-runs/{run_id}/compliance",
+        response_model=BidComplianceResponse,
+    )
+    async def get_bid_run_compliance(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidComplianceResponse:
+        return await service.get_compliance(run_id)
+
+    @router.post(
+        "/bid-runs/{run_id}/compliance/check",
+        response_model=BidComplianceResponse,
+    )
+    async def check_bid_run_compliance(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidComplianceResponse:
+        return await service.check_compliance(run_id)
+
+    @router.get(
+        "/bid-runs/{run_id}/consistency",
+        response_model=BidConsistencyResponse,
+    )
+    async def get_bid_run_consistency(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidConsistencyResponse:
+        return await service.get_consistency(run_id)
+
+    @router.post(
+        "/bid-runs/{run_id}/compliance/fix-plan",
+        response_model=BidFixPlanResponse,
+    )
+    async def plan_bid_run_fixes(
+        run_id: str,
+        payload: BidFixPlanRequest | None = None,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidFixPlanResponse:
+        return await service.fix_plan(run_id, payload or BidFixPlanRequest())
+
+    @router.post(
+        "/bid-runs/{run_id}/compliance/fixes/apply",
+        response_model=BidSectionDetail,
+    )
+    async def apply_bid_run_fix(
+        run_id: str,
+        payload: BidFixApplyRequest,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionDetail:
+        return await service.apply_fix(run_id, payload)
 
     @router.post("/bid-runs/{run_id}/export")
     async def export_bid_run(

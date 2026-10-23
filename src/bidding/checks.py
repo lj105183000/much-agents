@@ -9,7 +9,7 @@ from .context import TenderContext
 from .models import OutlineSection, ReviewIssue
 from .profile import BidderProfile
 
-_AMOUNT_RE = re.compile(r"(?<![\w【])(\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|元))")
+_AMOUNT_RE = re.compile(r"(?<![A-Za-z0-9【.])(\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|元))")
 _DATE_RE = re.compile(
     r"(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*\d{1,2}\s*[时:]\s*\d{1,2}\s*分?)?"
     r"|\d{4}-\d{1,2}-\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)"

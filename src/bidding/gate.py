@@ -36,6 +36,8 @@ def evaluate_gate(
     missing_profile_fields: list[str],
     page_limit: int = 150,
     forced: bool = False,
+    compliance: dict[str, Any] | None = None,
+    consistency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = [
         section
@@ -137,19 +139,72 @@ def evaluate_gate(
         ),
     ]
 
+    if compliance is not None:
+        compliance_checks = [
+            item
+            for item in compliance.get("checks") or []
+            if isinstance(item, dict) and item.get("status") == "fail"
+        ]
+        blocked_checks = [
+            item for item in compliance_checks if item.get("level") == "block"
+        ]
+        warned_checks = [
+            item for item in compliance_checks if item.get("level") != "block"
+        ]
+        compliance_sections = sorted(
+            {
+                str(section_id)
+                for item in blocked_checks
+                for section_id in item.get("section_ids") or []
+                if section_id
+            }
+        )
+        compliance_titles = [
+            str(item.get("title") or item.get("id") or "") for item in blocked_checks
+        ]
+        checks.extend(
+            [
+                _check(
+                    "compliance_block",
+                    "block",
+                    bool(blocked_checks),
+                    (
+                        f"{len(blocked_checks)} compliance check(s) failed: "
+                        + "、".join(compliance_titles)
+                    ),
+                    section_ids=compliance_sections,
+                    hint="Open the compliance panel and fix the blocking issues.",
+                ),
+                _check(
+                    "compliance_warnings",
+                    "warn",
+                    bool(warned_checks),
+                    f"{len(warned_checks)} compliance check(s) need attention",
+                    hint="Review the compliance panel before submission.",
+                ),
+            ]
+        )
+
     if any(item["level"] == "block" and item["status"] == "fail" for item in checks):
         status = "block"
     elif any(item["level"] == "warn" and item["status"] == "fail" for item in checks):
         status = "warn"
     else:
         status = "pass"
-    return {
+    result = {
         "status": status,
         "forced": bool(forced),
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "page_limit": page_limit,
         "checks": checks,
     }
+    if compliance is not None:
+        result["compliance_status"] = compliance.get("status")
+        result["compliance_summary"] = compliance.get("summary")
+    if consistency is not None:
+        result["consistency_status"] = consistency.get("status")
+        result["consistency_summary"] = consistency.get("summary")
+    return result
 
 
 __all__ = ["evaluate_gate"]

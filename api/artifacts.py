@@ -29,6 +29,8 @@ BID_PATTERNS: tuple[str, ...] = (
     "report.json",
     "outline.json",
     "gate.json",
+    "compliance.json",
+    "consistency.json",
     "sections/*.md",
 )
 

@@ -14,6 +14,7 @@ from api.jobs import JobStore
 from api.runner import InlineRunner
 from tests.fakes import (
     FakeBidRunRepository,
+    FakeChatClient,
     FakeCompanyService,
     FakeDispatcher,
     make_api_settings,
@@ -23,7 +24,7 @@ from tests.fakes import (
 )
 
 
-def make_app(tmp_path: Path):
+def make_app(tmp_path: Path, *, llm_factory=None):
     write_parsed_fixture(tmp_path)
     repo = FakeBidRunRepository()
     bid_settings = make_bid_settings(tmp_path)
@@ -36,6 +37,7 @@ def make_app(tmp_path: Path):
         company_service=company,  # type: ignore[arg-type]
         store=store,
         dispatch=dispatcher.dispatch,
+        llm_factory=llm_factory,
     )
     app = create_app(
         api_settings=make_api_settings(tmp_path, TASK_BACKEND="local"),
@@ -729,3 +731,247 @@ def test_bid_run_section_regenerate_rolls_back_on_enqueue_failure(
         assert run.status == "paused"
         assert run.stage == "edited"
         assert run.gate is None
+
+
+def _set_section_content(
+    repo,
+    run_id: str,
+    markdown: str,
+    section_id: str = "narr-06-01",
+) -> None:
+    repo.states[run_id] = [
+        replace(
+            item,
+            status="final",
+            final_markdown=markdown,
+            final_source="draft",
+            issues=[],
+            warnings=[],
+        )
+        if item.section_id == section_id
+        else item
+        for item in repo.states[run_id]
+    ]
+
+
+def test_bid_run_assemble_writes_compliance_and_consistency(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path, llm_factory=lambda: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        assert created.status_code == 201, created.text
+        run_id = created.json()["run_id"]
+        _set_section_content(
+            repo,
+            run_id,
+            "项目名称：测试供水工程\n"
+            "投标人：测试建设有限公司\n"
+            "计划工期：218 日历天\n"
+            "本工程施工组织设计正文，覆盖施工方案与质量安全要求。",
+        )
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        gate = assembled.json()
+        assert gate["compliance_status"] in {"pass", "warn", "block"}
+        assert gate["consistency_status"] in {"consistent", "warning", "conflict"}
+        assert gate["compliance_summary"]["total"] == 21
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "compliance.json").is_file()
+        assert (run_dir / "consistency.json").is_file()
+        report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+        assert report["compliance"]["summary"]["total"] == 21
+        assert report["consistency"]["status"] == gate["consistency_status"]
+
+        compliance = client.get(f"/api/bid-runs/{run_id}/compliance")
+        assert compliance.status_code == 200, compliance.text
+        body = compliance.json()
+        assert len(body["compliance"]["checks"]) == 21
+        assert body["compliance"]["summary"]["total"] == 21
+        assert body["consistency"]["facts"]
+
+        consistency = client.get(f"/api/bid-runs/{run_id}/consistency")
+        assert consistency.status_code == 200
+        assert consistency.json()["consistency"]["status"] == body["consistency"]["status"]
+
+        artifacts = client.get(f"/api/documents/doc-1/bids/{run_id}/artifacts")
+        assert artifacts.status_code == 200
+        paths = {row["path"] for row in artifacts.json()["artifacts"]}
+        assert {"compliance.json", "consistency.json"} <= paths
+        assert "profile.json" not in paths
+        profile = client.get(
+            f"/api/documents/doc-1/bids/{run_id}/artifacts/profile.json"
+        )
+        assert profile.status_code == 404
+
+
+def test_bid_run_compliance_check_and_stale_reports_after_edit(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path, llm_factory=lambda: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _set_section_content(
+            repo,
+            run_id,
+            "投标人：错误建设有限公司\n项目名称：测试供水工程\n",
+        )
+
+        assert client.get(f"/api/bid-runs/{run_id}/compliance").status_code == 404
+        assert client.get(f"/api/bid-runs/{run_id}/consistency").status_code == 404
+
+        checked = client.post(f"/api/bid-runs/{run_id}/compliance/check")
+        assert checked.status_code == 200, checked.text
+        body = checked.json()
+        checks = {item["id"]: item for item in body["compliance"]["checks"]}
+        assert len(checks) == 21
+        assert checks["company_identity"]["status"] == "fail"
+        assert checks["company_identity"]["level"] == "block"
+        assert body["compliance"]["status"] == "block"
+        assert client.get(f"/api/bid-runs/{run_id}/compliance").status_code == 200
+
+        clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 20
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": clean},
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["final_source"] == "manual"
+        assert client.get(f"/api/bid-runs/{run_id}/compliance").status_code == 404
+        assert client.get(f"/api/bid-runs/{run_id}/consistency").status_code == 404
+
+        again = client.post(f"/api/bid-runs/{run_id}/compliance/check")
+        assert again.status_code == 200, again.text
+        refreshed = {
+            item["id"]: item for item in again.json()["compliance"]["checks"]
+        }
+        assert refreshed["company_identity"]["status"] != "fail"
+        assert client.get(f"/api/bid-runs/{run_id}/compliance").status_code == 200
+
+        repo.runs[run_id] = replace(repo.runs[run_id], status="generating")
+        active = client.post(f"/api/bid-runs/{run_id}/compliance/check")
+        assert active.status_code == 409
+        active_plan = client.post(f"/api/bid-runs/{run_id}/compliance/fix-plan")
+        assert active_plan.status_code == 409
+
+
+def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path, llm_factory=lambda: None)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _set_section_content(
+            repo,
+            run_id,
+            "投标人：错误建设有限公司\n"
+            "项目名称：测试供水工程\n"
+            "本工程施工组织设计正文，覆盖施工方案与质量安全要求。",
+        )
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+
+        plan = client.post(
+            f"/api/bid-runs/{run_id}/compliance/fix-plan",
+            json={"check_ids": ["company_identity"]},
+        )
+        assert plan.status_code == 200, plan.text
+        body = plan.json()
+        assert body["method"] == "deterministic"
+        item = next(
+            entry
+            for entry in body["items"]
+            if entry["action"] == "replace" and entry["check_id"] == "company_identity"
+        )
+        assert item["find"] == "错误建设有限公司"
+        assert item["replace"] == "测试建设有限公司"
+
+        applied = client.post(
+            f"/api/bid-runs/{run_id}/compliance/fixes/apply",
+            json={
+                "section_id": item["section_id"],
+                "find": item["find"],
+                "replace": item["replace"],
+            },
+        )
+        assert applied.status_code == 200, applied.text
+        detail = applied.json()
+        assert detail["final_source"] == "manual"
+        assert "错误建设有限公司" not in detail["final_markdown"]
+        assert "测试建设有限公司" in detail["final_markdown"]
+        run = repo.runs[run_id]
+        assert run.status == "paused"
+        assert run.stage == "edited"
+        assert run.gate is None
+        assert client.get(f"/api/bid-runs/{run_id}/gate").status_code == 404
+        assert client.get(f"/api/bid-runs/{run_id}/compliance").status_code == 404
+
+        stale = client.post(
+            f"/api/bid-runs/{run_id}/compliance/fixes/apply",
+            json={
+                "section_id": item["section_id"],
+                "find": item["find"],
+                "replace": item["replace"],
+            },
+        )
+        assert stale.status_code == 409
+
+        reassembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert reassembled.status_code == 200, reassembled.text
+        report = client.get(f"/api/bid-runs/{run_id}/compliance").json()
+        checks = {entry["id"]: entry for entry in report["compliance"]["checks"]}
+        assert checks["company_identity"]["status"] == "pass"
+
+        unknown = client.post(
+            f"/api/bid-runs/{run_id}/compliance/fix-plan",
+            json={"check_ids": ["not-a-check"]},
+        )
+        assert unknown.status_code == 422
+
+
+def test_bid_run_fix_plan_uses_injected_llm(tmp_path: Path) -> None:
+    response = json.dumps(
+        {
+            "items": [
+                {
+                    "check_id": "company_identity",
+                    "section_id": "narr-06-01",
+                    "action": "manual",
+                    "reason": "需人工核对营业执照",
+                    "confidence": 0.7,
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+    llm = FakeChatClient(json_response=response)
+    app, repo, _store, _dispatcher = make_app(tmp_path, llm_factory=lambda: llm)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _set_section_content(
+            repo,
+            run_id,
+            "投标人：错误建设有限公司\n项目名称：测试供水工程\n",
+        )
+        plan = client.post(
+            f"/api/bid-runs/{run_id}/compliance/fix-plan",
+            json={"check_ids": ["company_identity"], "max_items": 5},
+        )
+        assert plan.status_code == 200, plan.text
+        body = plan.json()
+        assert body["method"] == "llm"
+        assert llm.calls and llm.calls[0]["json_mode"] is True
+        assert any(
+            entry["action"] == "manual" and entry["reason"] == "需人工核对营业执照"
+            for entry in body["items"]
+        )
