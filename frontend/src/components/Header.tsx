@@ -1,5 +1,6 @@
 import type { ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
+import type { Theme } from '../hooks/useTheme'
 import { cn } from '../lib/cn'
 import { NAV_ITEMS } from '../lib/navigation'
 import { Icon } from './icons'
@@ -10,6 +11,8 @@ interface HeaderProps {
   active: ViewKey
   onNavigate: (view: ViewKey) => void
   health: HealthState
+  theme: Theme
+  onToggleTheme: () => void
   onOpenSettings: () => void
 }
 
@@ -26,6 +29,8 @@ export function Header({
   active,
   onNavigate,
   health,
+  theme,
+  onToggleTheme,
   onOpenSettings,
 }: HeaderProps) {
   return (
@@ -33,7 +38,7 @@ export function Header({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-400/80">
+            <span className="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-300/80">
               Much Agents
             </span>
             <span className="h-1 w-1 rounded-full bg-slate-600" />
@@ -73,6 +78,15 @@ export function Header({
                   ? 'API 离线'
                   : '连接中'}
           </span>
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5 text-slate-400 transition hover:border-slate-700 hover:text-slate-100"
+            aria-label={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+            title={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+          >
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={onOpenSettings}

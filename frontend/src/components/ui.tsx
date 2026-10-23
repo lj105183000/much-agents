@@ -11,11 +11,11 @@ type ButtonSize = 'sm' | 'md'
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    'bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/10 hover:bg-cyan-300 disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none',
+    'bg-cyan-400 text-[#020617] shadow-lg shadow-cyan-500/10 hover:brightness-110 disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none',
   secondary:
     'border border-slate-700 bg-slate-900/70 text-slate-100 hover:border-slate-500 hover:bg-slate-800 disabled:text-slate-500',
   ghost:
-    'text-slate-300 hover:bg-slate-800/80 hover:text-white disabled:text-slate-600',
+    'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100 disabled:text-slate-600',
   danger:
     'border border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20 disabled:text-red-300/50',
 }
@@ -227,7 +227,7 @@ export function Toggle({
       <span
         className={cn(
           'relative h-5 w-9 shrink-0 rounded-full transition',
-          checked ? 'bg-cyan-400' : 'bg-slate-700',
+          checked ? 'bg-cyan-400' : 'bg-slate-600',
         )}
       >
         <span

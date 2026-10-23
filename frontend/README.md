@@ -9,6 +9,7 @@
 - **文档库**：扫描后端 `upload/parsed`，查看解析产物、历史投标文件和 bid run 产物。
 - **任务历史**：localStorage 记录本机提交的任务，支持筛选、继续轮询、查看详情和删除。
 - **产物预览/下载**：通过后端 allowlist artifact 接口访问；`profile.json` 不会暴露。
+- **深色/浅色主题**：右上角按钮切换，偏好保存在 localStorage，首屏自动恢复。
 
 ## 启动
 

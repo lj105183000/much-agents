@@ -8,6 +8,7 @@ import { Icon } from './components/icons'
 import { useDocuments } from './hooks/useDocuments'
 import { useHealth } from './hooks/useHealth'
 import { useHistory, useHistoryPoller } from './hooks/useHistory'
+import { useTheme } from './hooks/useTheme'
 import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
 import { HistoryView } from './views/HistoryView'
@@ -23,6 +24,7 @@ function App() {
   const health = useHealth(apiBase)
   const history = useHistory()
   const documents = useDocuments(apiBase)
+  const { theme, toggle: toggleTheme } = useTheme()
 
   useHistoryPoller(
     history.entries,
@@ -58,6 +60,8 @@ function App() {
           active={view}
           onNavigate={navigate}
           health={health}
+          theme={theme}
+          onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
         />
         <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">

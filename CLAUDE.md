@@ -61,6 +61,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
 - 工作台为左侧导航 + 四个视图：① 上传解析 ② 编写标书 ③ 文档库 ④ 任务历史；包含 job 进度、profile 表单/JSON、结果统计、产物预览与下载。
+- 支持深色/浅色主题切换（Header 按钮），偏好保存在 localStorage，首屏由 `index.html` 内联脚本恢复，避免闪烁。
 - API base 默认 `http://127.0.0.1:8001`，可通过 `VITE_API_BASE_URL` 或界面设置覆盖；Electron 生产环境从 `file://` 加载，因此必须使用完整 http 地址，不能依赖相对 `/api`。任务历史存 localStorage，文档库来自后端扫描。
 - 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过后端 artifact 接口访问，浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
 

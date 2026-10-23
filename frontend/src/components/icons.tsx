@@ -20,6 +20,8 @@ export type IconName =
   | 'external'
   | 'clock'
   | 'server'
+  | 'sun'
+  | 'moon'
 
 interface IconProps {
   name: IconName
@@ -150,6 +152,15 @@ function iconPath(name: IconName): ReactNode {
           <path d="M7 7h.01M7 17h.01" />
         </>
       )
+    case 'sun':
+      return (
+        <>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+        </>
+      )
+    case 'moon':
+      return <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z" />
     default:
       return <circle cx="12" cy="12" r="8" />
   }
