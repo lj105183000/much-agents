@@ -120,7 +120,7 @@ def extract_key_dates_regex(payloads: list[Payload]) -> list[KeyDateItem]:
         line_start = text.rfind("\n", 0, match.start()) + 1
         line_end = text.find("\n", match.end())
         line = text[line_start : line_end if line_end >= 0 else len(text)]
-        context = (line + " " + text[max(0, match.start() - 60) : match.start()]).strip()
+        context = line.strip()
         event = next(
             (label for token, label in _DATE_EVENTS.items() if token in context),
             "关键日期",

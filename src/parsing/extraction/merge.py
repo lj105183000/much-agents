@@ -141,6 +141,9 @@ def merge_with_regex(
         format_checklist=_merge_items(
             llm.format_checklist, regex.format_checklist, _format_key, "notes",
         ),
-        key_dates=_merge_dates(llm.key_dates, regex.key_dates),
+        # The LLM sees dates with their surrounding event text; when it produced
+        # any dates, prefer that set over noisy regex matches (historical years,
+        # ranges split into endpoints, etc.).
+        key_dates=list(llm.key_dates) if llm.key_dates else _merge_dates([], regex.key_dates),
         warnings=[*llm.warnings, *regex.warnings],
     )

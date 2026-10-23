@@ -2,14 +2,69 @@
 
 from __future__ import annotations
 
+import json
 import re
+import types
+import typing
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class EvidenceItem(BaseModel):
+def _allows_none(annotation: Any) -> bool:
+    return type(None) in typing.get_args(annotation)
+
+
+def _is_string_field(annotation: Any) -> bool:
+    if annotation is str:
+        return True
+    if typing.get_origin(annotation) not in (typing.Union, types.UnionType):
+        return False
+    args = typing.get_args(annotation)
+    return bool(args) and str in args and all(
+        item is str or item is type(None) for item in args
+    )
+
+
+def _is_list_field(annotation: Any) -> bool:
+    return typing.get_origin(annotation) is list
+
+
+class TolerantModel(BaseModel):
+    """Normalize the most common LLM type drift before validation."""
+
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_types(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for name, field in cls.model_fields.items():
+            if name not in data:
+                continue
+            value = data[name]
+            if _is_string_field(field.annotation):
+                if value is None:
+                    data[name] = None if _allows_none(field.annotation) else ""
+                elif isinstance(value, bool):
+                    data[name] = str(value).lower()
+                elif isinstance(value, (int, float)):
+                    data[name] = str(value)
+                elif isinstance(value, dict):
+                    data[name] = json.dumps(value, ensure_ascii=False)
+                elif isinstance(value, list):
+                    data[name] = " ".join(str(item) for item in value)
+            elif _is_list_field(field.annotation):
+                if value is None:
+                    data[name] = []
+                elif isinstance(value, dict):
+                    data[name] = [value]
+        return data
+
+
+class EvidenceItem(TolerantModel):
     evidence: str = ""
     source_section: str | None = None
     source_page: int | None = None
@@ -25,8 +80,7 @@ class EvidenceItem(BaseModel):
         return int(match.group()) if match else None
 
 
-class ProjectOverview(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+class ProjectOverview(TolerantModel):
     project_name: str | None = None
     tenderer: str | None = None
     agency: str | None = None
@@ -94,8 +148,7 @@ class KeyDateItem(EvidenceItem):
     datetime_text: str = ""
 
 
-class StructuredExtraction(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+class StructuredExtraction(TolerantModel):
     project_overview: ProjectOverview = Field(default_factory=ProjectOverview)
     qualification_requirements: list[QualificationRequirement] = Field(default_factory=list)
     evaluation_factors: list[EvaluationFactor] = Field(default_factory=list)

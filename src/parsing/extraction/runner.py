@@ -61,11 +61,17 @@ def structured_from_raw(
 
     for target, aliases, model in _LIST_MODELS:
         raw_list = next(
-            (raw[alias] for alias in aliases if isinstance(raw.get(alias), list)),
+            (
+                raw[alias]
+                for alias in aliases
+                if isinstance(raw.get(alias), (list, dict))
+            ),
             None,
         )
         if raw_list is None:
             continue
+        if isinstance(raw_list, dict):
+            raw_list = [raw_list]
         valid = [
             item
             for item in (_validate(model, candidate, warnings, stats) for candidate in raw_list)

@@ -150,6 +150,49 @@ def test_schema_coerces_source_page_and_required() -> None:
     assert item.source_page == 12
 
 
+def test_tolerant_model_coerces_type_drift() -> None:
+    factor = EvaluationFactor(
+        category=123,
+        factor=456,
+        scoring_criteria=["甲", "乙"],
+        source_page="第 9 页",
+    )
+    assert factor.category == "123"
+    assert factor.factor == "456"
+    assert factor.scoring_criteria == "甲 乙"
+    assert factor.source_page == 9
+    item = FormatChecklistItem(title={"name": "投标函"}, required="是")
+    assert "投标函" in item.title
+    assert item.required is True
+
+
+def test_runner_accepts_single_object_instead_of_list() -> None:
+    warnings: list[str] = []
+    stats: dict[str, int] = {"invalid_items": 0}
+    result = structured_from_raw(
+        {"qualification_requirements": {"category": "资质", "requirement": "三级"}},
+        "qualifications",
+        warnings,
+        stats,
+    )
+    assert len(result.qualification_requirements) == 1
+    assert result.qualification_requirements[0].requirement == "三级"
+
+
+def test_llm_dates_take_precedence_over_regex() -> None:
+    llm = StructuredExtraction(
+        key_dates=[KeyDateItem(event="投标截止时间", datetime_text="2023年11月14日13时30分")]
+    )
+    regex = StructuredExtraction(
+        key_dates=[
+            KeyDateItem(event="投标截止时间", datetime_text="2023年11月14日13时30分"),
+            KeyDateItem(event="历史日期", datetime_text="2018年10月01日"),
+        ]
+    )
+    merged = merge_with_regex(llm, regex)
+    assert [item.datetime_text for item in merged.key_dates] == ["2023年11月14日13时30分"]
+
+
 def test_merge_llm_parts_dedupes() -> None:
     first = StructuredExtraction(
         evaluation_factors=[EvaluationFactor(category="投标报价", factor="报价", max_score=50)]
