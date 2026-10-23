@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/` 与测试 `tests/`。PostgreSQL 持久化、前端界面、MinIO/Nginx 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、React/Electron 前端工作台与测试 `tests/`。PostgreSQL 持久化、MinIO/Nginx、前端 IPC 与对外检索接口仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -44,6 +44,8 @@ npm run electron:dev   # 并行启动 Vite 与 Electron（--dev 模式）
 npm run dist           # electron-builder 打包，输出 frontend/release/
 ```
 
+前端默认连接 `http://127.0.0.1:8001`；启动前需先运行后端 API（Celery 模式还需 Redis + worker，或使用 `TASK_BACKEND=local`）。
+
 ### 本地依赖服务
 
 - **Redis**：本机无原生 `redis-server.exe`，使用 Docker 容器 `much-agents-redis`（映射 6379，`--restart unless-stopped`）：`docker start much-agents-redis`。连接串 `redis://localhost:6379/0`。
@@ -57,9 +59,10 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 - Electron 主进程是 CommonJS：`frontend/electron/main.cjs`。带 `--dev` 时加载 `http://localhost:5173`，否则通过 `file://` 加载 `dist/index.html`。
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
-- 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`，`src/index.css` 仅 `@import "tailwindcss"`）。
-- 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。规划中的“在资源管理器中打开产物”需要新增 IPC。
-- 界面规划为左侧步骤导航 + 工作区：① 上传解析 ② 编写标书 ③ 文档库 ④ 历史产物；后端 base URL 为 `http://localhost:8001`。
+- 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
+- 工作台为左侧导航 + 四个视图：① 上传解析 ② 编写标书 ③ 文档库 ④ 任务历史；包含 job 进度、profile 表单/JSON、结果统计、产物预览与下载。
+- API base 默认 `http://127.0.0.1:8001`，可通过 `VITE_API_BASE_URL` 或界面设置覆盖；Electron 生产环境从 `file://` 加载，因此必须使用完整 http 地址，不能依赖相对 `/api`。任务历史存 localStorage，文档库来自后端扫描。
+- 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过后端 artifact 接口访问，浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
 
 ### 文档解析管线（已实现，`src/parsing/`）
 
@@ -76,6 +79,9 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `POST /api/parse`：multipart `file`，查询参数 `parser=auto|mineru|pymupdf`、`extract=true`、`ingest=true`；**默认执行完整流程**；返回 202 + `job_id`/`poll_url`/`doc_id`。
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
 - `GET /api/health`。
+- `GET /api/documents`：扫描 `upload/parsed/*`，返回项目名、页数、chunks、bid_ready 与历史 bid run。
+- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物；路径穿越返回 404，**`profile.json` 永不暴露**。
+- `GET /api/bids/profile-template`：返回 `bidder_profile.example.json` 的 JSON 模板。
 - 上传落盘 `upload/inbox/<job_id>/source.pdf`；`doc_id = <文件名>-<内容 sha256 前 12 位>`，相同内容重复上传可命中解析缓存。
 - 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash，Celery worker 消费 `parse` 队列（同时承载 parse 与 bid 任务，按 `Job.kind` 区分）；API 重启后仍可轮询，任务记录 24h TTL。
 - Worker 与 API 必须同一 checkout、共享 `upload/` 与 `.env`；Windows 用 `--pool=solo`（单任务串行，保护 MinerU 配额），不自动重试（`acks_late=False`），`mark_running` 原子 claim 防重复解析。
@@ -100,11 +106,12 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：PostgreSQL 公司信息、前端界面、检索接口、MinIO、Nginx。
+- **待办**：PostgreSQL 公司信息、前端 IPC（打开本地目录）、对外检索 API、MinIO、Nginx。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
+- 前端默认 API base 为 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到浏览器 localStorage）。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
 - 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与产物的根目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物）。

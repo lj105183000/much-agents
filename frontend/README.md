@@ -1,32 +1,52 @@
-# React + TypeScript + Vite
+# Much Agents 前端工作台
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+基于 React 19、TypeScript、Vite 8、TailwindCSS 4 与 Electron 45 的本地桌面界面，连接项目根目录的 FastAPI 后端。
 
-Currently, two official plugins are available:
+## 功能
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **上传解析**：拖入招标 PDF，选择解析器与抽取/入库选项，查看解析进度、统计与产物。
+- **编写标书**：从文档库选择已解析文档，填写 14 个必需资料字段或导入完整 JSON，选择 `max_sections`，启动多 Agent 编写并查看进度与结果。
+- **文档库**：扫描后端 `upload/parsed`，查看解析产物、历史投标文件和 bid run 产物。
+- **任务历史**：localStorage 记录本机提交的任务，支持筛选、继续轮询、查看详情和删除。
+- **产物预览/下载**：通过后端 allowlist artifact 接口访问；`profile.json` 不会暴露。
 
-## React Compiler
+## 启动
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+先启动后端：
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+# 项目根目录
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
+# 或无需 Redis/worker 的本地模式
+TASK_BACKEND=local uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+再启动前端：
+
+```bash
+cd frontend
+npm install
+npm run dev            # http://localhost:5173
+npm run electron:dev   # Vite + Electron
+npm run build          # tsc -b && vite build
+npm run lint           # oxlint
+npm run electron       # build 后打开 Electron 生产构建
+npm run dist           # electron-builder 打包
+```
+
+## API 地址
+
+默认 `http://127.0.0.1:8001`。可在 `frontend/.env` 设置：
+
+```dotenv
+VITE_API_BASE_URL=http://127.0.0.1:8001
+```
+
+也可以点击界面右上角设置按钮临时覆盖，值保存在浏览器 localStorage。Electron 生产环境通过 `file://` 加载，必须使用完整 http 地址。
+
+## 注意
+
+- Celery 模式需要 Redis 与 `parse` 队列 worker；没有 worker 时任务会停在排队中。可以使用 `TASK_BACKEND=local` 调试。
+- 生成标书是草稿：报价、证件、盖章、扫描件等仍需人工补全；缺失资料会以 `【待填写：...】` 标记。
+- 任务历史只保存在当前浏览器/Electron profile，不进入后端数据库；文档库来自后端磁盘扫描。
+- 前端没有 preload/IPC；本地文件只通过后端 artifact 接口访问。
