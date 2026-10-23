@@ -149,6 +149,44 @@ class BidOutlinePatchResponse(BaseModel):
     outline_url: str
 
 
+class BidGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_ids: list[str] = Field(default_factory=list, max_length=100)
+    assemble: bool = True
+
+
+class BidGenerateResponse(BaseModel):
+    run_id: str
+    job_id: str
+    status: str = "queued"
+    poll_url: str
+    run_url: str
+
+
+class BidSectionDetail(BaseModel):
+    run_id: str
+    section_id: str
+    title: str
+    kind: str
+    status: str
+    attempt: int = 0
+    final_markdown: str = ""
+    final_source: str | None = None
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class BidGateResponse(BaseModel):
+    run_id: str
+    status: str
+    forced: bool = False
+    checked_at: str | None = None
+    page_limit: int = 150
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ParseSummary(BaseModel):
     model_config = ConfigDict(extra="allow")
 

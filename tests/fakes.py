@@ -523,6 +523,174 @@ class FakeBidRunRepository:
         )
         return True
 
+    async def claim_generate(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+    ) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        if run is None or run.status not in {"outline_ready", "paused", "failed"}:
+            return None
+        updated = replace(
+            run,
+            status="queued",
+            stage="queued",
+            percent=0,
+            message="queued",
+            job_id=job_id,
+            generation_token=generation_token,
+            cancel_requested=False,
+            attempt=run.attempt + 1,
+            error=None,
+            finished_at=None,
+        )
+        self.runs[run_id] = updated
+        return updated
+
+    async def claim_worker(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+    ) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.status != "queued"
+            or run.job_id != job_id
+            or run.generation_token != generation_token
+        ):
+            return None
+        now = datetime.now(timezone.utc)
+        updated = replace(
+            run,
+            status="generating",
+            stage="starting",
+            percent=0,
+            message="generating",
+            heartbeat_at=now,
+            started_at=run.started_at or now,
+        )
+        self.runs[run_id] = updated
+        return updated
+
+    async def heartbeat(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+        stage: str,
+        percent: int,
+        message: str,
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.status != "generating"
+            or run.job_id != job_id
+            or run.generation_token != generation_token
+        ):
+            return False
+        self.runs[run_id] = replace(
+            run,
+            stage=stage,
+            percent=max(0, min(100, int(percent))),
+            message=message,
+            heartbeat_at=datetime.now(timezone.utc),
+        )
+        return True
+
+    async def update_run(self, run_id: str, **fields: Any) -> bool:
+        run = self.runs.get(run_id)
+        if run is None:
+            return False
+        self.runs[run_id] = replace(run, **fields)
+        return True
+
+    async def update_section(
+        self,
+        run_id: str,
+        section_id: str,
+        **fields: Any,
+    ) -> bool:
+        states = self.states.get(run_id, [])
+        found = False
+        updated: list[SectionStateRecord] = []
+        for state in states:
+            if state.section_id == section_id:
+                found = True
+                updated.append(replace(state, **fields))
+            else:
+                updated.append(state)
+        if not found:
+            return False
+        self.states[run_id] = updated
+        return True
+
+    async def reset_for_resume(self, run_id: str) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        now = datetime.now(timezone.utc)
+        self.states[run_id] = [
+            replace(state, status="pending", error=None, updated_at=now)
+            if state.status in {"writing", "reviewing", "revising", "failed"}
+            else state
+            for state in self.states.get(run_id, [])
+        ]
+        updated = replace(
+            run,
+            status="paused",
+            stage="paused",
+            message="ready to resume",
+            cancel_requested=False,
+        )
+        self.runs[run_id] = updated
+        return updated
+
+    async def mark_stale_paused(
+        self,
+        run_id: str,
+        *,
+        stale_seconds: int,
+    ) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(1, stale_seconds))
+        if (
+            run is None
+            or run.status not in {"generating", "assembling"}
+            or run.heartbeat_at is None
+            or run.heartbeat_at >= cutoff
+        ):
+            return None
+        now = datetime.now(timezone.utc)
+        self.states[run_id] = [
+            replace(state, status="pending", error=None, updated_at=now)
+            if state.status in {"writing", "reviewing", "revising"}
+            else state
+            for state in self.states.get(run_id, [])
+        ]
+        updated = replace(
+            run,
+            status="paused",
+            stage="paused",
+            message="stale generation recovered; ready to resume",
+        )
+        self.runs[run_id] = updated
+        return updated
+
+    async def set_cancel(self, run_id: str) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        updated = replace(run, cancel_requested=True)
+        self.runs[run_id] = updated
+        return updated
+
 
 class FakeCompanyService:
     def __init__(self) -> None:

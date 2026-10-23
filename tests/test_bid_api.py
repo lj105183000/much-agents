@@ -171,3 +171,35 @@ def test_execute_bid_job_rejects_invalid_max_sections_payload(tmp_path: Path) ->
     assert failed.exit_code == 2
     assert "max_sections" in (failed.error or "")
     assert calls == []
+
+
+
+def test_execute_bid_job_dispatches_staged_mode(tmp_path: Path, monkeypatch) -> None:
+    store = JobStore()
+    job = store.create(
+        job_id="staged-job",
+        filename="doc-1",
+        doc_id="doc-1",
+        kind="bid",
+        payload={
+            "mode": "staged",
+            "run_id": "run-1",
+            "generation_token": "token-1",
+            "section_ids": ["narr-06-01"],
+        },
+    )
+    calls: list[tuple] = []
+
+    async def fake_execute(job, **kwargs):
+        calls.append((job, kwargs))
+
+    monkeypatch.setattr("api.staged_bids.execute_staged_bid_job", fake_execute)
+    execute_bid_job(
+        job.job_id,
+        store=store,
+        bid_settings=make_bid_settings(tmp_path),
+        api_settings=make_api_settings(tmp_path),
+    )
+    assert calls
+    assert calls[0][0].job_id == "staged-job"
+    assert calls[0][1]["store"] is store

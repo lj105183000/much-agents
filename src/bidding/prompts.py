@@ -60,16 +60,55 @@ def format_evidence(evidence: list[Evidence]) -> str:
     return "\n\n".join(blocks)
 
 
+def _format_content_plan(plan: dict | None) -> str:
+    if not plan:
+        return ""
+    lines = []
+    objective = str(plan.get("objective") or "").strip()
+    if objective:
+        lines.append(f"目标：{objective}")
+    key_points = [
+        str(item).strip()
+        for item in (plan.get("key_points") or [])
+        if str(item).strip()
+    ]
+    if key_points:
+        lines.append("要点：" + "；".join(key_points[:12]))
+    factor_refs = plan.get("factor_refs") or []
+    if factor_refs:
+        refs = []
+        for item in factor_refs[:8]:
+            if not isinstance(item, dict):
+                continue
+            refs.append(
+                f"{item.get('category') or ''}/{item.get('factor') or ''}"
+                f"（{item.get('max_score', '?')}分）"
+            )
+        if refs:
+            lines.append("评分映射：" + "；".join(refs))
+    return "\n".join(lines)
+
+
 def writer_user(
     section: OutlineSection,
     facts: ProjectFacts,
     evidence: list[Evidence],
+    content_plan: dict | None = None,
+    writing_focus: str = "",
 ) -> str:
+    plan_block = _format_content_plan(content_plan)
+    plan_text = f"【本节编写计划】\n{plan_block}\n\n" if plan_block else ""
+    focus_text = (
+        f"【编写重点】\n{writing_focus.strip()}\n\n"
+        if writing_focus and writing_focus.strip()
+        else ""
+    )
     return (
         f"【项目事实】\n{format_facts(facts)}\n\n"
         f"【本节任务】\n标题：{section.title}\n目标字数：约 {section.target_words} 个汉字\n"
         f"必须覆盖：{', '.join(section.requirements) or '按招标文件要求'}\n\n"
         f"【评分要求】\n{format_factors(section)}\n\n"
+        f"{plan_text}{focus_text}"
         f"【招标文件证据】\n{format_evidence(evidence)}\n\n"
         "【输出要求】只输出本节正文 Markdown；未知具体事实使用【待填写：...】；"
         "不要重复章节标题；不要编造任何事实。"

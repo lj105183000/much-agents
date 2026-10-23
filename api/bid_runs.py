@@ -11,13 +11,26 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
+
+from src.bidding.checks import build_allowed
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
+from src.bidding.gate import evaluate_gate
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
+from src.bidding.staged_output import (
+    assemble_staged_bid,
+    write_staged_outputs,
+)
 from src.parsing.artifacts import atomic_write_json, ensure_dir
 
+from .bid_run_mapping import (
+    outline_data_from_records,
+    outline_from_records,
+    outputs_from_states,
+)
 from .bid_run_repo import (
     BidRunRecord,
     BidRunRepository,
@@ -27,6 +40,9 @@ from .bid_run_repo import (
 from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
 from .schemas import (
+    BidGateResponse,
+    BidGenerateRequest,
+    BidGenerateResponse,
     BidOutlinePatchRequest,
     BidOutlinePatchResponse,
     BidOutlineResponse,
@@ -37,6 +53,7 @@ from .schemas import (
     BidRunDetail,
     BidRunListResponse,
     BidRunSummary,
+    BidSectionDetail,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,7 +107,7 @@ def _counts(
     for section in selected:
         state = by_id.get(section.section_id)
         status = state.status if state is not None else "pending"
-        if status == "final":
+        if status == "final" and (state.final_markdown or "").strip():
             final += 1
         elif status == "failed":
             failed += 1
@@ -216,12 +233,16 @@ class BidRunService:
         company_service: CompanyService | None = None,
         store: JobStoreProtocol | None = None,
         dispatch: Callable[[Job], None] | None = None,
+        max_attempts: int = 2,
+        stale_seconds: int = 900,
     ) -> None:
         self.bid_settings = bid_settings
         self.repo = repo
         self.company_service = company_service
         self.store = store
         self.dispatch = dispatch
+        self.max_attempts = max(1, int(max_attempts))
+        self.stale_seconds = max(1, int(stale_seconds))
 
     def _repo(self) -> BidRunRepository:
         if self.repo is None:
@@ -561,6 +582,365 @@ class BidRunService:
             invalidated_sections=sorted(set(invalidated)),
             outline_url=f"/api/bid-runs/{run.run_id}/outline",
         )
+
+    def _job_store(self) -> JobStoreProtocol:
+        if self.store is None:
+            raise BidRunError(503, "job store is unavailable")
+        return self.store
+
+    def _dispatcher(self) -> Callable[[Job], None]:
+        if self.dispatch is None:
+            raise BidRunError(503, "task queue is unavailable")
+        return self.dispatch
+
+    async def _revert_claim(
+        self,
+        run_id: str,
+        previous_status: str,
+        previous_attempt: int,
+    ) -> None:
+        try:
+            await self._repo().update_run(
+                run_id,
+                status=previous_status,
+                stage=None,
+                percent=0,
+                message="task queue is unavailable",
+                job_id=None,
+                generation_token=None,
+                cancel_requested=False,
+                attempt=previous_attempt,
+                finished_at=None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("could not revert bid run %s after enqueue failure", run_id)
+
+    async def generate(
+        self,
+        run_id: str,
+        payload: BidGenerateRequest | None = None,
+    ) -> BidGenerateResponse:
+        payload = payload or BidGenerateRequest()
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "bid run is already active")
+        if run.status not in {"outline_ready", "paused", "failed"}:
+            raise BidRunError(409, f"bid run cannot generate from status {run.status}")
+        if run.attempt >= self.max_attempts:
+            raise BidRunError(409, "bid run has reached the maximum attempts")
+
+        if run.status in {"paused", "failed"}:
+            await repo.reset_for_resume(run_id)
+            run = await repo.get_run(run_id)
+            if run is None:
+                raise BidRunError(404, f"unknown bid run: {run_id}")
+
+        sections = await repo.get_outline(run_id)
+        states = {state.section_id: state for state in await repo.get_states(run_id)}
+        selected = [
+            section
+            for section in sections
+            if section.kind == "narrative" and section.selected
+        ]
+        if not selected:
+            raise BidRunError(422, "no narrative sections are selected")
+        selected_ids = {section.section_id for section in selected}
+        requested = list(dict.fromkeys(payload.section_ids))
+        if requested:
+            unknown = [section_id for section_id in requested if section_id not in selected_ids]
+            if unknown:
+                raise BidRunError(
+                    422,
+                    f"section is not selected or does not exist: {unknown[0]}",
+                )
+            already_final = [
+                section_id
+                for section_id in requested
+                if states.get(section_id) is not None
+                and states[section_id].status == "final"
+            ]
+            if already_final:
+                raise BidRunError(
+                    422,
+                    f"section is already final: {already_final[0]}",
+                )
+        generated_ids = requested or [
+            section.section_id
+            for section in selected
+            if states.get(section.section_id) is None
+            or states[section.section_id].status != "final"
+        ]
+        if not generated_ids:
+            raise BidRunError(422, "all selected narrative sections are already final")
+
+        job_id = uuid4().hex
+        generation_token = uuid4().hex
+        try:
+            claimed = await repo.claim_generate(
+                run_id,
+                job_id=job_id,
+                generation_token=generation_token,
+            )
+        except IntegrityError as exc:
+            raise BidRunError(
+                409, "another bid run for this document is already active"
+            ) from exc
+        if claimed is None:
+            raise BidRunError(409, "bid run is already active or could not be claimed")
+
+        try:
+            job = self._job_store().create(
+                job_id=job_id,
+                filename=run.doc_id,
+                doc_id=run.doc_id,
+                kind="bid",
+                payload={
+                    "mode": "staged",
+                    "run_id": run_id,
+                    "generation_token": generation_token,
+                    "section_ids": generated_ids,
+                    "assemble": bool(payload.assemble),
+                },
+            )
+            self._dispatcher()(job)
+        except Exception as exc:  # noqa: BLE001 - enqueue failures are reversible
+            try:
+                self._job_store().mark_failed(
+                    job_id,
+                    error="failed to enqueue staged bid job",
+                    exit_code=1,
+                    only_if_queued=True,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("could not mark staged job %s failed", job_id, exc_info=True)
+            await self._revert_claim(run_id, run.status, run.attempt)
+            if isinstance(exc, BidRunError):
+                raise
+            raise BidRunError(503, "task queue is unavailable") from exc
+
+        return BidGenerateResponse(
+            run_id=run_id,
+            job_id=job_id,
+            status="queued",
+            poll_url=f"/api/jobs/{job_id}",
+            run_url=f"/api/bid-runs/{run_id}",
+        )
+
+    async def resume(self, run_id: str) -> BidGenerateResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in {"generating", "assembling"}:
+            recovered = await repo.mark_stale_paused(
+                run_id,
+                stale_seconds=self.stale_seconds,
+            )
+            if recovered is None:
+                raise BidRunError(409, "bid run is still active")
+            run = recovered
+        if run.status == "queued":
+            raise BidRunError(409, "bid run is already queued")
+        if run.status not in {"outline_ready", "paused", "failed"}:
+            raise BidRunError(409, f"bid run cannot resume from status {run.status}")
+        await repo.reset_for_resume(run_id)
+        return await self.generate(run_id, BidGenerateRequest())
+
+    async def cancel(self, run_id: str) -> BidRunDetail:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status not in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "bid run is not active")
+        run = await repo.set_cancel(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status == "queued":
+            await repo.update_run(
+                run_id,
+                status="paused",
+                stage="paused",
+                message="cancelled by user",
+                finished_at=_now(),
+            )
+            if run.job_id and self.store is not None:
+                try:
+                    self.store.mark_failed(
+                        run.job_id,
+                        error="cancelled by user",
+                        exit_code=130,
+                        only_if_queued=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not mark cancelled job failed", exc_info=True)
+        return await self.get_detail(run_id)
+
+    async def get_section(
+        self,
+        run_id: str,
+        section_id: str,
+    ) -> BidSectionDetail:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        state = await repo.get_state(run_id, section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        sections = await repo.get_outline(run_id)
+        section = next(
+            (item for item in sections if item.section_id == section_id),
+            None,
+        )
+        if section is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        return BidSectionDetail(
+            run_id=run_id,
+            section_id=section_id,
+            title=section.title,
+            kind=section.kind,
+            status=state.status,
+            attempt=state.attempt,
+            final_markdown=state.final_markdown or "",
+            final_source=state.final_source,
+            issues=list(state.issues),
+            warnings=list(state.warnings),
+            error=state.error,
+        )
+
+    @staticmethod
+    def _gate_response(run: BidRunRecord) -> BidGateResponse:
+        gate = run.gate or {}
+        return BidGateResponse(
+            run_id=run.run_id,
+            status=str(gate.get("status") or run.gate_status or "warn"),
+            forced=bool(gate.get("forced", False)),
+            checked_at=gate.get("checked_at"),
+            page_limit=int(gate.get("page_limit") or 150),
+            checks=list(gate.get("checks") or []),
+        )
+
+    async def assemble(
+        self,
+        run_id: str,
+        *,
+        allow_active: bool = False,
+    ) -> BidGateResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES and not allow_active:
+            raise BidRunError(409, "cannot assemble while the run is active")
+        run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        profile_path = run_dir / "profile.json"
+        if not profile_path.is_file():
+            raise BidRunError(409, "bidder profile snapshot is missing")
+        try:
+            context = TenderContext.load(run.doc_id, self.bid_settings)
+            profile = BidderProfile.from_file(profile_path)
+        except BidContextError as exc:
+            raise BidRunError(404, str(exc)) from exc
+        except BidInputError as exc:
+            raise BidRunError(409, "bidder profile snapshot is invalid") from exc
+        records = await repo.get_outline(run_id)
+        states = await repo.get_states(run_id)
+        if not records:
+            raise BidRunError(409, "bid outline is empty")
+        outline = outline_from_records(
+            run,
+            records,
+            project_name=context.facts.project_name,
+        )
+        outputs = outputs_from_states(states)
+        allowed = build_allowed(context, profile, outline)
+        try:
+            assembly = assemble_staged_bid(
+                context=context,
+                profile=profile,
+                outline=outline,
+                outputs=outputs,
+                allowed=allowed,
+                warnings=list(run.warnings),
+            )
+            gate = evaluate_gate(
+                outline=outline,
+                outputs=outputs,
+                report=assembly.report,
+                missing_profile_fields=list(run.missing_profile_fields),
+            )
+            outline_data = outline_data_from_records(outline, records)
+            result = write_staged_outputs(
+                context=context,
+                assembly=assembly,
+                outline=outline,
+                output_dir=run_dir,
+                gate=gate,
+                outline_data=outline_data,
+                extra_report={"run_id": run_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
+            logger.exception("could not assemble bid run %s", run_id)
+            raise BidRunError(500, "bid assembly failed") from exc
+
+        warnings = list(
+            dict.fromkeys([*assembly.warnings, *(result.get("report", {}).get("warnings") or [])])
+        )
+        await repo.update_run(
+            run_id,
+            status="assembled",
+            stage="assembled",
+            percent=100,
+            message="assembly complete",
+            gate_status=str(gate.get("status") or "warn"),
+            gate=gate,
+            warnings=warnings,
+            error=None,
+            finished_at=_now(),
+        )
+        updated = await repo.get_run(run_id)
+        if updated is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        return self._gate_response(updated)
+
+    async def get_gate(self, run_id: str) -> BidGateResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if not run.gate:
+            raise BidRunError(404, "gate is not available; assemble the run first")
+        return self._gate_response(run)
+
+    async def export(self, run_id: str, *, force: bool = False) -> Path:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if not run.gate:
+            raise BidRunError(409, "gate is not available; assemble the run first")
+        if run.gate_status == "block" and not force:
+            raise BidRunError(
+                409,
+                "export is blocked by the gate; use force=true to override",
+            )
+        if force and run.gate_status == "block":
+            gate = dict(run.gate)
+            gate["forced"] = True
+            await repo.update_run(run_id, gate=gate)
+            run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+            try:
+                atomic_write_json(run_dir / "gate.json", gate)
+            except OSError:
+                logger.warning("could not persist forced gate", exc_info=True)
+        target = self.bid_settings.bids_dir / run.doc_id / run.run_id / "bid.docx"
+        if not target.is_file():
+            raise BidRunError(409, "bid.docx is not available; assemble the run first")
+        return target
 
 
 __all__ = ["ACTIVE_RUN_STATUSES", "BidRunError", "BidRunService"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -145,6 +146,7 @@ def execute_bid_job(
     store: JobStoreProtocol,
     bid_settings: BidSettings,
     run_func: BidRunFunc = run_bid_writing,
+    api_settings: ApiSettings | None = None,
 ) -> None:
     job = store.mark_running(job_id)
     if job is None:
@@ -155,6 +157,30 @@ def execute_bid_job(
         return
 
     payload = job.payload or {}
+    if payload.get("mode") == "staged":
+        from .staged_bids import execute_staged_bid_job
+
+        try:
+            asyncio.run(
+                execute_staged_bid_job(
+                    job,
+                    store=store,
+                    bid_settings=bid_settings,
+                    api_settings=api_settings or ApiSettings.from_env(),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - never leave a job running
+            logger.exception("staged bid job %s crashed", job_id)
+            try:
+                store.mark_failed(
+                    job_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                    exit_code=3,
+                )
+            except JobStoreError:
+                logger.exception("could not mark staged bid job %s failed", job_id)
+        return
+
     max_sections = payload.get("max_sections")
     if max_sections is not None and (
         isinstance(max_sections, bool)

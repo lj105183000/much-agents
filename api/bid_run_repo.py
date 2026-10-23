@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from .database import BidOutlineSectionRow, BidRunRow, BidSectionStateRow
@@ -359,6 +359,248 @@ class BidRunRepository:
                     run.gate_status = None
                     run.gate = None
         return True
+
+    async def claim_generate(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+    ) -> BidRunRecord | None:
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.status.in_(("outline_ready", "paused", "failed")),
+            )
+            .values(
+                status="queued",
+                stage="queued",
+                percent=0,
+                message="queued",
+                job_id=job_id,
+                generation_token=generation_token,
+                cancel_requested=False,
+                error=None,
+                finished_at=None,
+                attempt=BidRunRow.attempt + 1,
+                updated_at=now,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                if result.rowcount == 0:
+                    return None
+                row = await session.get(BidRunRow, run_id)
+                return _run_record(row) if row is not None else None
+
+    async def claim_worker(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+    ) -> BidRunRecord | None:
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.status == "queued",
+                BidRunRow.job_id == job_id,
+                BidRunRow.generation_token == generation_token,
+            )
+            .values(
+                status="generating",
+                stage="starting",
+                percent=0,
+                message="generating",
+                heartbeat_at=now,
+                started_at=func.coalesce(BidRunRow.started_at, now),
+                updated_at=now,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                if result.rowcount == 0:
+                    return None
+                row = await session.get(BidRunRow, run_id)
+                return _run_record(row) if row is not None else None
+
+    async def heartbeat(
+        self,
+        run_id: str,
+        *,
+        job_id: str,
+        generation_token: str,
+        stage: str,
+        percent: int,
+        message: str,
+    ) -> bool:
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.job_id == job_id,
+                BidRunRow.generation_token == generation_token,
+                BidRunRow.status == "generating",
+            )
+            .values(
+                heartbeat_at=now,
+                stage=stage,
+                percent=max(0, min(100, int(percent))),
+                message=message,
+                updated_at=now,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def update_run(self, run_id: str, **fields: Any) -> bool:
+        allowed = {
+            "status",
+            "stage",
+            "percent",
+            "message",
+            "job_id",
+            "generation_token",
+            "heartbeat_at",
+            "cancel_requested",
+            "attempt",
+            "gate_status",
+            "gate",
+            "warnings",
+            "error",
+            "started_at",
+            "finished_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if not values:
+            return False
+        values["updated_at"] = _now()
+        statement = (
+            update(BidRunRow)
+            .where(BidRunRow.id == run_id)
+            .values(**values)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def update_section(
+        self,
+        run_id: str,
+        section_id: str,
+        **fields: Any,
+    ) -> bool:
+        allowed = {
+            "status",
+            "attempt",
+            "evidence_count",
+            "draft_markdown",
+            "review",
+            "revision",
+            "final_markdown",
+            "final_source",
+            "issues",
+            "warnings",
+            "error",
+            "llm_calls",
+            "started_at",
+            "finished_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if not values:
+            return False
+        values["updated_at"] = _now()
+        statement = (
+            update(BidSectionStateRow)
+            .where(
+                BidSectionStateRow.run_id == run_id,
+                BidSectionStateRow.section_id == section_id,
+            )
+            .values(**values)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def reset_for_resume(self, run_id: str) -> BidRunRecord | None:
+        now = _now()
+        async with self._session_factory() as session:
+            async with session.begin():
+                run = await session.get(BidRunRow, run_id)
+                if run is None:
+                    return None
+                await session.execute(
+                    update(BidSectionStateRow)
+                    .where(
+                        BidSectionStateRow.run_id == run_id,
+                        BidSectionStateRow.status.in_(
+                            ("writing", "reviewing", "revising", "failed")
+                        ),
+                    )
+                    .values(status="pending", error=None, updated_at=now)
+                )
+                run.status = "paused"
+                run.stage = "paused"
+                run.message = "ready to resume"
+                run.cancel_requested = False
+                run.updated_at = now
+                return _run_record(run)
+
+    async def mark_stale_paused(
+        self,
+        run_id: str,
+        *,
+        stale_seconds: int,
+    ) -> BidRunRecord | None:
+        now = _now()
+        cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
+        async with self._session_factory() as session:
+            async with session.begin():
+                run = await session.get(BidRunRow, run_id)
+                if (
+                    run is None
+                    or run.status not in ("generating", "assembling")
+                    or run.heartbeat_at is None
+                    or run.heartbeat_at >= cutoff
+                ):
+                    return None
+                await session.execute(
+                    update(BidSectionStateRow)
+                    .where(
+                        BidSectionStateRow.run_id == run_id,
+                        BidSectionStateRow.status.in_(
+                            ("writing", "reviewing", "revising")
+                        ),
+                    )
+                    .values(status="pending", error=None, updated_at=now)
+                )
+                run.status = "paused"
+                run.stage = "paused"
+                run.message = "stale generation recovered; ready to resume"
+                run.updated_at = now
+                return _run_record(run)
+
+    async def set_cancel(self, run_id: str) -> BidRunRecord | None:
+        now = _now()
+        async with self._session_factory() as session:
+            async with session.begin():
+                run = await session.get(BidRunRow, run_id)
+                if run is None:
+                    return None
+                run.cancel_requested = True
+                run.updated_at = now
+                return _run_record(run)
 
 
 __all__ = [

@@ -36,4 +36,9 @@ def write_bid_task(job_id: str) -> None:
     api_settings = ApiSettings.from_env()
     bid_settings = BidSettings.from_env()
     store = RedisJobStore.from_settings(api_settings)
-    execute_bid_job(job_id, store=store, bid_settings=bid_settings)
+    execute_bid_job(
+        job_id,
+        store=store,
+        bid_settings=bid_settings,
+        api_settings=api_settings,
+    )

@@ -29,6 +29,9 @@ from .jobs import JobStoreError
 from .schemas import (
     ArtifactListResponse,
     BidCreatedResponse,
+    BidGateResponse,
+    BidGenerateRequest,
+    BidGenerateResponse,
     BidOutlinePatchRequest,
     BidOutlinePatchResponse,
     BidOutlineResponse,
@@ -36,6 +39,7 @@ from .schemas import (
     BidRunCreatedResponse,
     BidRunDetail,
     BidRunListResponse,
+    BidSectionDetail,
     CompanyDetail,
     CompanyListResponse,
     CompanySummary,
@@ -243,6 +247,79 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidOutlinePatchResponse:
         return await service.patch_outline(run_id, payload)
+
+    @router.post(
+        "/bid-runs/{run_id}/generate",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=BidGenerateResponse,
+    )
+    async def generate_bid_run(
+        run_id: str,
+        payload: BidGenerateRequest | None = None,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidGenerateResponse:
+        return await service.generate(run_id, payload)
+
+    @router.post(
+        "/bid-runs/{run_id}/resume",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=BidGenerateResponse,
+    )
+    async def resume_bid_run(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidGenerateResponse:
+        return await service.resume(run_id)
+
+    @router.post(
+        "/bid-runs/{run_id}/cancel",
+        response_model=BidRunDetail,
+    )
+    async def cancel_bid_run(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidRunDetail:
+        return await service.cancel(run_id)
+
+    @router.post(
+        "/bid-runs/{run_id}/assemble",
+        response_model=BidGateResponse,
+    )
+    async def assemble_bid_run(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidGateResponse:
+        return await service.assemble(run_id)
+
+    @router.get(
+        "/bid-runs/{run_id}/gate",
+        response_model=BidGateResponse,
+    )
+    async def get_bid_run_gate(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidGateResponse:
+        return await service.get_gate(run_id)
+
+    @router.post("/bid-runs/{run_id}/export")
+    async def export_bid_run(
+        run_id: str,
+        force: bool = Query(False),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> FileResponse:
+        target = await service.export(run_id, force=force)
+        return _artifact_response(target)
+
+    @router.get(
+        "/bid-runs/{run_id}/sections/{section_id}",
+        response_model=BidSectionDetail,
+    )
+    async def get_bid_run_section(
+        run_id: str,
+        section_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionDetail:
+        return await service.get_section(run_id, section_id)
 
     @router.get("/bid-runs/{run_id}", response_model=BidRunDetail)
     async def get_bid_run(

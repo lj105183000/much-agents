@@ -95,6 +95,25 @@ class SectionDraft:
     written: bool = True
     warnings: list[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section_id": self.section_id,
+            "title": self.title,
+            "markdown": self.markdown,
+            "written": self.written,
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SectionDraft":
+        return cls(
+            section_id=str(data.get("section_id") or ""),
+            title=str(data.get("title") or ""),
+            markdown=str(data.get("markdown") or ""),
+            written=bool(data.get("written", True)),
+            warnings=[str(item) for item in data.get("warnings") or []],
+        )
+
 
 @dataclass(slots=True)
 class ReviewIssue:
@@ -102,6 +121,23 @@ class ReviewIssue:
     severity: str
     message: str
     quote: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "severity": self.severity,
+            "message": self.message,
+            "quote": self.quote,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReviewIssue":
+        return cls(
+            type=str(data.get("type") or "quality"),
+            severity=str(data.get("severity") or "low"),
+            message=str(data.get("message") or ""),
+            quote=str(data.get("quote") or ""),
+        )
 
 
 @dataclass(slots=True)
@@ -115,6 +151,35 @@ class SectionReview:
     final_markdown: str = ""
     warnings: list[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section_id": self.section_id,
+            "verdict": self.verdict,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "missing_points": list(self.missing_points),
+            "covered_points": list(self.covered_points),
+            "needs_revision": self.needs_revision,
+            "final_markdown": self.final_markdown,
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SectionReview":
+        return cls(
+            section_id=str(data.get("section_id") or ""),
+            verdict=str(data.get("verdict") or "pass"),
+            issues=[
+                ReviewIssue.from_dict(item)
+                for item in data.get("issues") or []
+                if isinstance(item, dict)
+            ],
+            missing_points=[str(item) for item in data.get("missing_points") or []],
+            covered_points=[str(item) for item in data.get("covered_points") or []],
+            needs_revision=bool(data.get("needs_revision", False)),
+            final_markdown=str(data.get("final_markdown") or ""),
+            warnings=[str(item) for item in data.get("warnings") or []],
+        )
+
 
 @dataclass(slots=True)
 class SectionRevision:
@@ -123,6 +188,29 @@ class SectionRevision:
     accepted: bool
     issues: list[ReviewIssue] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section_id": self.section_id,
+            "markdown": self.markdown,
+            "accepted": self.accepted,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SectionRevision":
+        return cls(
+            section_id=str(data.get("section_id") or ""),
+            markdown=str(data.get("markdown") or ""),
+            accepted=bool(data.get("accepted", False)),
+            issues=[
+                ReviewIssue.from_dict(item)
+                for item in data.get("issues") or []
+                if isinstance(item, dict)
+            ],
+            warnings=[str(item) for item in data.get("warnings") or []],
+        )
 
 
 @dataclass(slots=True)

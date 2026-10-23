@@ -28,6 +28,7 @@ BID_PATTERNS: tuple[str, ...] = (
     "bid.docx",
     "report.json",
     "outline.json",
+    "gate.json",
     "sections/*.md",
 )
 
@@ -97,8 +98,9 @@ def job_artifact_root(
         return _safe_root(parse_settings.parsed_dir, job.doc_id), PARSE_PATTERNS, prefix
     if job.kind == "bid":
         validate_id(job.doc_id, "document")
-        validate_id(job.job_id, "bid run")
-        root = _safe_root(bid_settings.bids_dir, job.doc_id, job.job_id)
+        run_id = str((job.payload or {}).get("run_id") or job.job_id)
+        validate_id(run_id, "bid run")
+        root = _safe_root(bid_settings.bids_dir, job.doc_id, run_id)
         return root, BID_PATTERNS, prefix
     raise ArtifactError(404, "job kind is unavailable")
 

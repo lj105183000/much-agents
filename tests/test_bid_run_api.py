@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -26,25 +27,29 @@ def make_app(tmp_path: Path):
     repo = FakeBidRunRepository()
     bid_settings = make_bid_settings(tmp_path)
     company = FakeCompanyService()
+    store = JobStore()
+    dispatcher = FakeDispatcher()
     bid_run_service = BidRunService(
         bid_settings=bid_settings,
         repo=repo,  # type: ignore[arg-type]
         company_service=company,  # type: ignore[arg-type]
+        store=store,
+        dispatch=dispatcher.dispatch,
     )
     app = create_app(
         api_settings=make_api_settings(tmp_path, TASK_BACKEND="local"),
         parse_settings=make_parse_settings(tmp_path),
         bid_settings=bid_settings,
-        store=JobStore(),
+        store=store,
         runner=InlineRunner(),
         parse_func=lambda *args, **kwargs: None,
         bid_func=lambda *args, **kwargs: None,
         dispatcher=FakeDispatcher(),
-        bid_dispatcher=FakeDispatcher(),
+        bid_dispatcher=dispatcher,
         company_service=company,  # type: ignore[arg-type]
         bid_run_service=bid_run_service,
     )
-    return app, repo
+    return app, repo, store, dispatcher
 
 
 def sample_profile(name: str = "测试建设有限公司") -> dict:
@@ -65,7 +70,7 @@ def sample_profile(name: str = "测试建设有限公司") -> dict:
 
 
 def test_bid_run_create_list_and_outline(tmp_path: Path) -> None:
-    app, repo = make_app(tmp_path)
+    app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:
         created = client.post(
             "/api/bid-runs",
@@ -110,7 +115,7 @@ def test_bid_run_create_list_and_outline(tmp_path: Path) -> None:
 
 
 def test_bid_run_outline_patch_and_invalidation(tmp_path: Path) -> None:
-    app, repo = make_app(tmp_path)
+    app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:
         created = client.post(
             "/api/bid-runs",
@@ -184,7 +189,7 @@ def test_bid_run_outline_patch_and_invalidation(tmp_path: Path) -> None:
 
 
 def test_bid_run_company_profile_and_validation(tmp_path: Path) -> None:
-    app, repo = make_app(tmp_path)
+    app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:
         company = client.post(
             "/api/companies",
@@ -232,3 +237,205 @@ def test_bid_run_company_profile_and_validation(tmp_path: Path) -> None:
         assert client.get(
             "/api/bid-runs", params={"status": "not-a-status"}
         ).status_code == 422
+
+
+
+def test_bid_run_generate_cancel_and_resume(tmp_path: Path) -> None:
+    app, repo, store, dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+
+        generated = client.post(
+            f"/api/bid-runs/{run_id}/generate",
+            json={"section_ids": ["narr-06-01"], "assemble": True},
+        )
+        assert generated.status_code == 202, generated.text
+        body = generated.json()
+        job_id = body["job_id"]
+        assert body["run_url"] == f"/api/bid-runs/{run_id}"
+        assert len(dispatcher.jobs) == 1
+        job = dispatcher.jobs[0]
+        assert job.kind == "bid"
+        assert job.payload["mode"] == "staged"
+        assert job.payload["run_id"] == run_id
+        assert job.payload["generation_token"]
+        assert job.payload["section_ids"] == ["narr-06-01"]
+        assert "profile" not in job.payload
+        assert repo.runs[run_id].status == "queued"
+        assert store.get(job_id) is not None
+        assert store.get(job_id).status == "queued"
+
+        duplicate = client.post(
+            f"/api/bid-runs/{run_id}/generate",
+            json={"section_ids": ["narr-06-01"]},
+        )
+        assert duplicate.status_code == 409
+
+        section = client.get(f"/api/bid-runs/{run_id}/sections/narr-06-01")
+        assert section.status_code == 200
+        assert section.json()["status"] == "pending"
+
+        cancelled = client.post(f"/api/bid-runs/{run_id}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "paused"
+        assert repo.runs[run_id].status == "paused"
+        assert store.get(job_id).status == "failed"
+
+        resumed = client.post(f"/api/bid-runs/{run_id}/resume")
+        assert resumed.status_code == 202, resumed.text
+        assert len(dispatcher.jobs) == 2
+        assert repo.runs[run_id].status == "queued"
+        assert resumed.json()["job_id"] != job_id
+
+        not_active = client.post(f"/api/bid-runs/{run_id}/cancel")
+        assert not_active.status_code in {200, 409}
+
+
+def test_bid_run_generate_validation_and_stale_resume(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+
+        not_selected = client.post(
+            f"/api/bid-runs/{run_id}/generate",
+            json={"section_ids": ["narr-06-02"]},
+        )
+        assert not_selected.status_code == 422
+
+        repo.states[run_id] = [
+            replace(item, status="final", final_markdown="正文")
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        already_final = client.post(
+            f"/api/bid-runs/{run_id}/generate",
+            json={"section_ids": ["narr-06-01"]},
+        )
+        assert already_final.status_code == 422
+
+        repo.runs[run_id] = replace(repo.runs[run_id], attempt=2)
+        exhausted = client.post(
+            f"/api/bid-runs/{run_id}/generate",
+            json={},
+        )
+        assert exhausted.status_code == 409
+
+        repo.runs[run_id] = replace(
+            repo.runs[run_id],
+            attempt=1,
+            status="generating",
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=2000),
+            job_id="old-job",
+            generation_token="old-token",
+        )
+        repo.states[run_id] = [
+            replace(item, status="writing")
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        resumed = client.post(f"/api/bid-runs/{run_id}/resume")
+        assert resumed.status_code == 202, resumed.text
+        assert repo.runs[run_id].status == "queued"
+
+
+
+def _mark_section_final(repo, run_id: str, section_id: str = "narr-06-01") -> None:
+    repo.states[run_id] = [
+        replace(
+            item,
+            status="final",
+            final_markdown="本工程施工组织设计正文，覆盖施工方案与质量安全要求。",
+            final_source="draft",
+            issues=[],
+            warnings=[],
+        )
+        if item.section_id == section_id
+        else item
+        for item in repo.states[run_id]
+    ]
+
+
+def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+
+        assert client.get(f"/api/bid-runs/{run_id}/gate").status_code == 404
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 409
+
+        _mark_section_final(repo, run_id)
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        gate = assembled.json()
+        assert gate["status"] in {"pass", "warn", "block"}
+        assert gate["checks"]
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "bid.md").is_file()
+        assert (run_dir / "bid.docx").is_file()
+        assert (run_dir / "report.json").is_file()
+        assert (run_dir / "outline.json").is_file()
+        assert (run_dir / "gate.json").is_file()
+
+        fetched = client.get(f"/api/bid-runs/{run_id}/gate")
+        assert fetched.status_code == 200
+        assert fetched.json()["status"] == gate["status"]
+
+        exported = client.post(f"/api/bid-runs/{run_id}/export")
+        assert exported.status_code == 200
+        assert exported.content[:2] == b"PK"
+
+        detail = client.get(f"/api/bid-runs/{run_id}").json()
+        assert detail["status"] == "assembled"
+        assert detail["gate_status"] == gate["status"]
+
+
+def test_bid_run_export_gate_blocks_and_force_overrides(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.states[run_id] = [
+            replace(
+                item,
+                issues=[
+                    {
+                        "type": "redaction",
+                        "severity": "high",
+                        "message": "unsupported amount",
+                    }
+                ],
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        assert assembled.json()["status"] == "block"
+
+        blocked = client.post(f"/api/bid-runs/{run_id}/export")
+        assert blocked.status_code == 409
+        forced = client.post(f"/api/bid-runs/{run_id}/export", params={"force": "true"})
+        assert forced.status_code == 200
+        assert forced.content[:2] == b"PK"
+        gate = client.get(f"/api/bid-runs/{run_id}/gate").json()
+        assert gate["forced"] is True

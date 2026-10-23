@@ -109,6 +109,7 @@ def create_app(
                     store=store,
                     bid_settings=bid_settings,
                     run_func=bid_func,
+                    api_settings=api_settings,
                 )
 
             bid_dispatcher = LocalDispatcher(
@@ -154,6 +155,8 @@ def create_app(
         company_service=company_service,
         store=store,
         dispatch=bid_dispatcher.dispatch,
+        max_attempts=api_settings.bid_run_max_attempts,
+        stale_seconds=api_settings.bid_run_stale_seconds,
     )
     bid_service = BidService(
         api_settings=api_settings,

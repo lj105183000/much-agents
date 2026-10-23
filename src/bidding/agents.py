@@ -83,8 +83,19 @@ class WriterAgent:
         facts: ProjectFacts,
         brief: str,
         evidence: list[Evidence],
+        content_plan: dict | None = None,
+        writing_focus: str = "",
     ) -> SectionDraft:
-        user = writer_user(section, facts, evidence) + f"\n\n【编写简报】\n{brief}"
+        user = (
+            writer_user(
+                section,
+                facts,
+                evidence,
+                content_plan=content_plan,
+                writing_focus=writing_focus,
+            )
+            + f"\n\n【编写简报】\n{brief}"
+        )
         try:
             raw = self.llm.complete(
                 system=WRITER_SYSTEM,
