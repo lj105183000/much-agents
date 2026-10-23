@@ -13,10 +13,9 @@ import { useBidRun } from '../hooks/useBidRun'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
+import { BidSectionModal } from '../components/BidSectionModal'
 import { ProfileEditor } from '../components/ProfileEditor'
 import { ArtifactPanel } from '../components/ArtifactPanel'
-import { MarkdownPreview } from '../components/MarkdownPreview'
-import { Modal } from '../components/Modal'
 import { Icon } from '../components/icons'
 import {
   Badge,
@@ -99,6 +98,13 @@ export function BidView({
   const [preview, setPreview] = useState<BidSectionDetail | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [sectionModalOpen, setSectionModalOpen] = useState(false)
+  const [sectionStartEditing, setSectionStartEditing] = useState(false)
+  const [sectionSaving, setSectionSaving] = useState(false)
+  const [sectionRegenerating, setSectionRegenerating] = useState(false)
+  const [sectionActionError, setSectionActionError] = useState<string | null>(
+    null,
+  )
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
@@ -148,6 +154,12 @@ export function BidView({
     setGateError(null)
     setExportError(null)
     setPreview(null)
+    setPreviewError(null)
+    setSectionModalOpen(false)
+    setSectionStartEditing(false)
+    setSectionActionError(null)
+    setSectionSaving(false)
+    setSectionRegenerating(false)
     setError(null)
   }, [runId])
 
@@ -408,11 +420,29 @@ export function BidView({
     }
   }
 
-  const previewSection = async (sectionId: string) => {
-    if (!runId) return
+  const closeSectionModal = () => {
+    setSectionModalOpen(false)
+    setSectionStartEditing(false)
     setPreview(null)
     setPreviewError(null)
+    setSectionActionError(null)
+  }
+
+  const openSection = async (
+    sectionId: string,
+    startEditing: boolean,
+  ) => {
+    if (!runId) return
+    if (startEditing && outlineDirty) {
+      const saved = await saveOutline(false)
+      if (!saved) return
+    }
+    setSectionActionError(null)
+    setPreviewError(null)
+    setPreview(null)
     setPreviewLoading(true)
+    setSectionStartEditing(startEditing)
+    setSectionModalOpen(true)
     try {
       const detail = await api.getBidSection(runId, sectionId)
       setPreview(detail)
@@ -422,6 +452,68 @@ export function BidView({
       )
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  const saveSection = async (markdown: string): Promise<boolean> => {
+    if (!runId || !preview) return false
+    if (outlineDirty) {
+      const saved = await saveOutline(false)
+      if (!saved) return false
+    }
+    setSectionSaving(true)
+    setSectionActionError(null)
+    try {
+      const updated = await api.updateBidSection(
+        runId,
+        preview.section_id,
+        markdown,
+      )
+      setPreview(updated)
+      setSectionStartEditing(false)
+      setGate(null)
+      setGateError(null)
+      setExportError(null)
+      setNotice('正文已保存；旧门禁已失效，请重新组装并检查。')
+      bidRun.refresh()
+      return true
+    } catch (caught) {
+      setSectionActionError(
+        caught instanceof ApiError ? caught.message : '正文保存失败',
+      )
+      return false
+    } finally {
+      setSectionSaving(false)
+    }
+  }
+
+  const regenerateSection = async (sectionId: string) => {
+    if (!runId) return
+    if (outlineDirty) {
+      const saved = await saveOutline(false)
+      if (!saved) return
+    }
+    if (
+      !window.confirm(
+        '将保留当前正文作为旧稿并重新生成本节，完成后自动组装。继续吗？',
+      )
+    ) {
+      return
+    }
+    setSectionRegenerating(true)
+    setSectionActionError(null)
+    try {
+      const response = await api.regenerateBidSection(runId, sectionId)
+      enqueueJob(response)
+      setNotice('已请求重新生成本节；新稿完成前旧稿仍保留。')
+      closeSectionModal()
+      bidRun.refresh()
+    } catch (caught) {
+      setSectionActionError(
+        caught instanceof ApiError ? caught.message : '重新生成本节失败',
+      )
+    } finally {
+      setSectionRegenerating(false)
     }
   }
 
@@ -718,7 +810,9 @@ export function BidView({
               onCancel={() => void cancel()}
               onAssemble={() => void assemble()}
               onRefresh={bidRun.refresh}
-              onPreview={(sectionId) => void previewSection(sectionId)}
+              onPreview={(sectionId) => void openSection(sectionId, false)}
+              onEdit={(sectionId) => void openSection(sectionId, true)}
+              onRegenerate={(sectionId) => void regenerateSection(sectionId)}
             />
           ) : null}
 
@@ -746,37 +840,22 @@ export function BidView({
         </>
       )}
 
-      <Modal
-        open={Boolean(preview || previewLoading || previewError)}
-        title={preview ? `章节预览 · ${preview.title}` : '章节预览'}
-        onClose={() => {
-          setPreview(null)
-          setPreviewError(null)
+      <BidSectionModal
+        key={`${preview?.section_id ?? 'none'}:${preview?.status ?? 'loading'}:${sectionStartEditing ? 'edit' : 'preview'}:${active ? 'active' : 'idle'}`}
+        open={sectionModalOpen}
+        section={preview}
+        loading={previewLoading}
+        error={previewError ?? sectionActionError}
+        saving={sectionSaving}
+        regenerating={sectionRegenerating}
+        startEditing={sectionStartEditing}
+        actionsDisabled={active}
+        onClose={closeSectionModal}
+        onSave={saveSection}
+        onRegenerate={() => {
+          if (preview) void regenerateSection(preview.section_id)
         }}
-        size="xl"
-        footer={
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setPreview(null)
-              setPreviewError(null)
-            }}
-          >
-            关闭
-          </Button>
-        }
-      >
-        {previewLoading ? (
-          <div className="flex items-center gap-2 py-10 text-xs text-slate-500">
-            <Spinner className="h-4 w-4" />
-            正在读取章节…
-          </div>
-        ) : previewError ? (
-          <p className="py-8 text-xs text-red-200">{previewError}</p>
-        ) : preview ? (
-          <MarkdownPreview content={preview.final_markdown || '（本章暂无正文）'} />
-        ) : null}
-      </Modal>
+      />
     </div>
   )
 }

@@ -14,6 +14,7 @@ import type {
   BidRunDetail,
   BidRunListResponse,
   BidSectionDetail,
+  BidSectionUpdateRequest,
   CompanyDetail,
   CompanyListResponse,
   CompanyUpsertRequest,
@@ -339,6 +340,32 @@ export const api = {
   ): Promise<BidSectionDetail> {
     return request<BidSectionDetail>(
       `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}`,
+    )
+  },
+
+  updateBidSection(
+    runId: string,
+    sectionId: string,
+    markdown: string,
+  ): Promise<BidSectionDetail> {
+    const payload: BidSectionUpdateRequest = { markdown }
+    return request<BidSectionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  regenerateBidSection(
+    runId: string,
+    sectionId: string,
+  ): Promise<BidGenerateResponse> {
+    return request<BidGenerateResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/regenerate`,
+      { method: 'POST' },
     )
   },
 

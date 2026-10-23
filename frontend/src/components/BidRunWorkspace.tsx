@@ -20,6 +20,8 @@ interface BidRunWorkspaceProps {
   onAssemble: () => void
   onRefresh: () => void
   onPreview: (sectionId: string) => void
+  onEdit: (sectionId: string) => void
+  onRegenerate: (sectionId: string) => void
 }
 
 const RUN_STATUS: Record<
@@ -73,6 +75,8 @@ export function BidRunWorkspace({
   onAssemble,
   onRefresh,
   onPreview,
+  onEdit,
+  onRegenerate,
 }: BidRunWorkspaceProps) {
   const info = runStatus(run.status)
   const active = ['queued', 'generating', 'assembling'].includes(run.status)
@@ -237,20 +241,46 @@ export function BidRunWorkspace({
                       {section.char_count} 字
                     </span>
                   </div>
-                  {section.status === 'final' ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onPreview(section.section_id)}
-                    >
-                      <Icon name="eye" className="h-3.5 w-3.5" />
-                      预览
-                    </Button>
-                  ) : section.error ? (
-                    <span className="max-w-[16rem] truncate text-[10px] text-red-200/70">
-                      {section.error}
-                    </span>
-                  ) : null}
+                  <div className="flex flex-wrap items-center gap-1">
+                    {section.char_count > 0 ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onPreview(section.section_id)}
+                        disabled={busy}
+                      >
+                        <Icon name="eye" className="h-3.5 w-3.5" />
+                        预览
+                      </Button>
+                    ) : null}
+                    {section.status === 'final' && !active ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onEdit(section.section_id)}
+                          disabled={busy}
+                        >
+                          <Icon name="file" className="h-3.5 w-3.5" />
+                          编辑正文
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onRegenerate(section.section_id)}
+                          disabled={busy}
+                        >
+                          <Icon name="refresh" className="h-3.5 w-3.5" />
+                          重新生成本节
+                        </Button>
+                      </>
+                    ) : null}
+                    {section.status !== 'final' && section.error ? (
+                      <span className="max-w-[16rem] truncate text-[10px] text-red-200/70">
+                        {section.error}
+                      </span>
+                    ) : null}
+                  </div>
                 </li>
               )
             })}

@@ -17,6 +17,7 @@ const STAGE_LABELS: Record<string, string> = {
   review: '合规审查',
   revise: '修订章节',
   generated: '正文已生成',
+  edited: '正文已修改，待重新组装',
   assemble: '组装标书',
   assembling: '组装检查',
   assembled: '已组装',

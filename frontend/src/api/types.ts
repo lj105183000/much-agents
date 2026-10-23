@@ -365,6 +365,10 @@ export interface BidSectionDetail {
   error: string | null
 }
 
+export interface BidSectionUpdateRequest {
+  markdown: string
+}
+
 export interface BidGateCheck {
   id: string
   level: 'block' | 'warn'
