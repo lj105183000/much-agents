@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 export type IconName =
   | 'upload'
   | 'sparkles'
+  | 'search'
   | 'folder'
   | 'history'
   | 'settings'
@@ -44,6 +45,13 @@ function iconPath(name: IconName): ReactNode {
           <path d="m12 3 1.4 3.6L17 8l-3.6 1.4L12 13l-1.4-3.6L7 8l3.6-1.4L12 3Z" />
           <path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z" />
           <path d="m5 14 .6 1.4L7 16l-1.4.6L5 18l-.6-1.4L3 16l1.4-.6L5 14Z" />
+        </>
+      )
+    case 'search':
+      return (
+        <>
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
         </>
       )
     case 'folder':

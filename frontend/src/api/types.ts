@@ -1,7 +1,9 @@
 export type JobKind = 'parse' | 'bid'
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type ParserChoice = 'auto' | 'mineru' | 'pymupdf'
-export type ViewKey = 'workbench' | 'bid' | 'library' | 'history'
+export type ViewKey = 'workbench' | 'bid' | 'search' | 'library' | 'history'
+export type SearchMode = 'auto' | 'semantic' | 'keyword'
+export type SearchMatch = 'semantic' | 'keyword'
 
 export interface HealthResponse {
   status: 'ok' | 'degraded'
@@ -115,6 +117,37 @@ export interface DocumentSummary {
 
 export interface DocumentListResponse {
   documents: DocumentSummary[]
+}
+
+export interface SearchRequest {
+  query: string
+  doc_id: string | null
+  top_k: number
+  mode: SearchMode
+}
+
+export interface SearchHit {
+  doc_id: string
+  project_name: string | null
+  chunk_id: string
+  section_path: string
+  page_start: number
+  page_end: number
+  text: string
+  snippet: string
+  highlights: string[]
+  score: number | null
+  match_type: SearchMatch
+}
+
+export interface SearchResponse {
+  query: string
+  doc_id: string | null
+  mode: SearchMode
+  mode_used: SearchMatch
+  results: SearchHit[]
+  warnings: string[]
+  elapsed_ms: number
 }
 
 export interface ArtifactInfo {

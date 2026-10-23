@@ -9,6 +9,8 @@ import type {
   JobCreatedResponse,
   JobStatusResponse,
   ParseUploadOptions,
+  SearchRequest,
+  SearchResponse,
 } from './types'
 
 const API_BASE_KEY = 'much-agents:api-base:v1'
@@ -159,6 +161,14 @@ export const api = {
 
   listDocuments(): Promise<DocumentListResponse> {
     return request<DocumentListResponse>('/api/documents')
+  },
+
+  searchPassages(payload: SearchRequest): Promise<SearchResponse> {
+    return request<SearchResponse>('/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
   },
 
   listArtifacts(source: ArtifactSource): Promise<ArtifactListResponse> {

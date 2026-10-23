@@ -22,6 +22,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'sparkles',
   },
   {
+    key: 'search',
+    label: '文档检索',
+    description: '语义查找招标原文与页码',
+    icon: 'search',
+  },
+  {
     key: 'library',
     label: '文档库',
     description: '已解析文档与历史投标',
@@ -46,6 +52,10 @@ export const VIEW_META: Record<
   bid: {
     title: '编写标书',
     subtitle: '选择已解析文档，填写投标人资料并启动多 Agent 编写',
+  },
+  search: {
+    title: '文档检索',
+    subtitle: '在已解析招标文件中检索原文片段，语义优先，失败自动回退关键词',
   },
   library: {
     title: '文档库',

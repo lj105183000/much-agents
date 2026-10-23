@@ -13,6 +13,7 @@ import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
 import { HistoryView } from './views/HistoryView'
 import { LibraryView } from './views/LibraryView'
+import { SearchView } from './views/SearchView'
 import { WorkbenchView } from './views/WorkbenchView'
 
 function App() {
@@ -116,6 +117,16 @@ function App() {
                 onJobUpdate={history.updateFromJob}
                 onActiveJobChange={setActiveJobId}
                 onDocumentsRefresh={documents.refresh}
+              />
+            ) : null}
+            {view === 'search' ? (
+              <SearchView
+                key={selectedDocId ?? 'search'}
+                documents={documents.documents}
+                documentsLoading={documents.loading}
+                initialDocId={selectedDocId}
+                onSelectDoc={(docId) => setSelectedDocId(docId)}
+                onNavigate={navigate}
               />
             ) : null}
             {view === 'library' ? (
