@@ -103,6 +103,7 @@ function App() {
             ) : null}
             {view === 'bid' ? (
               <BidView
+                key={selectedDocId ?? 'bid-new'}
                 documents={documents.documents}
                 documentsLoading={documents.loading}
                 initialDocId={selectedDocId}
@@ -136,12 +137,14 @@ function App() {
         </main>
       </div>
 
-      <SettingsDialog
-        open={settingsOpen}
-        apiBase={apiBase}
-        onClose={() => setSettingsOpen(false)}
-        onSave={saveBase}
-      />
+      {settingsOpen ? (
+        <SettingsDialog
+          open
+          apiBase={apiBase}
+          onClose={() => setSettingsOpen(false)}
+          onSave={saveBase}
+        />
+      ) : null}
     </div>
   )
 }

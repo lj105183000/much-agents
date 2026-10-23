@@ -60,10 +60,6 @@ export function BidView({
   const selected = documents.find((document) => document.doc_id === docId)
 
   useEffect(() => {
-    if (initialDocId) setDocId(initialDocId)
-  }, [initialDocId])
-
-  useEffect(() => {
     if (job?.status === 'succeeded') onDocumentsRefresh()
   }, [job?.status, job?.job_id, onDocumentsRefresh])
 

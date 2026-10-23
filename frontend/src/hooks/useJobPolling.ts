@@ -33,12 +33,10 @@ export function useJobPolling(
 
   const refresh = useCallback(() => setVersion((value) => value + 1), [])
 
+  const visibleJob = jobId && job?.job_id === jobId ? job : null
+
   useEffect(() => {
-    if (!jobId || !enabled) {
-      setJob(null)
-      setError(null)
-      return
-    }
+    if (!jobId || !enabled) return
 
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -74,5 +72,5 @@ export function useJobPolling(
     }
   }, [jobId, enabled, intervalMs, version])
 
-  return { job, error, refresh }
+  return { job: visibleJob, error, refresh }
 }

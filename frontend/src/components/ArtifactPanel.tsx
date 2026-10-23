@@ -33,6 +33,8 @@ function prettyJson(text: string): string {
   }
 }
 
+const PREVIEW_CHAR_LIMIT = 60_000
+
 export function ArtifactPanel({
   source,
   title = '产物文件',
@@ -45,6 +47,7 @@ export function ArtifactPanel({
   const [preview, setPreview] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewTruncated, setPreviewTruncated] = useState(false)
   const key = sourceKey(source)
 
   useEffect(() => {
@@ -77,14 +80,19 @@ export function ArtifactPanel({
     if (!selected || !selected.previewable) {
       setPreview(null)
       setPreviewError(null)
+      setPreviewTruncated(false)
       return
     }
     let cancelled = false
     setPreviewLoading(true)
     setPreviewError(null)
+    setPreviewTruncated(false)
     fetchArtifactText(selected)
       .then((text) => {
-        if (!cancelled) setPreview(text)
+        if (!cancelled) {
+          setPreviewTruncated(text.length > PREVIEW_CHAR_LIMIT)
+          setPreview(text.slice(0, PREVIEW_CHAR_LIMIT))
+        }
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
@@ -196,6 +204,11 @@ export function ArtifactPanel({
           ) : null
         }
       >
+        {previewTruncated ? (
+          <p className="mb-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200">
+            内容较长，仅预览前 {PREVIEW_CHAR_LIMIT.toLocaleString()} 个字符；完整内容请下载文件。
+          </p>
+        ) : null}
         {previewLoading ? (
           <div className="flex items-center gap-2 py-10 text-xs text-slate-500">
             <Spinner className="h-4 w-4" />

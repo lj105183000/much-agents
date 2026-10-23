@@ -18,11 +18,13 @@ export function useDocuments(
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
 
-  const refresh = useCallback(() => setVersion((value) => value + 1), [])
+  const refresh = useCallback(() => {
+    setLoading(true)
+    setVersion((value) => value + 1)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     api
       .listDocuments()
       .then((response) => {

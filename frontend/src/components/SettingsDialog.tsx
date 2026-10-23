@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { apiUrl, normalizeApiBase } from '../api/client'
 import { Button, Field, inputClass } from './ui'
 import { Modal } from './Modal'
@@ -19,13 +19,6 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [value, setValue] = useState(apiBase)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (open) {
-      setValue(apiBase)
-      setError(null)
-    }
-  }, [open, apiBase])
 
   const save = () => {
     try {
