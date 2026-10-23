@@ -387,6 +387,12 @@ export function BidView({
       const blob = await api.exportBidRun(runId, force)
       const name = safeFilename(run?.project_name || docId || runId || '投标文件')
       downloadBlob(blob, `${name}-投标文件.docx`)
+      if (force) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
     } catch (caught) {
       setExportError(
         caught instanceof ApiError ? caught.message : '导出失败',

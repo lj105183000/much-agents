@@ -51,7 +51,6 @@ def build_content_plan(section: OutlineSection) -> dict[str, Any] | None:
         [
             *section.requirements,
             *(factor.get("factor") for factor in factors),
-            *(factor.get("scoring_criteria") for factor in factors),
         ]
     )
     return {

@@ -24,6 +24,17 @@ const GATE_LABEL = {
   block: '已阻止',
 } as const
 
+const CHECK_LABEL: Record<string, string> = {
+  selected_generated: '章节完整性',
+  no_failed_sections: '失败章节',
+  no_high_severity_issues: '高危问题 / 脱敏占位',
+  page_limit: '150 页限制',
+  placeholders: '待填写占位符',
+  missing_profile_fields: '投标人资料完整性',
+  coverage_missing_factors: '评分因素覆盖',
+  selected_narratives: '已选正文章节',
+}
+
 export function BidGatePanel({
   gate,
   loading,
@@ -94,7 +105,7 @@ export function BidGatePanel({
                       {failed ? (check.level === 'block' ? '阻止' : '警告') : '通过'}
                     </Badge>
                     <span className="text-xs font-medium text-slate-200">
-                      {check.id}
+                      {CHECK_LABEL[check.id] ?? check.id}
                     </span>
                     {failed ? (
                       <span className="text-[11px] leading-5 text-slate-400">
