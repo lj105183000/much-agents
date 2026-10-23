@@ -342,6 +342,76 @@ def write_parsed_fixture(tmp_path: Path, doc_id: str = "doc-1") -> Path:
     return doc_dir
 
 
+def write_search_doc(
+    tmp_path: Path,
+    doc_id: str,
+    chunks: list[dict],
+    *,
+    project_name: str | None = None,
+    catalog: bool = True,
+) -> Path:
+    """Write a search fixture; catalog=False creates a chunks-only document."""
+    import json
+
+    doc_dir = tmp_path / "parsed" / doc_id
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index, item in enumerate(chunks):
+        metadata = dict(item.get("metadata") or {})
+        metadata.setdefault("doc_id", doc_id)
+        metadata.setdefault("chunk_id", item.get("id") or f"{doc_id}:c{index:04d}")
+        metadata.setdefault("section_path", item.get("section_path") or "测试章节")
+        metadata.setdefault("page_start", 1)
+        metadata.setdefault("page_end", 1)
+        rows.append(
+            {
+                "id": item.get("id") or f"{doc_id}:c{index:04d}",
+                "text": item.get("text") or "",
+                "embed_text": item.get("embed_text") or item.get("text") or "",
+                "metadata": metadata,
+            }
+        )
+    (doc_dir / "chunks.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    if catalog:
+        extraction = {
+            "schema_version": "1.0",
+            "doc_id": doc_id,
+            "project_overview": {"project_name": project_name or doc_id},
+        }
+        (doc_dir / "extraction.json").write_text(
+            json.dumps(extraction, ensure_ascii=False), encoding="utf-8"
+        )
+        (doc_dir / "full.md").write_text("search fixture", encoding="utf-8")
+        (doc_dir / "meta.json").write_text(
+            json.dumps({"doc_id": doc_id, "page_count": 1}), encoding="utf-8"
+        )
+    return doc_dir
+
+
+class FakeSemanticRetriever:
+    def __init__(
+        self,
+        evidence: list[Evidence] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.evidence = evidence or []
+        self.error = error
+        self.calls: list[tuple[str, str | None, int]] = []
+
+    def fetch(self, query: str, doc_id: str | None, k: int) -> list[Evidence]:
+        self.calls.append((query, doc_id, k))
+        if self.error is not None:
+            raise self.error
+        return list(self.evidence)[:k]
+
+    def retrieve(self, query: str, doc_id: str | None, k: int) -> list[Evidence]:
+        return self.fetch(query, doc_id, k)
+
+
 def make_parse_result(
     doc_id: str,
     *,

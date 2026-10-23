@@ -22,6 +22,7 @@ from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
+from .search import SearchService
 from .service import ParseService, UploadError
 from .task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
 
@@ -40,6 +41,7 @@ def create_app(
     bid_runner: JobRunner | None = None,
     bid_func: Callable[..., Any] | None = None,
     bid_dispatcher: LocalDispatcher | CeleryDispatcher | None = None,
+    search_service: SearchService | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     parse_func_injected = parse_func is not None
@@ -134,6 +136,10 @@ def create_app(
         store=store,
         dispatch=bid_dispatcher.dispatch,
     )
+    search_service = search_service or SearchService(
+        parse_settings=parse_settings,
+        bid_settings=bid_settings,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -162,6 +168,7 @@ def create_app(
     app.state.bid_func = bid_func
     app.state.parse_service = parse_service
     app.state.bid_service = bid_service
+    app.state.search_service = search_service
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(api_settings.cors_origins),

@@ -32,7 +32,10 @@ from .schemas import (
     HealthResponse,
     JobCreatedResponse,
     JobStatusResponse,
+    SearchRequest,
+    SearchResponse,
 )
+from .search import SearchError, SearchService
 from .service import ParseService
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,10 @@ def get_service(request: Request) -> ParseService:
 
 def get_bid_service(request: Request) -> BidService:
     return request.app.state.bid_service
+
+
+def get_search_service(request: Request) -> SearchService:
+    return request.app.state.search_service
 
 
 def _artifact_response(target: Path) -> FileResponse:
@@ -158,6 +165,19 @@ def build_router() -> APIRouter:
             request.app.state.bid_settings,
         )
         return DocumentListResponse(documents=documents)
+
+    @router.post("/search", response_model=SearchResponse)
+    def search_tenders(
+        payload: SearchRequest,
+        service: SearchService = Depends(get_search_service),
+    ) -> SearchResponse:
+        try:
+            return service.search(payload)
+        except SearchError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from exc
 
     @router.get(
         "/documents/{doc_id}/artifacts",

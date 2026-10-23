@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .jobs import JobKind, JobState
 
@@ -151,3 +151,46 @@ class ArtifactListResponse(BaseModel):
     run_id: str | None = None
     kind: JobKind | None = None
     artifacts: list[ArtifactInfo] = Field(default_factory=list)
+
+
+SearchMode = Literal["auto", "semantic", "keyword"]
+SearchMatch = Literal["semantic", "keyword"]
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+    doc_id: str | None = Field(default=None, max_length=128)
+    top_k: int = Field(default=8, ge=1, le=30)
+    mode: SearchMode = "auto"
+
+    @field_validator("query")
+    @classmethod
+    def _query_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("query must not be blank")
+        return stripped
+
+
+class SearchHit(BaseModel):
+    doc_id: str
+    project_name: str | None = None
+    chunk_id: str
+    section_path: str = ""
+    page_start: int = 0
+    page_end: int = 0
+    text: str
+    snippet: str
+    highlights: list[str] = Field(default_factory=list)
+    score: float | None = None
+    match_type: SearchMatch
+
+
+class SearchResponse(BaseModel):
+    query: str
+    doc_id: str | None = None
+    mode: SearchMode
+    mode_used: SearchMatch
+    results: list[SearchHit] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    elapsed_ms: float = 0.0
