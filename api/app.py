@@ -17,6 +17,7 @@ from src.parsing.models import ParseResult
 from src.parsing.pipeline import parse_document
 
 from .bids import BidService, execute_bid_job
+from .companies import CompanyService
 from .config import ApiSettings
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
@@ -42,6 +43,7 @@ def create_app(
     bid_func: Callable[..., Any] | None = None,
     bid_dispatcher: LocalDispatcher | CeleryDispatcher | None = None,
     search_service: SearchService | None = None,
+    company_service: CompanyService | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     parse_func_injected = parse_func is not None
@@ -130,11 +132,16 @@ def create_app(
         store=store,
         dispatch=dispatcher.dispatch,
     )
+    company_service = company_service or CompanyService(
+        api_settings.database_url,
+        profile_max_mb=bid_settings.profile_max_mb,
+    )
     bid_service = BidService(
         api_settings=api_settings,
         bid_settings=bid_settings,
         store=store,
         dispatch=bid_dispatcher.dispatch,
+        company_service=company_service,
     )
     search_service = search_service or SearchService(
         parse_settings=parse_settings,
@@ -144,7 +151,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
+        await company_service.init()
         yield
+        await company_service.close()
         for job_runner in local_runners:
             job_runner.shutdown(wait=False)
 
@@ -169,6 +178,7 @@ def create_app(
     app.state.parse_service = parse_service
     app.state.bid_service = bid_service
     app.state.search_service = search_service
+    app.state.company_service = company_service
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(api_settings.cors_origins),

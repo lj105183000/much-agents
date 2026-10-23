@@ -23,6 +23,7 @@ from src.bidding.profile import BidderProfile
 from src.bidding.runner import run_bid_writing
 from src.parsing.artifacts import atomic_write_json, ensure_dir
 
+from .companies import CompanyError, CompanyService
 from .config import ApiSettings
 from .jobs import Job, JobStoreError, JobStoreProtocol
 from .service import UploadError
@@ -52,11 +53,13 @@ class BidService:
         bid_settings: BidSettings,
         store: JobStoreProtocol,
         dispatch: Callable[[Job], None],
+        company_service: CompanyService | None = None,
     ) -> None:
         self.api_settings = api_settings
         self.bid_settings = bid_settings
         self.store = store
         self.dispatch = dispatch
+        self.company_service = company_service
 
     async def submit(
         self,
@@ -64,17 +67,32 @@ class BidService:
         doc_id: str,
         profile: dict[str, Any],
         max_sections: int | None,
+        company_id: str | None = None,
     ) -> Job:
         try:
             TenderContext.validate(doc_id, self.bid_settings)
         except BidContextError as exc:
             raise UploadError(404, str(exc)) from exc
 
-        serialized = json.dumps(profile or {}, ensure_ascii=False).encode("utf-8")
+        raw_profile = profile or {}
+        company_key = (company_id or "").strip() or None
+        if company_key:
+            if self.company_service is None:
+                raise UploadError(503, "company database is unavailable")
+            try:
+                company = await self.company_service.get(company_key)
+            except CompanyError as exc:
+                raise UploadError(exc.status_code, exc.detail) from exc
+            if company is None:
+                raise UploadError(404, "company not found")
+            if not raw_profile:
+                raw_profile = company.profile
+
+        serialized = json.dumps(raw_profile, ensure_ascii=False).encode("utf-8")
         if len(serialized) > self.bid_settings.profile_max_mb * 1024 * 1024:
             raise UploadError(413, "bidder profile is too large")
         try:
-            bidder_profile = BidderProfile.from_mapping(profile or {})
+            bidder_profile = BidderProfile.from_mapping(raw_profile)
         except BidInputError as exc:
             raise UploadError(400, str(exc)) from exc
         if not self.bid_settings.base.deepseek_api_key:
@@ -88,13 +106,16 @@ class BidService:
         job_id = uuid4().hex
         run_dir = ensure_dir(self.bid_settings.bids_dir / doc_id / job_id)
         atomic_write_json(run_dir / "profile.json", bidder_profile.to_dict())
+        payload = {"doc_id": doc_id, "max_sections": resolved_max}
+        if company_key:
+            payload["company_id"] = company_key
         try:
             job = self.store.create(
                 job_id=job_id,
                 filename=doc_id,
                 doc_id=doc_id,
                 kind="bid",
-                payload={"doc_id": doc_id, "max_sections": resolved_max},
+                payload=payload,
             )
         except JobStoreError as exc:
             shutil.rmtree(run_dir, ignore_errors=True)

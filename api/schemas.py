@@ -31,6 +31,7 @@ class BidRequest(BaseModel):
     doc_id: str = Field(min_length=1, max_length=128)
     profile: dict[str, Any] = Field(default_factory=dict)
     max_sections: int | None = Field(default=None, ge=0, le=100)
+    company_id: str | None = Field(default=None, max_length=64)
 
 
 class BidCreatedResponse(BaseModel):
@@ -194,3 +195,27 @@ class SearchResponse(BaseModel):
     results: list[SearchHit] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     elapsed_ms: float = 0.0
+
+
+class CompanyUpsertRequest(BaseModel):
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class CompanySummary(BaseModel):
+    id: str
+    company_name: str
+    credit_code: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    bank_name: str | None = None
+    bank_account: str | None = None
+    updated_at: datetime
+
+
+class CompanyDetail(CompanySummary):
+    profile: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class CompanyListResponse(BaseModel):
+    companies: list[CompanySummary] = Field(default_factory=list)

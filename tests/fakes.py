@@ -4,13 +4,17 @@ import fnmatch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import redis
 
+from api.companies import CompanyError, CompanyRecord
 from api.config import ApiSettings
 from api.jobs import Job, JobStore, JobStoreError
 from src.bidding.config import BidSettings
+from src.bidding.errors import BidInputError
 from src.bidding.models import Evidence
+from src.bidding.profile import BidderProfile
 from src.parsing.config import Settings
 from src.parsing.models import ParseResult
 
@@ -410,6 +414,88 @@ class FakeSemanticRetriever:
 
     def retrieve(self, query: str, doc_id: str | None, k: int) -> list[Evidence]:
         return self.fetch(query, doc_id, k)
+
+
+class FakeCompanyService:
+    def __init__(self) -> None:
+        self.records: dict[str, CompanyRecord] = {}
+
+    async def init(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    @staticmethod
+    def _validated(profile: dict[str, Any]) -> tuple[BidderProfile, dict[str, Any]]:
+        try:
+            bidder = BidderProfile.from_mapping(profile or {})
+        except BidInputError as exc:
+            raise CompanyError(400, str(exc)) from exc
+        if not (bidder.company.name or "").strip():
+            raise CompanyError(400, "company.name is required")
+        return bidder, bidder.to_dict()
+
+    @staticmethod
+    def _record(
+        company_id: str,
+        bidder: BidderProfile,
+        payload: dict[str, Any],
+        *,
+        created_at: datetime | None = None,
+    ) -> CompanyRecord:
+        now = datetime.now(timezone.utc)
+        company = bidder.company
+        return CompanyRecord(
+            id=company_id,
+            company_name=(company.name or "").strip(),
+            credit_code=company.credit_code,
+            address=company.address,
+            phone=company.phone,
+            bank_name=company.bank_name,
+            bank_account=company.bank_account,
+            profile=payload,
+            created_at=created_at or now,
+            updated_at=now,
+        )
+
+    async def list(self, limit: int = 100) -> list[CompanyRecord]:
+        return sorted(
+            self.records.values(),
+            key=lambda record: record.updated_at,
+            reverse=True,
+        )[:limit]
+
+    async def get(self, company_id: str) -> CompanyRecord | None:
+        return self.records.get(company_id)
+
+    async def create(self, profile: dict[str, Any]) -> CompanyRecord:
+        bidder, payload = self._validated(profile)
+        company_id = uuid4().hex
+        record = self._record(company_id, bidder, payload)
+        self.records[company_id] = record
+        return record
+
+    async def update(
+        self,
+        company_id: str,
+        profile: dict[str, Any],
+    ) -> CompanyRecord | None:
+        existing = self.records.get(company_id)
+        if existing is None:
+            return None
+        bidder, payload = self._validated(profile)
+        record = self._record(
+            company_id,
+            bidder,
+            payload,
+            created_at=existing.created_at,
+        )
+        self.records[company_id] = record
+        return record
+
+    async def delete(self, company_id: str) -> bool:
+        return self.records.pop(company_id, None) is not None
 
 
 def make_parse_result(

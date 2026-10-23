@@ -52,6 +52,7 @@ class ApiSettings:
     cors_origins: tuple[str, ...] = ("*",)
     task_backend: Literal["celery", "local"] = "celery"
     redis_url: str = "redis://localhost:6379/0"
+    database_url: str = ""
     celery_broker_url: str | None = None
     celery_worker_pool: str = "solo"
     job_ttl_seconds: int = 24 * 3600
@@ -98,6 +99,7 @@ class ApiSettings:
             cors_origins=origins,
             task_backend=_choice(env, "TASK_BACKEND", "celery", {"celery", "local"}),
             redis_url=_str(env, "REDIS_URL", "redis://localhost:6379/0"),
+            database_url=_str(env, "DATABASE_URL", ""),
             celery_broker_url=broker or None,
             celery_worker_pool=_str(env, "CELERY_WORKER_POOL", "solo"),
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),

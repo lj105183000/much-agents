@@ -22,12 +22,17 @@ from .artifacts import (
     resolve_artifact,
 )
 from .bids import BidService
+from .companies import CompanyError, CompanyRecord, CompanyService
 from .documents import list_documents
 from .jobs import JobStoreError
 from .schemas import (
     ArtifactListResponse,
     BidCreatedResponse,
     BidRequest,
+    CompanyDetail,
+    CompanyListResponse,
+    CompanySummary,
+    CompanyUpsertRequest,
     DocumentListResponse,
     HealthResponse,
     JobCreatedResponse,
@@ -51,6 +56,38 @@ def get_bid_service(request: Request) -> BidService:
 
 def get_search_service(request: Request) -> SearchService:
     return request.app.state.search_service
+
+
+def get_company_service(request: Request) -> CompanyService:
+    return request.app.state.company_service
+
+
+def _company_summary(record: CompanyRecord) -> CompanySummary:
+    return CompanySummary(
+        id=record.id,
+        company_name=record.company_name,
+        credit_code=record.credit_code,
+        address=record.address,
+        phone=record.phone,
+        bank_name=record.bank_name,
+        bank_account=record.bank_account,
+        updated_at=record.updated_at,
+    )
+
+
+def _company_detail(record: CompanyRecord) -> CompanyDetail:
+    return CompanyDetail(
+        id=record.id,
+        company_name=record.company_name,
+        credit_code=record.credit_code,
+        address=record.address,
+        phone=record.phone,
+        bank_name=record.bank_name,
+        bank_account=record.bank_account,
+        updated_at=record.updated_at,
+        created_at=record.created_at,
+        profile=record.profile,
+    )
 
 
 def _artifact_response(target: Path) -> FileResponse:
@@ -134,6 +171,7 @@ def build_router() -> APIRouter:
             doc_id=request.doc_id,
             profile=request.profile,
             max_sections=request.max_sections,
+            company_id=request.company_id,
         )
         return BidCreatedResponse(
             job_id=job.job_id,
@@ -157,6 +195,73 @@ def build_router() -> APIRouter:
                 detail="bidder profile template is unavailable",
             ) from exc
         return JSONResponse(content=payload)
+
+    @router.get("/companies", response_model=CompanyListResponse)
+    async def list_companies(
+        limit: int = Query(100, ge=1, le=500),
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyListResponse:
+        try:
+            records = await service.list(limit)
+        except CompanyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return CompanyListResponse(
+            companies=[_company_summary(record) for record in records]
+        )
+
+    @router.post(
+        "/companies",
+        status_code=status.HTTP_201_CREATED,
+        response_model=CompanyDetail,
+    )
+    async def create_company(
+        payload: CompanyUpsertRequest,
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyDetail:
+        try:
+            record = await service.create(payload.profile)
+        except CompanyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return _company_detail(record)
+
+    @router.get("/companies/{company_id}", response_model=CompanyDetail)
+    async def get_company(
+        company_id: str,
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyDetail:
+        try:
+            record = await service.get(company_id)
+        except CompanyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
+        return _company_detail(record)
+
+    @router.put("/companies/{company_id}", response_model=CompanyDetail)
+    async def update_company(
+        company_id: str,
+        payload: CompanyUpsertRequest,
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyDetail:
+        try:
+            record = await service.update(company_id, payload.profile)
+        except CompanyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
+        return _company_detail(record)
+
+    @router.delete("/companies/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_company(
+        company_id: str,
+        service: CompanyService = Depends(get_company_service),
+    ) -> None:
+        try:
+            deleted = await service.delete(company_id)
+        except CompanyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
 
     @router.get("/documents", response_model=DocumentListResponse)
     def get_documents(request: Request) -> DocumentListResponse:
