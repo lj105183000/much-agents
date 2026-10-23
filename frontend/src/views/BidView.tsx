@@ -810,7 +810,12 @@ export function BidView({
             <BidRunWorkspace
               run={run}
               outline={bidRun.outline ?? outlineDraft}
-              busy={actionBusy || savingOutline}
+              busy={
+                actionBusy ||
+                savingOutline ||
+                sectionSaving ||
+                sectionRegenerating
+              }
               onGenerate={(sectionIds) => void generate(sectionIds)}
               onResume={() => void resume()}
               onCancel={() => void cancel()}

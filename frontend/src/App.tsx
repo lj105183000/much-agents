@@ -139,7 +139,10 @@ function App() {
             {view === 'companies' ? (
               <CompaniesView
                 apiBase={apiBase}
-                onSelectCompany={(companyId) => setSelectedCompanyId(companyId)}
+                onSelectCompany={(companyId) => {
+                  setSelectedCompanyId(companyId)
+                  setSelectedRunId(null)
+                }}
                 onNavigate={navigate}
               />
             ) : null}
