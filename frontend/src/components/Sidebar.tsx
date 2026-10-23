@@ -117,7 +117,7 @@ export function Sidebar({
             </button>
           </div>
           <p className="mt-2 break-all text-[10px] leading-4 text-slate-600">
-            {apiBase}
+            {apiBase || '同源 /api'}
           </p>
           {health.health ? (
             <p className="mt-1 text-[10px] text-slate-500">

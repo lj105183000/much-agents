@@ -48,7 +48,7 @@ export function SettingsDialog({
         <Field
           label="后端 API 地址"
           htmlFor="api-base"
-          hint="默认 http://127.0.0.1:8001；Electron 生产环境必须使用完整 http 地址。"
+          hint="留空使用当前站点同源 /api（Vite 开发代理或 Nginx）；Electron file:// 会自动使用 http://127.0.0.1:8001。"
           error={error ?? undefined}
         >
           <input

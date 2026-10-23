@@ -17,9 +17,8 @@ import type {
 } from './types'
 
 const API_BASE_KEY = 'much-agents:api-base:v1'
-const DEFAULT_API_BASE =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
-  'http://127.0.0.1:8001'
+const ENV_API_BASE =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || ''
 
 export class ApiError extends Error {
   status: number
@@ -33,26 +32,45 @@ export class ApiError extends Error {
 
 export function normalizeApiBase(value: string): string {
   const raw = value.trim().replace(/\/+$/, '')
+  if (!raw) return ''
   if (!/^https?:\/\/[^/\s]+/i.test(raw)) {
-    throw new Error('API 地址必须以 http:// 或 https:// 开头')
+    throw new Error('API 地址必须以 http:// 或 https:// 开头，或留空使用同源 /api')
   }
   return raw
+}
+
+function defaultApiBase(): string {
+  if (ENV_API_BASE) return normalizeApiBase(ENV_API_BASE)
+  if (
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'file:'
+  ) {
+    return 'http://127.0.0.1:8001'
+  }
+  return ''
 }
 
 export function getApiBase(): string {
   try {
     const saved = window.localStorage.getItem(API_BASE_KEY)
-    if (saved) return normalizeApiBase(saved)
+    if (saved !== null) {
+      const normalized = normalizeApiBase(saved)
+      if (normalized) return normalized
+    }
   } catch {
     // localStorage may be unavailable in restricted browser contexts.
   }
-  return normalizeApiBase(DEFAULT_API_BASE)
+  return defaultApiBase()
 }
 
 export function setApiBase(value: string): string {
   const normalized = normalizeApiBase(value)
   try {
-    window.localStorage.setItem(API_BASE_KEY, normalized)
+    if (normalized) {
+      window.localStorage.setItem(API_BASE_KEY, normalized)
+    } else {
+      window.localStorage.removeItem(API_BASE_KEY)
+    }
   } catch {
     // The in-memory default still allows the app to work.
   }
@@ -99,7 +117,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new ApiError(
       0,
-      `无法连接后端 API：${getApiBase()}。请确认 uvicorn 已启动。`,
+      `无法连接后端 API：${getApiBase() || window.location.origin}。请确认 uvicorn 已启动。`,
     )
   }
   if (!response.ok) {
