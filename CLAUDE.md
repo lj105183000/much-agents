@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。FastAPI、Celery、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/` 与测试 `tests/`（MinerU/PyMuPDF 解析、结构化抽取、分块入库）。Celery/Redis 任务后端、多 Agent 投标文件编写、PostgreSQL 持久化仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -23,10 +23,12 @@ uv run pytest                                # 运行全部测试（全部 mock 
 uv run pytest tests/test_toc.py::test_hierarchy_and_end_pages   # 单个测试
 uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽取 + 入库
 uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8001          # 启动 API（单进程）
+uv run python -m api                                            # 读取 API_HOST/API_PORT
 uv run python -m src.cli write <doc_id>      # CLI 运行多 Agent 编写（规划中）
 ```
 
-FastAPI 服务规划监听 `API_PORT=8001`；Celery worker 在 Windows 上默认用 `solo` 池。
+FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；Celery worker 在 Windows 上默认用 `solo` 池。
 
 ### 前端（`frontend/`）
 
@@ -67,18 +69,27 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 4. **分块与入库**：`chunking.py` 以 TOC section 为边界，默认 700 字/120 重叠，id 形如 `<doc_id>:<section_id>:<ordinal>`；`ingest.py` 用智谱 `embedding-3` 生成向量，`HttpClient` 写入 Chroma 集合 `bidding_documents`，upsert + 清理旧 id。
 5. **缓存**：`meta.json` 记录源文件 sha256；解析/抽取/入库均有缓存，`--force` 强制重跑。退出码：0 成功、2 输入错误、3 解析失败、4 抽取为空、5 入库失败、6 缺少 key 跳过。
 
+### FastAPI 上传接口（已实现，`api/`）
+
+- `POST /api/parse`：multipart `file`，查询参数 `parser=auto|mineru|pymupdf`、`extract=true`、`ingest=true`；**默认执行完整流程**；返回 202 + `job_id`/`poll_url`/`doc_id`。
+- `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
+- `GET /api/health`。
+- 上传落盘 `upload/inbox/<job_id>/source.pdf`；`doc_id = <文件名>-<内容 sha256 前 12 位>`，相同内容重复上传可命中解析缓存。
+- 任务表在内存（`api/jobs.py`），后台执行用 `ThreadJobRunner`（`API_JOB_WORKERS=1`）；进程重启、`--reload` 或多 worker 都会丢任务，必须单进程运行。
+- CORS 默认 `*`、无 credentials，兼容 Vite dev 与 Electron `file://`；对外暴露前需改成显式来源并加鉴权。`result.output_dir` 是绝对路径，仅适合本地桌面端。
+
 ### 尚未实现（后续阶段）
 
-- **API**：FastAPI；`POST /api/parse` 返回 202 + `job_id`，`GET /api/jobs/{id}` 轮询；`POST /api/bids` 接收 profile JSON。`TASK_BACKEND=celery` 默认，Redis 不可用返回 503，保留内存后端。
-- **多 Agent 编写**：LangGraph，输入 `bidder_profile.json`；缺失字段生成【待填写】，绝不编造；输出 Markdown + docx。
+- **任务后端**：Celery/Redis（`TASK_BACKEND=celery` 默认，Redis 不可用返回 503）；当前 API 使用进程内线程 + 内存任务表。
+- **投标接口与多 Agent**：`POST /api/bids` 接收 profile JSON；LangGraph 编写；缺失字段生成【待填写】，绝不编造；输出 Markdown + docx。
 - **待办**：PostgreSQL 公司信息、检索接口、MinIO、Nginx。
 
 ### 配置与数据
 
-- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU 参数。
+- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU 参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`）。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
-- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与解析产物的根目录（`upload/parsed/<doc_id>/` 为当前解析输出，`upload/bids/` 为后续规划）。
+- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与解析产物的根目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/` 为后续规划）。
 
 ## 注意
 
