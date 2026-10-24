@@ -76,6 +76,13 @@ def evaluate_gate(
         coverage.get("counts") if isinstance(coverage.get("counts"), dict) else {}
     )
     missing_factors = int(coverage_counts.get("missing") or 0)
+    figures = report.get("figures") if isinstance(report.get("figures"), dict) else None
+    figure_stats = (
+        figures.get("stats") if figures and isinstance(figures.get("stats"), dict) else {}
+    )
+    figure_failed = int(figure_stats.get("failed") or 0)
+    figure_skipped = int(figure_stats.get("skipped") or 0)
+    figure_issues = figure_failed + figure_skipped
 
     checks = [
         _check(
@@ -138,6 +145,19 @@ def evaluate_gate(
             hint="Select at least one narrative section for a complete bid.",
         ),
     ]
+    if figures is not None and figures.get("enabled", True):
+        checks.append(
+            _check(
+                "figures",
+                "warn",
+                figure_issues > 0,
+                (
+                    f"{figure_failed} figure(s) failed and {figure_skipped} "
+                    "were skipped"
+                ),
+                hint="Check the figure panel or complete the missing source facts.",
+            )
+        )
 
     if compliance is not None:
         compliance_checks = [

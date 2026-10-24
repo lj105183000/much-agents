@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from src.parsing.artifacts import atomic_write_json, atomic_write_text, ensure_dir
 
@@ -20,6 +20,9 @@ from .models import (
     SectionReview,
 )
 from .profile import BidderProfile
+
+if TYPE_CHECKING:
+    from .figures.schema import FigureBlock
 
 
 @dataclass(slots=True)
@@ -40,6 +43,10 @@ def assemble_staged_bid(
     outputs: dict[str, SectionOutput],
     allowed: AllowedFacts,
     warnings: list[str] | None = None,
+    figure_blocks: Sequence["FigureBlock"] | None = None,
+    figure_stats: dict[str, Any] | None = None,
+    figure_warnings: list[str] | None = None,
+    figures_enabled: bool = True,
 ) -> BidAssembly:
     drafts: list[SectionDraft] = []
     reviews: list[SectionReview] = []
@@ -83,6 +90,10 @@ def assemble_staged_bid(
         revisions=[],
         warnings=output_warnings,
         allowed=allowed,
+        figure_blocks=figure_blocks,
+        figure_stats=figure_stats,
+        figure_warnings=figure_warnings,
+        figures_enabled=figures_enabled,
     )
 
 
@@ -113,6 +124,7 @@ def write_staged_outputs(
     extra_report: dict[str, Any] | None = None,
     compliance: dict[str, Any] | None = None,
     consistency: dict[str, Any] | None = None,
+    image_width_cm: float = 15.5,
 ) -> dict[str, Any]:
     root = ensure_dir(Path(output_dir))
     sections_dir = ensure_dir(root / "sections")
@@ -121,10 +133,15 @@ def write_staged_outputs(
         assembly.markdown,
         root / "bid.docx",
         title=f"{context.facts.project_name} 投标文件",
+        asset_dir=root,
+        image_width_cm=image_width_cm,
     )
     report = dict(assembly.report)
     if extra_report:
         report.update(extra_report)
+    report["docx_images"] = docx.images
+    if isinstance(report.get("figures"), dict):
+        report["figures"]["docx_images"] = docx.images
     if compliance is not None:
         report["compliance"] = {
             "status": compliance.get("status"),
@@ -149,6 +166,8 @@ def write_staged_outputs(
         if section.kind != "narrative":
             continue
         body = assembly.section_markdowns.get(section.id, "")
+        # Section files live one directory below figures/.
+        body = body.replace("](figures/", "](../figures/")
         atomic_write_text(sections_dir / f"{section.id}.md", body)
     return {
         "output_dir": str(root),
@@ -159,6 +178,7 @@ def write_staged_outputs(
         "sections_dir": str(sections_dir),
         "docx_paragraphs": docx.paragraphs,
         "docx_tables": docx.tables,
+        "docx_images": docx.images,
         "report": report,
     }
 

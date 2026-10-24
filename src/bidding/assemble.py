@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, Sequence
 
 from .checks import AllowedFacts, count_placeholders, placeholder_labels, redact_unsupported
 from .context import TenderContext
@@ -18,6 +19,9 @@ from .models import (
 )
 from .profile import BidderProfile, placeholder
 from .templates import render_template
+
+if TYPE_CHECKING:
+    from .figures.schema import FigureBlock
 
 _CJK_RE = re.compile(r"[一-鿿]")
 
@@ -47,6 +51,24 @@ def _final_narrative(
     return placeholder(f"{section.title}内容"), False, [f"no draft produced: {section.title}"]
 
 
+def _inject_figures(
+    body: str,
+    blocks: Sequence["FigureBlock"],
+) -> str:
+    """Replace a template placeholder once, otherwise append the figure block."""
+    result = body
+    for block in blocks:
+        markdown = block.markdown.strip()
+        if not markdown:
+            continue
+        replace_text = (block.replace_text or "").strip()
+        if replace_text and result.count(replace_text) == 1:
+            result = result.replace(replace_text, markdown, 1)
+            continue
+        result = (result.rstrip() + "\n\n" + markdown).strip()
+    return result
+
+
 def assemble_bid(
     *,
     context: TenderContext,
@@ -57,6 +79,10 @@ def assemble_bid(
     revisions: list[SectionRevision],
     warnings: list[str],
     allowed: AllowedFacts,
+    figure_blocks: Sequence["FigureBlock"] | None = None,
+    figure_stats: dict[str, Any] | None = None,
+    figure_warnings: list[str] | None = None,
+    figures_enabled: bool = True,
 ) -> BidAssembly:
     draft_by_id = {draft.section_id: draft for draft in drafts}
     review_by_id = {review.section_id: review for review in reviews}
@@ -68,9 +94,12 @@ def assemble_bid(
 
     section_markdowns: dict[str, str] = {}
     body_parts: list[str] = []
-    all_warnings = list(warnings)
+    all_warnings = list(warnings or []) + list(figure_warnings or [])
     redactions: list[str] = []
     written_narratives = 0
+    figures_by_section: dict[str, list["FigureBlock"]] = defaultdict(list)
+    for figure_block in figure_blocks or []:
+        figures_by_section[figure_block.section_id].append(figure_block)
 
     for section in outline.sections:
         if section.kind == "narrative":
@@ -89,6 +118,8 @@ def assemble_bid(
                     )
         else:
             body = render_template(section, context, profile, outline)
+        if section.id in figures_by_section:
+            body = _inject_figures(body, figures_by_section[section.id])
         section_markdowns[section.id] = body
         block = _heading(section)
         if body.strip():
@@ -138,7 +169,8 @@ def assemble_bid(
                 }
             )
     cjk_chars = len(_CJK_RE.findall(markdown))
-    estimated_pages = max(1, math.ceil(cjk_chars / 600))
+    figure_pages = float((figure_stats or {}).get("page_estimate") or 0.0)
+    estimated_pages = max(1, math.ceil(cjk_chars / 600 + figure_pages))
 
     report: dict[str, Any] = {
         "schema_version": "1.0",
@@ -166,8 +198,15 @@ def assemble_bid(
             "narrative_written": written_narratives,
             "estimated_pages": estimated_pages,
             "characters": len(markdown),
+            "figures": int((figure_stats or {}).get("generated") or 0),
         },
     }
+    if figure_stats is not None or figure_warnings:
+        report["figures"] = {
+            "enabled": bool(figures_enabled),
+            "stats": dict(figure_stats or {}),
+            "warnings": list(dict.fromkeys(figure_warnings or [])),
+        }
     return BidAssembly(
         markdown=markdown,
         report=report,

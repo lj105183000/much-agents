@@ -19,6 +19,12 @@ from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
+from src.bidding.figures import (
+    build_figure_blocks,
+    clear_figures,
+    generate_figures,
+    read_manifest,
+)
 from src.bidding.fix_plan import generate_fix_plan
 from src.bidding.gate import evaluate_gate
 from src.bidding.llm import DeepSeekChatClient
@@ -278,15 +284,16 @@ class BidRunService:
         return self.bid_settings.bids_dir / run.doc_id / run.run_id
 
     def _clear_reports(self, run: BidRunRecord) -> None:
-        """Remove reports that no longer describe the run after an edit."""
+        """Remove derived reports/figures that no longer match the run."""
         run_dir = self._run_dir(run)
-        for name in ("compliance.json", "consistency.json"):
+        for name in ("compliance.json", "consistency.json", "gate.json", "report.json"):
             try:
                 (run_dir / name).unlink()
             except FileNotFoundError:
                 continue
             except OSError:
                 logger.warning("could not remove stale %s", name, exc_info=True)
+        clear_figures(run_dir)
 
     def _llm_client(self) -> Any | None:
         if self.llm_factory is not None:
@@ -1130,6 +1137,7 @@ class BidRunService:
             outputs,
             allowed,
         ) = await self._load_validation_inputs(run)
+        manifest = read_manifest(run_dir)
         try:
             assembly = assemble_staged_bid(
                 context=context,
@@ -1138,6 +1146,10 @@ class BidRunService:
                 outputs=outputs,
                 allowed=allowed,
                 warnings=list(run.warnings),
+                figure_blocks=build_figure_blocks(manifest),
+                figure_stats=manifest.stats if manifest is not None else None,
+                figure_warnings=manifest.warnings if manifest is not None else None,
+                figures_enabled=manifest.enabled if manifest is not None else True,
             )
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not review bid run %s", run.run_id)
@@ -1357,6 +1369,52 @@ class BidRunService:
         outputs = outputs_from_states(states)
         allowed = build_allowed(context, profile, outline)
         try:
+            base = assemble_staged_bid(
+                context=context,
+                profile=profile,
+                outline=outline,
+                outputs=outputs,
+                allowed=allowed,
+                warnings=list(run.warnings),
+            )
+            manifest = None
+            figure_blocks = []
+            figure_stats: dict[str, Any] = {
+                "planned": 0,
+                "generated": 0,
+                "skipped": 0,
+                "failed": 0,
+                "reused": 0,
+                "external": 0,
+                "page_estimate": 0.0,
+            }
+            figure_warnings: list[str] = []
+            figures_enabled = self.bid_settings.figures_enabled
+            try:
+                figure_llm = (
+                    self._llm_client()
+                    if self.bid_settings.figures_use_llm
+                    else None
+                )
+                manifest = await asyncio.to_thread(
+                    generate_figures,
+                    context=context,
+                    profile=profile,
+                    outline=outline,
+                    section_markdowns=base.section_markdowns,
+                    outputs=outputs,
+                    run_dir=run_dir,
+                    settings=self.bid_settings,
+                    llm=figure_llm,
+                )
+                figure_blocks = build_figure_blocks(manifest)
+                figure_stats = dict(manifest.stats)
+                figure_warnings = list(manifest.warnings)
+                figures_enabled = manifest.enabled
+            except Exception:  # noqa: BLE001 - figures must never block assembly
+                logger.exception("could not generate figures for bid run %s", run_id)
+                figure_warnings.append("配图生成失败，已跳过；请人工补充配图")
+                figure_stats["failed"] = 1
             assembly = assemble_staged_bid(
                 context=context,
                 profile=profile,
@@ -1364,6 +1422,10 @@ class BidRunService:
                 outputs=outputs,
                 allowed=allowed,
                 warnings=list(run.warnings),
+                figure_blocks=figure_blocks,
+                figure_stats=figure_stats,
+                figure_warnings=figure_warnings,
+                figures_enabled=figures_enabled,
             )
             evaluation = evaluate_compliance(
                 context=context,
@@ -1392,6 +1454,7 @@ class BidRunService:
                 extra_report={"run_id": run_id},
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
+                image_width_cm=self.bid_settings.figure_image_width_cm,
             )
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)

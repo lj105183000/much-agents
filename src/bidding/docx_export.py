@@ -13,12 +13,16 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
+from PIL import Image
 
 from .errors import BidExportError
 
 BODY_FONT_EAST_ASIA = "宋体"
 BODY_FONT_ASCII = "Times New Roman"
 HEADING_FONT_EAST_ASIA = "黑体"
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 4000
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,55 @@ class DocxResult:
     path: Path
     paragraphs: int
     tables: int
+    images: int = 0
+
+
+@dataclass(slots=True)
+class _ImageAssets:
+    root: Path
+    width_cm: float
+    count: int = 0
+
+    def resolve(self, source: str) -> Path:
+        text = (source or "").strip()
+        if not text:
+            raise BidExportError("image source is empty")
+        lowered = text.lower()
+        if (
+            lowered.startswith(("http://", "https://", "data:", "//"))
+            or "\\" in text
+            or "?" in text
+            or "#" in text
+        ):
+            raise BidExportError(f"unsupported image source: {text}")
+        relative = Path(text)
+        if (
+            relative.is_absolute()
+            or relative.drive
+            or any(part == ".." for part in relative.parts)
+            or relative.suffix.lower() not in IMAGE_SUFFIXES
+        ):
+            raise BidExportError(f"unsafe image path: {text}")
+        root = self.root.resolve()
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root):
+            raise BidExportError(f"image path escapes the run directory: {text}")
+        if not target.is_file():
+            raise BidExportError(f"image file is missing: {text}")
+        size = target.stat().st_size
+        if size <= 0 or size > MAX_IMAGE_BYTES:
+            raise BidExportError(f"image file size is not allowed: {text}")
+        try:
+            with Image.open(target) as image:
+                image.verify()
+            with Image.open(target) as image:
+                if image.width > MAX_IMAGE_DIMENSION or image.height > MAX_IMAGE_DIMENSION:
+                    raise BidExportError(f"image dimensions are too large: {text}")
+        except BidExportError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - PIL error text is useful
+            raise BidExportError(f"image cannot be decoded: {text}: {exc}") from exc
+        return target
 
 
 def _set_run_font(run, *, east_asia: str, ascii_font: str, size: float | None = None) -> None:
@@ -44,6 +97,10 @@ def _set_style_font(style, *, east_asia: str, ascii_font: str, size: float | Non
     rpr.get_or_add_rFonts().set(qn("w:eastAsia"), east_asia)
 
 
+def _image_alt(node: SyntaxTreeNode) -> str:
+    return str(node.attrs.get("alt") or node.content or "")
+
+
 def _plain(node: SyntaxTreeNode) -> str:
     if node.type == "text":
         return node.content
@@ -52,8 +109,19 @@ def _plain(node: SyntaxTreeNode) -> str:
     if node.type in ("softbreak", "hardbreak"):
         return "\n"
     if node.type == "image":
-        return f"【图片：{node.attrs.get('alt', '')}】"
+        return f"【图片：{_image_alt(node)}】"
     return "".join(_plain(child) for child in node.children)
+
+
+def _add_picture(paragraph, node: SyntaxTreeNode, assets: _ImageAssets) -> None:
+    source = str(node.attrs.get("src") or "")
+    path = assets.resolve(source)
+    run = paragraph.add_run()
+    try:
+        run.add_picture(str(path), width=Cm(assets.width_cm))
+    except Exception as exc:  # noqa: BLE001 - python-docx error types vary
+        raise BidExportError(f"could not embed image {source}: {exc}") from exc
+    assets.count += 1
 
 
 def _add_inline(
@@ -62,6 +130,7 @@ def _add_inline(
     *,
     bold: bool = False,
     italic: bool = False,
+    assets: _ImageAssets | None = None,
 ) -> None:
     if node.type == "text" or node.type == "code_inline":
         run = paragraph.add_run(node.content)
@@ -76,13 +145,43 @@ def _add_inline(
         paragraph.add_run("\n" if node.type == "hardbreak" else " ")
         return
     if node.type == "image":
-        run = paragraph.add_run(f"【图片：{node.attrs.get('alt', '')}】")
+        if assets is not None:
+            _add_picture(paragraph, node, assets)
+            return
+        run = paragraph.add_run(f"【图片：{_image_alt(node)}】")
         _set_run_font(run, east_asia=BODY_FONT_EAST_ASIA, ascii_font=BODY_FONT_ASCII)
         return
     child_bold = bold or node.type == "strong"
     child_italic = italic or node.type == "em"
     for child in node.children:
-        _add_inline(paragraph, child, bold=child_bold, italic=child_italic)
+        _add_inline(
+            paragraph,
+            child,
+            bold=child_bold,
+            italic=child_italic,
+            assets=assets,
+        )
+
+
+def _standalone_image(node: SyntaxTreeNode) -> SyntaxTreeNode | None:
+    children = node.children
+    if len(children) == 1 and children[0].type == "inline":
+        inline = [
+            child
+            for child in children[0].children
+            if child.type not in ("softbreak", "hardbreak")
+        ]
+        if len(inline) == 1 and inline[0].type == "image":
+            return inline[0]
+        return None
+    visible = [
+        child
+        for child in children
+        if child.type not in ("softbreak", "hardbreak")
+    ]
+    if len(visible) == 1 and visible[0].type == "image":
+        return visible[0]
+    return None
 
 
 def _list_style(ordered: bool, depth: int) -> str:
@@ -100,7 +199,13 @@ def _safe_style(document, style: str, fallback: str) -> str:
         return fallback
 
 
-def _render_list(node: SyntaxTreeNode, document, depth: int = 1) -> None:
+def _render_list(
+    node: SyntaxTreeNode,
+    document,
+    depth: int = 1,
+    *,
+    assets: _ImageAssets | None = None,
+) -> None:
     ordered = node.type == "ordered_list"
     style = _safe_style(
         document,
@@ -118,13 +223,13 @@ def _render_list(node: SyntaxTreeNode, document, depth: int = 1) -> None:
         if paragraphs:
             paragraph = document.add_paragraph(style=style)
             for child in paragraphs[0].children:
-                _add_inline(paragraph, child)
+                _add_inline(paragraph, child, assets=assets)
             for extra in paragraphs[1:]:
                 paragraph = document.add_paragraph(style=style)
                 for child in extra.children:
-                    _add_inline(paragraph, child)
+                    _add_inline(paragraph, child, assets=assets)
         for child in nested:
-            _render_list(child, document, depth + 1)
+            _render_list(child, document, depth + 1, assets=assets)
 
 
 def _table_rows(node: SyntaxTreeNode) -> tuple[list[list[str]], int]:
@@ -183,9 +288,19 @@ def markdown_to_docx(
     output_path: str | Path,
     *,
     title: str | None = None,
+    asset_dir: str | Path | None = None,
+    image_width_cm: float = 15.5,
 ) -> DocxResult:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    assets = (
+        _ImageAssets(
+            root=Path(asset_dir),
+            width_cm=max(1.0, min(15.9, float(image_width_cm))),
+        )
+        if asset_dir is not None
+        else None
+    )
     try:
         document = Document()
         _configure_document(document)
@@ -203,12 +318,18 @@ def markdown_to_docx(
                 level = int(node.tag[1]) if node.tag and node.tag[1:].isdigit() else 1
                 document.add_heading(_plain(node).strip(), level=min(max(level, 1), 4))
             elif node.type == "paragraph":
+                image_node = _standalone_image(node) if assets is not None else None
+                if image_node is not None and assets is not None:
+                    paragraph = document.add_paragraph()
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    _add_picture(paragraph, image_node, assets)
+                    continue
                 paragraph = document.add_paragraph()
                 paragraph.paragraph_format.first_line_indent = Pt(21)
                 for child in node.children:
-                    _add_inline(paragraph, child)
+                    _add_inline(paragraph, child, assets=assets)
             elif node.type in ("bullet_list", "ordered_list"):
-                _render_list(node, document)
+                _render_list(node, document, assets=assets)
             elif node.type == "table":
                 _render_table(node, document)
             elif node.type in ("fence", "code_block"):
@@ -222,7 +343,7 @@ def markdown_to_docx(
                             style=_safe_style(document, "Quote", "Normal")
                         )
                         for inline in child.children:
-                            _add_inline(paragraph, inline)
+                            _add_inline(paragraph, inline, assets=assets)
             elif node.type == "hr":
                 document.add_paragraph("─" * 30)
 
@@ -241,6 +362,7 @@ def markdown_to_docx(
             path=output,
             paragraphs=len(document.paragraphs),
             tables=len(document.tables),
+            images=assets.count if assets is not None else 0,
         )
     except BidExportError:
         raise

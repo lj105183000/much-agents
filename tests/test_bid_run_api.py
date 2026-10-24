@@ -407,6 +407,38 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert detail["gate_status"] == gate["status"]
 
 
+def test_bid_run_edit_invalidates_figures_and_gate(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        manifest = run_dir / "figures" / "manifest.json"
+        assert manifest.is_file()
+        assert list((run_dir / "figures").glob("*.png"))
+
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "人工修改后的施工组织设计正文。"},
+        )
+        assert edited.status_code == 200, edited.text
+        assert not manifest.exists()
+        assert not list((run_dir / "figures").glob("*.png"))
+        assert not (run_dir / "gate.json").exists()
+        assert not (run_dir / "report.json").exists()
+        assert not (run_dir / "compliance.json").exists()
+        assert not (run_dir / "consistency.json").exists()
+        assert repo.runs[run_id].gate is None
+        assert client.get(f"/api/bid-runs/{run_id}/gate").status_code == 404
+
+
 def test_bid_run_export_gate_blocks_and_force_overrides(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:

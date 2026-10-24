@@ -272,6 +272,7 @@ def make_bid_settings(tmp_path: Path, **extra: str) -> BidSettings:
             "DEEPSEEK_API_KEY": "fake",
             "ZHIPU_API_KEY": "",
             "MINERU_API_KEY": "",
+            "BID_FIGURES_USE_LLM": "false",
             **extra,
         }
     )
