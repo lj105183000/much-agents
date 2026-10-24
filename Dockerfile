@@ -48,6 +48,7 @@ COPY migrations ./migrations
 COPY api ./api
 COPY src ./src
 COPY scripts/worker_healthcheck.py ./scripts/worker_healthcheck.py
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md ./
 
 RUN mkdir -p /app/upload \
     && chown -R app:app /app
@@ -88,11 +89,16 @@ FROM node:22-alpine AS web-build
 # Optional npm registry for restricted networks, e.g.
 #   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ARG NPM_REGISTRY=https://registry.npmjs.org
+# AGPL-3.0 §13 source offer shown in the UI. Modified deployments must point
+# this at their own corresponding source, not the upstream repository.
+ARG VITE_SOURCE_URL=https://github.com/lj105183000/much-agents
+ENV VITE_SOURCE_URL=$VITE_SOURCE_URL
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund --registry "$NPM_REGISTRY"
 COPY frontend/ ./
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md ./public/
 RUN npm run build
 
 # ---------------------------------------------------------------------------

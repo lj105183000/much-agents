@@ -89,6 +89,12 @@ jobs:
         run: docker build --target api -t much-agents-api:ci .
       - name: Build web image
         run: docker build --target web -t much-agents-web:ci .
+      - name: Verify license files in images
+        run: |
+          docker run --rm --entrypoint sh much-agents-api:ci \
+            -c 'test -s /app/LICENSE && test -s /app/NOTICE && test -s /app/THIRD_PARTY_NOTICES.md'
+          docker run --rm --entrypoint sh much-agents-web:ci \
+            -c 'test -s /usr/share/nginx/html/LICENSE && test -s /usr/share/nginx/html/NOTICE && test -s /usr/share/nginx/html/THIRD_PARTY_NOTICES.md'
       - name: Validate Nginx configuration
         run: |
           docker run --rm --add-host api:127.0.0.1 \

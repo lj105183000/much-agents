@@ -252,6 +252,9 @@ services:
         APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        # AGPL-3.0 §13 source offer, baked into the frontend at build time.
+        # Modified deployments must point this at their own corresponding source.
+        VITE_SOURCE_URL: ${VITE_SOURCE_URL:-https://github.com/lj105183000/much-agents}
     restart: unless-stopped
     ports:
       - "80:80"
