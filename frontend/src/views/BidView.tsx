@@ -9,6 +9,7 @@ import type {
 } from '../api/types'
 import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
+import { usePermissions } from '../hooks/usePermissions'
 import { BidCompliancePanel } from '../components/BidCompliancePanel'
 import { BidFiguresPanel } from '../components/BidFiguresPanel'
 import { BidGatePanel } from '../components/BidGatePanel'
@@ -109,6 +110,7 @@ export function BidView({
   const [sectionActionError, setSectionActionError] = useState<string | null>(
     null,
   )
+  const { canWrite } = usePermissions()
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
@@ -751,12 +753,17 @@ export function BidView({
               <Button
                 onClick={() => void createRun()}
                 loading={creating}
-                disabled={!docId.trim()}
+                disabled={!docId.trim() || !canWrite}
               >
                 <Icon name="file" className="h-4 w-4" />
                 创建大纲
               </Button>
             </div>
+            {!canWrite ? (
+              <p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200/80">
+                当前账号没有编写权限，只能查看已有任务与产物；创建大纲需要编写员及以上角色。
+              </p>
+            ) : null}
           </Card>
         </>
       ) : (
@@ -807,7 +814,7 @@ export function BidView({
           {outlineDraft ? (
             <BidOutlineEditor
               outline={outlineDraft}
-              disabled={active || actionBusy}
+              disabled={active || actionBusy || !canWrite}
               dirty={outlineDirty}
               saving={savingOutline}
               invalidated={invalidated}
@@ -894,7 +901,7 @@ export function BidView({
         saving={sectionSaving}
         regenerating={sectionRegenerating}
         startEditing={sectionStartEditing}
-        actionsDisabled={active}
+        actionsDisabled={active || !canWrite}
         onClose={closeSectionModal}
         onSave={saveSection}
         onRegenerate={() => {

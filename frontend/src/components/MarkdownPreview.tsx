@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { AuthenticatedImage } from './AuthenticatedImage'
 
 export type MarkdownImageResolver = (src: string) => string | null
 
@@ -41,11 +42,10 @@ export function MarkdownPreview({
           )
         }
         return (
-          <img
-            src={resolved}
+          <AuthenticatedImage
+            url={resolved}
             alt={alt ?? ''}
             title={title ?? undefined}
-            loading="lazy"
           />
         )
       },

@@ -10,6 +10,7 @@ import type {
   BidFixPlanResponse,
 } from '../api/types'
 import { cn } from '../lib/cn'
+import { usePermissions } from '../hooks/usePermissions'
 import { Badge, Button, Card, SectionHeader, Spinner } from './ui'
 import { Icon } from './icons'
 
@@ -349,6 +350,7 @@ export function BidCompliancePanel({
   active,
   onApplied,
 }: BidCompliancePanelProps) {
+  const { canReview, canWrite } = usePermissions()
   const [tab, setTab] = useState<TabKey>('checks')
   const [report, setReport] = useState<BidComplianceResponse | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -523,7 +525,12 @@ export function BidCompliancePanel({
           </button>
         ))}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {report ? (
+          {!canReview ? (
+            <span className="text-[11px] text-slate-500">
+              当前角色只能查看报告，不能重新检查或生成修复方案。
+            </span>
+          ) : null}
+          {canReview && report ? (
             <Button
               variant="ghost"
               size="sm"
@@ -535,16 +542,18 @@ export function BidCompliancePanel({
               生成修复方案
             </Button>
           ) : null}
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={checking}
-            disabled={active}
-            onClick={() => void runCheck()}
-          >
-            <Icon name="refresh" className="h-3.5 w-3.5" />
-            {report ? '重新检查' : '运行合规检查'}
-          </Button>
+          {canReview ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={checking}
+              disabled={active}
+              onClick={() => void runCheck()}
+            >
+              <Icon name="refresh" className="h-3.5 w-3.5" />
+              {report ? '重新检查' : '运行合规检查'}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -656,7 +665,7 @@ export function BidCompliancePanel({
                       key={item.id}
                       item={item}
                       applying={applying === item.id}
-                      disabled={disabled}
+                      disabled={disabled || !canWrite}
                       onApply={(entry) => void applyFix(entry)}
                     />
                   ))}

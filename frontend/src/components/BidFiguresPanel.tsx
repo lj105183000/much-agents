@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { api, ApiError, apiUrl } from '../api/client'
+import { api, ApiError, downloadArtifact } from '../api/client'
 import type {
   BidFigureKind,
   BidFigureView,
   BidFiguresResponse,
 } from '../api/types'
+import { usePermissions } from '../hooks/usePermissions'
 import { cn } from '../lib/cn'
+import { AuthenticatedImage } from './AuthenticatedImage'
 import { Badge, Button, Card, EmptyState, SectionHeader, Spinner } from './ui'
 import { Icon } from './icons'
 import { Modal } from './Modal'
@@ -105,6 +107,7 @@ export function BidFiguresPanel({
   active,
   onChanged,
 }: BidFiguresPanelProps) {
+  const { canWrite } = usePermissions()
   const [data, setData] = useState<BidFiguresResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -112,15 +115,18 @@ export function BidFiguresPanel({
   const [actionError, setActionError] = useState<string | null>(null)
   const [selected, setSelected] = useState<BidFigureView | null>(null)
   const [showDetails, setShowDetails] = useState(false)
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
     api
       .listBidFigures(runId)
       .then((response) => {
-        if (!cancelled) setData(response)
+        if (!cancelled) {
+          setData(response)
+          setError(null)
+        }
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
@@ -157,6 +163,22 @@ export function BidFiguresPanel({
     }
   }
 
+  const download = async (figure: BidFigureView) => {
+    if (!figure.download_url) return
+    setDownloading(figure.figure_id)
+    setDownloadError(null)
+    try {
+      await downloadArtifact(
+        figure.download_url,
+        figure.file.split('/').pop() || 'figure.png',
+      )
+    } catch (caught) {
+      setDownloadError(errorMessage(caught, '配图下载失败'))
+    } finally {
+      setDownloading(null)
+    }
+  }
+
   const figures = data?.figures ?? []
   const skipped = data?.skipped ?? []
   const warnings = data?.warnings ?? []
@@ -178,16 +200,18 @@ export function BidFiguresPanel({
                   {new Date(data.generated_at).toLocaleString('zh-CN')}
                 </Badge>
               ) : null}
-              <Button
-                variant="secondary"
-                size="sm"
-                loading={regenerating}
-                disabled={active || loading || regenerating}
-                onClick={() => void regenerate()}
-              >
-                <Icon name="refresh" className="h-3.5 w-3.5" />
-                重新生成配图
-              </Button>
+              {canWrite ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={regenerating}
+                  disabled={active || loading || regenerating}
+                  onClick={() => void regenerate()}
+                >
+                  <Icon name="refresh" className="h-3.5 w-3.5" />
+                  重新生成配图
+                </Button>
+              ) : null}
             </div>
           }
         />
@@ -202,6 +226,12 @@ export function BidFiguresPanel({
       {actionError ? (
         <p className="border-b border-slate-800 px-4 py-2.5 text-[11px] leading-5 text-red-200">
           {actionError}
+        </p>
+      ) : null}
+
+      {downloadError ? (
+        <p className="border-b border-slate-800 px-4 py-2.5 text-[11px] leading-5 text-red-200">
+          {downloadError}
         </p>
       ) : null}
 
@@ -243,11 +273,11 @@ export function BidFiguresPanel({
                     title={`放大查看 ${figure.title}`}
                   >
                     {figure.download_url ? (
-                      <img
-                        src={apiUrl(figure.download_url)}
+                      <AuthenticatedImage
+                        url={figure.download_url}
                         alt={figure.caption || figure.title}
-                        loading="lazy"
                         className="h-44 w-full object-contain"
+                        placeholderClassName="h-44 w-full"
                       />
                     ) : (
                       <span className="flex h-44 items-center justify-center text-xs text-slate-500">
@@ -340,14 +370,13 @@ export function BidFiguresPanel({
                 关闭
               </Button>
               {selected.download_url ? (
-                <a
-                  href={apiUrl(selected.download_url)}
-                  download={selected.file.split('/').pop() ?? 'figure.png'}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-cyan-400 px-4 text-sm font-medium text-[#020617] transition hover:brightness-110"
+                <Button
+                  loading={downloading === selected.figure_id}
+                  onClick={() => void download(selected)}
                 >
                   <Icon name="download" className="h-4 w-4" />
                   下载图片
-                </a>
+                </Button>
               ) : null}
             </>
           ) : null
@@ -356,10 +385,12 @@ export function BidFiguresPanel({
         {selected ? (
           <div className="space-y-4">
             {selected.download_url ? (
-              <img
-                src={apiUrl(selected.download_url)}
+              <AuthenticatedImage
+                url={selected.download_url}
                 alt={selected.caption || selected.title}
+                loading="eager"
                 className="mx-auto max-h-[65vh] max-w-full rounded-xl border border-slate-800 bg-white object-contain shadow-lg shadow-black/20"
+                placeholderClassName="mx-auto px-4 py-10"
               />
             ) : null}
             <div className="grid gap-2 text-[11px] leading-5 sm:grid-cols-2">

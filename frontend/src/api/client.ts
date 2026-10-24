@@ -38,6 +38,33 @@ const API_BASE_KEY = 'much-agents:api-base:v1'
 const ENV_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || ''
 
+let authToken: string | null = null
+let unauthorizedHandler: (() => void) | null = null
+
+export function setAuthToken(token: string | null): void {
+  authToken = token
+}
+
+export function getAuthToken(): string | null {
+  return authToken
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler
+}
+
+function withAuth(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  if (authToken) headers.set('Authorization', `Bearer ${authToken}`)
+  return { ...init, headers }
+}
+
+function notifyUnauthorized(path: string): void {
+  if (!authToken || path.startsWith('/api/auth/login')) return
+  authToken = null
+  unauthorizedHandler?.()
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -128,10 +155,10 @@ function formatDetail(detail: unknown): string {
   return ''
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(apiUrl(path), init)
+    response = await fetch(apiUrl(path), withAuth(init))
   } catch {
     throw new ApiError(
       0,
@@ -139,6 +166,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     )
   }
   if (!response.ok) {
+    if (response.status === 401) notifyUnauthorized(path)
     let detail: unknown = response.statusText
     try {
       const body = (await response.json()) as Record<string, unknown>
@@ -152,10 +180,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
-async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+export async function requestBlob(
+  path: string,
+  init?: RequestInit,
+): Promise<Blob> {
   let response: Response
   try {
-    response = await fetch(apiUrl(path), init)
+    response = await fetch(apiUrl(path), withAuth(init))
   } catch {
     throw new ApiError(
       0,
@@ -163,6 +194,7 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
     )
   }
   if (!response.ok) {
+    if (response.status === 401) notifyUnauthorized(path)
     let detail: unknown = response.statusText
     try {
       const body = (await response.json()) as Record<string, unknown>
@@ -173,6 +205,27 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
     throw new ApiError(response.status, formatDetail(detail) || response.statusText)
   }
   return response.blob()
+}
+
+/** Fetches an artifact with the bearer token; never embed the token in a URL. */
+export function fetchArtifactBlob(url: string): Promise<Blob> {
+  return requestBlob(url)
+}
+
+export async function downloadArtifact(
+  url: string,
+  filename: string,
+): Promise<void> {
+  const blob = await requestBlob(url)
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
 }
 
 function artifactPath(source: ArtifactSource): string {
@@ -482,14 +535,18 @@ export const api = {
 }
 
 export async function fetchArtifactText(artifact: ArtifactInfo): Promise<string> {
-  let response: Response
   try {
-    response = await fetch(artifactUrl(artifact))
-  } catch {
-    throw new ApiError(0, '无法连接 API，产物读取失败')
+    const blob = await requestBlob(artifactUrl(artifact))
+    return await blob.text()
+  } catch (caught) {
+    if (caught instanceof ApiError) {
+      throw new ApiError(
+        caught.status,
+        caught.status === 0
+          ? '无法连接 API，产物读取失败'
+          : `产物读取失败（${caught.status}）：${caught.message}`,
+      )
+    }
+    throw caught
   }
-  if (!response.ok) {
-    throw new ApiError(response.status, `产物读取失败（${response.status}）`)
-  }
-  return response.text()
 }

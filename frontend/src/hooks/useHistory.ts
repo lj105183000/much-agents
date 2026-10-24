@@ -25,12 +25,12 @@ export interface HistoryState {
   markExpired: (jobId: string) => void
 }
 
-export function useHistory(): HistoryState {
-  const [entries, setEntries] = useState<HistoryEntry[]>(loadHistory)
+export function useHistory(scope: string): HistoryState {
+  const [entries, setEntries] = useState<HistoryEntry[]>(() => loadHistory(scope))
 
   useEffect(() => {
-    saveHistory(entries)
-  }, [entries])
+    saveHistory(entries, scope)
+  }, [entries, scope])
 
   const addEntry = useCallback(
     (job: JobCreatedResponse | BidCreatedResponse) => {

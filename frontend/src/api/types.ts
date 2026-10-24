@@ -8,6 +8,61 @@ export type ViewKey =
   | 'search'
   | 'library'
   | 'history'
+  | 'users'
+
+export type UserRole =
+  | 'admin'
+  | 'bid_manager'
+  | 'writer'
+  | 'reviewer'
+  | 'viewer'
+export type AuthRole = UserRole | 'service'
+
+export interface AuthUser {
+  id: string
+  username: string
+  display_name: string
+  role: AuthRole
+}
+
+export interface LoginResponse {
+  token: string
+  expires_at: string
+  user: AuthUser
+}
+
+export interface AuthMeResponse {
+  user: AuthUser
+  auth_enabled: boolean
+}
+
+export interface UserSummary {
+  id: string
+  username: string
+  display_name: string
+  role: UserRole
+  is_active: boolean
+  last_login_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UserListResponse {
+  users: UserSummary[]
+}
+
+export interface UserCreateInput {
+  username: string
+  password: string
+  display_name?: string | null
+  role: UserRole
+}
+
+export interface UserUpdateInput {
+  display_name?: string | null
+  role?: UserRole
+  is_active?: boolean
+}
 export type SearchMode = 'auto' | 'semantic' | 'keyword'
 export type SearchMatch = 'semantic' | 'keyword'
 

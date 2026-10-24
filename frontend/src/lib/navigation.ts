@@ -6,6 +6,7 @@ export interface NavItem {
   label: string
   description: string
   icon: IconName
+  adminOnly?: boolean
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -45,6 +46,13 @@ export const NAV_ITEMS: NavItem[] = [
     description: '查看本次会话的任务',
     icon: 'history',
   },
+  {
+    key: 'users',
+    label: '用户管理',
+    description: '账号、角色与停用',
+    icon: 'users',
+    adminOnly: true,
+  },
 ]
 
 export const VIEW_META: Record<
@@ -74,5 +82,9 @@ export const VIEW_META: Record<
   history: {
     title: '任务历史',
     subtitle: '追踪本机提交的解析与投标任务',
+  },
+  users: {
+    title: '用户管理',
+    subtitle: '创建账号、分配角色、停用账号或重置密码（仅管理员）',
   },
 }

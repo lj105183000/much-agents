@@ -1,4 +1,5 @@
 import type { BidOutlineResponse, BidRunDetail } from '../api/types'
+import { usePermissions } from '../hooks/usePermissions'
 import { formatDate, stageLabel } from '../lib/format'
 import {
   Badge,
@@ -78,6 +79,7 @@ export function BidRunWorkspace({
   onEdit,
   onRegenerate,
 }: BidRunWorkspaceProps) {
+  const { canWrite } = usePermissions()
   const info = runStatus(run.status)
   const active = ['queued', 'generating', 'assembling'].includes(run.status)
   const narratives =
@@ -166,19 +168,27 @@ export function BidRunWorkspace({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
-          {active ? (
+          {!canWrite ? (
+            <p className="text-[11px] text-slate-500">
+              当前账号为只读或复核角色，可以查看进度与章节正文，但不能生成、编辑、组装或导出。
+            </p>
+          ) : null}
+          {canWrite && active ? (
             <Button variant="danger" size="sm" onClick={onCancel} loading={busy}>
               <Icon name="x" className="h-3.5 w-3.5" />
               取消生成
             </Button>
           ) : null}
-          {!active && canGenerate && run.status === 'outline_ready' ? (
+          {canWrite && !active && canGenerate && run.status === 'outline_ready' ? (
             <Button size="sm" onClick={() => onGenerate()} loading={busy}>
               <Icon name="sparkles" className="h-3.5 w-3.5" />
               生成所选章节
             </Button>
           ) : null}
-          {!active && canGenerate && ['paused', 'failed'].includes(run.status) ? (
+          {canWrite &&
+          !active &&
+          canGenerate &&
+          ['paused', 'failed'].includes(run.status) ? (
             <>
               <Button size="sm" onClick={onResume} loading={busy}>
                 <Icon name="refresh" className="h-3.5 w-3.5" />
@@ -197,13 +207,13 @@ export function BidRunWorkspace({
               ) : null}
             </>
           ) : null}
-          {!active && allFinal ? (
+          {canWrite && !active && allFinal ? (
             <Button size="sm" onClick={onAssemble} loading={busy}>
               <Icon name="check" className="h-3.5 w-3.5" />
               {run.status === 'assembled' ? '重新组装并检查' : '组装并检查'}
             </Button>
           ) : null}
-          {!active && !canGenerate && !allFinal ? (
+          {canWrite && !active && !canGenerate && !allFinal ? (
             <p className="text-[11px] text-slate-500">
               没有选中的叙述章节；请在大纲中勾选至少一节。
             </p>
@@ -253,7 +263,7 @@ export function BidRunWorkspace({
                         预览
                       </Button>
                     ) : null}
-                    {section.status === 'final' && !active ? (
+                    {canWrite && section.status === 'final' && !active ? (
                       <>
                         <Button
                           variant="ghost"

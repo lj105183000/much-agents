@@ -1,24 +1,30 @@
 import { useState } from 'react'
-import { getApiBase, setApiBase as persistApiBase } from './api/client'
-import type { BidRunSummary, ViewKey } from './api/types'
+import { getApiBase } from './api/client'
+import type { AuthUser, BidRunSummary, ViewKey } from './api/types'
+import { useAuth } from './auth/useAuth'
 import { Header } from './components/Header'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { Icon } from './components/icons'
+import { Spinner } from './components/ui'
 import { useDocuments } from './hooks/useDocuments'
 import { useHealth } from './hooks/useHealth'
 import { useHistory, useHistoryPoller } from './hooks/useHistory'
 import { useTheme } from './hooks/useTheme'
+import { saveApiBase } from './lib/apiBase'
 import { degradedHealthDetail } from './lib/health'
 import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
 import { CompaniesView } from './views/CompaniesView'
 import { HistoryView } from './views/HistoryView'
 import { LibraryView } from './views/LibraryView'
+import { LoginView } from './views/LoginView'
 import { SearchView } from './views/SearchView'
+import { UsersView } from './views/UsersView'
 import { WorkbenchView } from './views/WorkbenchView'
 
-function App() {
+function AuthenticatedApp({ user }: { user: AuthUser }) {
+  const { authEnabled, logout } = useAuth()
   const [view, setView] = useState<ViewKey>('workbench')
   const [apiBase, setApiBase] = useState(getApiBase)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -27,7 +33,7 @@ function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const health = useHealth(apiBase)
-  const history = useHistory()
+  const history = useHistory(user.id)
   const documents = useDocuments(apiBase)
   const { theme, toggle: toggleTheme } = useTheme()
 
@@ -57,7 +63,7 @@ function App() {
   }
 
   const saveBase = (value: string) => {
-    setApiBase(persistApiBase(value))
+    setApiBase(saveApiBase(value, apiBase))
   }
 
   return (
@@ -68,6 +74,9 @@ function App() {
         health={health}
         apiBase={apiBase}
         onOpenSettings={() => setSettingsOpen(true)}
+        user={user}
+        authEnabled={authEnabled}
+        onLogout={() => void logout()}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header
@@ -79,6 +88,9 @@ function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
+          user={user}
+          authEnabled={authEnabled}
+          onLogout={() => void logout()}
         />
         <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">
           <div className="mx-auto w-full max-w-6xl space-y-5">
@@ -175,6 +187,15 @@ function App() {
                 onNavigate={navigate}
               />
             ) : null}
+            {view === 'users' ? (
+              authEnabled && user.role === 'admin' ? (
+                <UsersView />
+              ) : (
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-4 py-6 text-xs text-slate-400">
+                  用户管理仅对管理员开放。
+                </div>
+              )
+            ) : null}
           </div>
         </main>
       </div>
@@ -189,6 +210,25 @@ function App() {
       ) : null}
     </div>
   )
+}
+
+function App() {
+  const { status, user } = useAuth()
+
+  if (status === 'loading') {
+    return (
+      <div className="app-bg flex min-h-screen items-center justify-center gap-2 text-sm text-slate-400">
+        <Spinner className="h-5 w-5" />
+        正在验证登录状态…
+      </div>
+    )
+  }
+
+  if (status === 'anonymous' || !user) {
+    return <LoginView />
+  }
+
+  return <AuthenticatedApp key={user.id} user={user} />
 }
 
 export default App

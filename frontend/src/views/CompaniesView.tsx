@@ -14,6 +14,7 @@ import {
   inputClass,
 } from '../components/ui'
 import { useCompanies } from '../hooks/useCompanies'
+import { usePermissions } from '../hooks/usePermissions'
 import { formatDate } from '../lib/format'
 import { getPathValue } from '../lib/profile'
 import type { ProfileObject } from '../lib/profile'
@@ -30,6 +31,7 @@ export function CompaniesView({
   onNavigate,
 }: CompaniesViewProps) {
   const { companies, loading, error, refresh } = useCompanies(apiBase)
+  const { canManage, isAdmin } = usePermissions()
   const [query, setQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -130,13 +132,20 @@ export function CompaniesView({
                 <Icon name="refresh" className="h-3.5 w-3.5" />
                 刷新
               </Button>
-              <Button size="sm" onClick={openCreate}>
-                <Icon name="building" className="h-3.5 w-3.5" />
-                新建公司
-              </Button>
+              {canManage ? (
+                <Button size="sm" onClick={openCreate}>
+                  <Icon name="building" className="h-3.5 w-3.5" />
+                  新建公司
+                </Button>
+              ) : null}
             </div>
           }
         />
+        {!canManage ? (
+          <p className="mt-3 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] leading-5 text-slate-500">
+            当前角色只能查看公司摘要；电话、开户行与完整投标人资料仅对投标经理和管理员可见。
+          </p>
+        ) : null}
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <div className="relative min-w-[15rem] flex-1">
             <Icon
@@ -179,10 +188,12 @@ export function CompaniesView({
           description={
             companies.length
               ? '换一个公司名称、信用代码、地址或电话试试。'
-              : '新建一家公司并保存完整投标人资料，之后编写标书时可以直接载入。'
+              : canManage
+                ? '新建一家公司并保存完整投标人资料，之后编写标书时可以直接载入。'
+                : '公司库为空，请联系投标经理或管理员添加公司资料。'
           }
           action={
-            companies.length ? undefined : (
+            companies.length || !canManage ? undefined : (
               <Button onClick={openCreate}>
                 <Icon name="building" className="h-4 w-4" />
                 新建公司
@@ -244,22 +255,26 @@ export function CompaniesView({
                   更新于 {formatDate(company.updated_at)}
                 </span>
                 <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void openEdit(company)}
-                  >
-                    <Icon name="file" className="h-3.5 w-3.5" />
-                    编辑
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void remove(company)}
-                  >
-                    <Icon name="trash" className="h-3.5 w-3.5" />
-                    删除
-                  </Button>
+                  {canManage ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void openEdit(company)}
+                    >
+                      <Icon name="file" className="h-3.5 w-3.5" />
+                      编辑
+                    </Button>
+                  ) : null}
+                  {isAdmin ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void remove(company)}
+                    >
+                      <Icon name="trash" className="h-3.5 w-3.5" />
+                      删除
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </Card>

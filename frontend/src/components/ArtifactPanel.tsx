@@ -3,11 +3,13 @@ import {
   api,
   ApiError,
   artifactUrl,
+  downloadArtifact,
   fetchArtifactText,
 } from '../api/client'
 import type { ArtifactInfo, ArtifactSource } from '../api/types'
 import { formatBytes, formatDate } from '../lib/format'
 import { cn } from '../lib/cn'
+import { AuthenticatedImage } from './AuthenticatedImage'
 import { MarkdownPreview } from './MarkdownPreview'
 import { Modal } from './Modal'
 import { Button, Card, EmptyState, Spinner } from './ui'
@@ -68,6 +70,8 @@ export function ArtifactPanel({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewTruncated, setPreviewTruncated] = useState(false)
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
   const key = sourceKey(source)
 
   useEffect(() => {
@@ -134,6 +138,20 @@ export function ArtifactPanel({
     }
   }, [selected])
 
+  const download = async (artifact: ArtifactInfo) => {
+    setDownloading(artifact.path)
+    setDownloadError(null)
+    try {
+      await downloadArtifact(artifactUrl(artifact), artifact.name)
+    } catch (caught) {
+      setDownloadError(
+        caught instanceof ApiError ? caught.message : '产物下载失败',
+      )
+    } finally {
+      setDownloading(null)
+    }
+  }
+
   const resolveImageUrl = useCallback(
     (src: string) => (selected ? resolveArtifactImage(selected, src) : null),
     [selected],
@@ -151,6 +169,12 @@ export function ArtifactPanel({
           </span>
         </div>
       </div>
+
+      {downloadError ? (
+        <p className="border-b border-slate-800 px-4 py-2 text-[11px] leading-5 text-red-200">
+          {downloadError}
+        </p>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center gap-2 px-4 py-8 text-xs text-slate-500">
@@ -198,14 +222,15 @@ export function ArtifactPanel({
                     预览
                   </Button>
                 ) : null}
-                <a
-                  href={artifactUrl(artifact)}
-                  download={artifact.name}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={downloading === artifact.path}
+                  onClick={() => void download(artifact)}
                 >
                   <Icon name="download" className="h-3.5 w-3.5" />
                   下载
-                </a>
+                </Button>
               </div>
             </li>
           ))}
@@ -223,24 +248,25 @@ export function ArtifactPanel({
               <Button variant="ghost" onClick={() => setSelected(null)}>
                 关闭
               </Button>
-              <a
-                href={artifactUrl(selected)}
-                download={selected.name}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-cyan-400 px-4 text-sm font-medium text-[#020617] transition hover:brightness-110"
+              <Button
+                loading={downloading === selected.path}
+                onClick={() => void download(selected)}
               >
                 <Icon name="download" className="h-4 w-4" />
                 下载文件
-              </a>
+              </Button>
             </>
           ) : null
         }
       >
         {selectedIsImage && selected ? (
           <div className="flex flex-col items-center gap-3">
-            <img
-              src={artifactUrl(selected)}
+            <AuthenticatedImage
+              url={artifactUrl(selected)}
               alt={selected.name}
+              loading="eager"
               className="max-h-[68vh] max-w-full rounded-xl border border-slate-800 bg-white object-contain shadow-lg shadow-black/20"
+              placeholderClassName="px-4 py-10"
             />
             <p className="text-center text-[11px] text-slate-500">
               {selected.path} · {formatBytes(selected.size)}

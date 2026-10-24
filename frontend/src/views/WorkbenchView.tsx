@@ -19,6 +19,7 @@ import {
   selectClass,
 } from '../components/ui'
 import { useJobPolling } from '../hooks/useJobPolling'
+import { usePermissions } from '../hooks/usePermissions'
 
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
@@ -46,6 +47,7 @@ export function WorkbenchView({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
+  const { canWrite } = usePermissions()
 
   const polling = useJobPolling(jobId, { onUpdate: onJobUpdate })
   const job = polling.job
@@ -91,7 +93,11 @@ export function WorkbenchView({
           description="默认执行完整流程：MinerU 解析 → DeepSeek 抽取 → 分块 → Chroma 入库。"
         />
         <div className="mt-4">
-          <Dropzone file={file} onFile={setFile} disabled={busy} />
+          <Dropzone
+            file={file}
+            onFile={setFile}
+            disabled={busy || !canWrite}
+          />
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -105,7 +111,7 @@ export function WorkbenchView({
               className={selectClass}
               value={parser}
               onChange={(event) => setParser(event.target.value as ParserChoice)}
-              disabled={busy}
+              disabled={busy || !canWrite}
             >
               <option value="auto">自动</option>
               <option value="mineru">MinerU 云端</option>
@@ -118,14 +124,14 @@ export function WorkbenchView({
               onChange={setExtract}
               label="信息抽取"
               hint="编写标书所必需"
-              disabled={busy}
+              disabled={busy || !canWrite}
             />
             <Toggle
               checked={ingest}
               onChange={setIngest}
               label="向量入库"
               hint="需要 Chroma 与智谱 key"
-              disabled={busy}
+              disabled={busy || !canWrite}
             />
           </div>
         </div>
@@ -146,7 +152,7 @@ export function WorkbenchView({
           className="mt-4 w-full"
           onClick={() => void submit()}
           loading={submitting}
-          disabled={!file || busy}
+          disabled={!file || busy || !canWrite}
         >
           <Icon name="play" className="h-4 w-4" />
           开始解析
@@ -154,6 +160,11 @@ export function WorkbenchView({
         <p className="mt-2 text-center text-[11px] text-slate-600">
           上传后任务在后台运行，可切换到任务历史继续查看。
         </p>
+        {!canWrite ? (
+          <p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-center text-[11px] leading-5 text-amber-200/80">
+            当前账号为只读或复核角色，不能上传解析。你仍可浏览文档库、任务历史与已有产物。
+          </p>
+        ) : null}
       </Card>
 
       <div className="space-y-4">

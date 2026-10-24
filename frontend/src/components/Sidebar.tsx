@@ -1,8 +1,9 @@
-import type { ViewKey } from '../api/types'
+import type { AuthUser, ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import { cn } from '../lib/cn'
 import { healthDependencySummary } from '../lib/health'
 import { NAV_ITEMS } from '../lib/navigation'
+import { ROLE_LABELS } from '../lib/roles'
 import { Icon } from './icons'
 
 interface SidebarProps {
@@ -11,6 +12,9 @@ interface SidebarProps {
   health: HealthState
   apiBase: string
   onOpenSettings: () => void
+  user: AuthUser
+  authEnabled: boolean
+  onLogout: () => void
 }
 
 const HEALTH_STYLES = {
@@ -42,8 +46,14 @@ export function Sidebar({
   health,
   apiBase,
   onOpenSettings,
+  user,
+  authEnabled,
+  onLogout,
 }: SidebarProps) {
   const healthStyle = HEALTH_STYLES[health.state]
+  const navItems = NAV_ITEMS.filter(
+    (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
+  )
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950/70 px-4 py-5 lg:flex">
@@ -60,7 +70,7 @@ export function Sidebar({
       </div>
 
       <nav className="mt-8 space-y-1.5" aria-label="主导航">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const selected = item.key === active
           return (
             <button
@@ -137,6 +147,35 @@ export function Sidebar({
             </p>
           ) : null}
         </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-950/60 text-xs font-semibold text-cyan-300">
+              {user.display_name.slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-slate-200">
+                {user.display_name}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                {ROLE_LABELS[user.role]}
+                {authEnabled ? '' : ' · 本地模式'}
+              </p>
+            </div>
+            {authEnabled ? (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                aria-label="退出登录"
+                title="退出登录"
+              >
+                <Icon name="logout" className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={onOpenSettings}

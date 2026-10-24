@@ -24,6 +24,10 @@ const STORAGE_KEY = 'much-agents:history:v1'
 const MAX_ENTRIES = 100
 const TERMINAL: JobStatus[] = ['succeeded', 'failed']
 
+function storageKey(scope: string): string {
+  return `${STORAGE_KEY}:${scope}`
+}
+
 function isJobStatus(value: unknown): value is JobStatus {
   return (
     value === 'queued' ||
@@ -66,9 +70,14 @@ function normalizeEntry(value: unknown): HistoryEntry | null {
   }
 }
 
-export function loadHistory(): HistoryEntry[] {
+export function loadHistory(scope: string): HistoryEntry[] {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const key = storageKey(scope)
+    const raw =
+      window.localStorage.getItem(key) ??
+      // Older releases kept a single unscoped list; only the local user may
+      // adopt it, never a named account in a shared browser.
+      (scope === 'local' ? window.localStorage.getItem(STORAGE_KEY) : null)
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -81,16 +90,14 @@ export function loadHistory(): HistoryEntry[] {
   }
 }
 
-export function saveHistory(entries: HistoryEntry[]): void {
+export function saveHistory(entries: HistoryEntry[], scope: string): void {
   const trimmed = entries.slice(0, MAX_ENTRIES)
+  const key = storageKey(scope)
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed))
+    window.localStorage.setItem(key, JSON.stringify(trimmed))
   } catch {
     try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(trimmed.slice(0, 20)),
-      )
+      window.localStorage.setItem(key, JSON.stringify(trimmed.slice(0, 20)))
     } catch {
       // History is best-effort; the live job view still works.
     }

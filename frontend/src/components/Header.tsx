@@ -1,8 +1,9 @@
-import type { ViewKey } from '../api/types'
+import type { AuthUser, ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import type { Theme } from '../hooks/useTheme'
 import { cn } from '../lib/cn'
 import { NAV_ITEMS } from '../lib/navigation'
+import { ROLE_LABELS } from '../lib/roles'
 import { Icon } from './icons'
 
 interface HeaderProps {
@@ -14,6 +15,9 @@ interface HeaderProps {
   theme: Theme
   onToggleTheme: () => void
   onOpenSettings: () => void
+  user: AuthUser
+  authEnabled: boolean
+  onLogout: () => void
 }
 
 const HEALTH_PILL = {
@@ -32,7 +36,14 @@ export function Header({
   theme,
   onToggleTheme,
   onOpenSettings,
+  user,
+  authEnabled,
+  onLogout,
 }: HeaderProps) {
+  const navItems = NAV_ITEMS.filter(
+    (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
+  )
+
   return (
     <header className="border-b border-slate-800/70 bg-slate-950/50 px-4 py-4 backdrop-blur md:px-7">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -51,7 +62,32 @@ export function Header({
             {subtitle}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-1.5 pl-3 pr-1.5">
+            <div className="text-right">
+              <p className="max-w-[10rem] truncate text-[11px] font-medium text-slate-200">
+                {user.display_name}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                {ROLE_LABELS[user.role]}
+              </p>
+            </div>
+            {authEnabled ? (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+                aria-label="退出登录"
+                title="退出登录"
+              >
+                <Icon name="logout" className="h-4 w-4" />
+              </button>
+            ) : (
+              <span className="rounded-lg border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500">
+                本地
+              </span>
+            )}
+          </div>
           <span
             className={cn(
               'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-medium',
@@ -102,7 +138,7 @@ export function Header({
         className="mt-4 flex gap-1 overflow-x-auto pb-0.5 lg:hidden"
         aria-label="移动端导航"
       >
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <button
             key={item.key}
             type="button"

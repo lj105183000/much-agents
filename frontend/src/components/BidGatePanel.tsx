@@ -1,4 +1,5 @@
 import type { BidGateResponse } from '../api/types'
+import { usePermissions } from '../hooks/usePermissions'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, SectionHeader, Spinner } from './ui'
 import { Icon } from './icons'
@@ -57,6 +58,8 @@ export function BidGatePanel({
   exportError,
   onExport,
 }: BidGatePanelProps) {
+  const { canManage, isAdmin } = usePermissions()
+
   return (
     <Card className="overflow-hidden">
       <div className="border-b border-slate-800 px-4 py-3">
@@ -157,16 +160,26 @@ export function BidGatePanel({
           ) : null}
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {gate.status === 'block' ? (
-              <Button
-                variant="danger"
-                size="sm"
-                loading={exporting}
-                onClick={() => onExport(true)}
-              >
-                <Icon name="alert" className="h-3.5 w-3.5" />
-                强制导出 DOCX
-              </Button>
+            {!canManage ? (
+              <p className="text-[11px] text-slate-500">
+                导出 DOCX 需要投标经理或管理员权限；你仍可在下方产物面板直接下载文件。
+              </p>
+            ) : gate.status === 'block' ? (
+              isAdmin ? (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  loading={exporting}
+                  onClick={() => onExport(true)}
+                >
+                  <Icon name="alert" className="h-3.5 w-3.5" />
+                  强制导出 DOCX
+                </Button>
+              ) : (
+                <p className="text-[11px] text-amber-200/80">
+                  门禁已阻止导出；强制导出仅限管理员。
+                </p>
+              )
             ) : (
               <Button
                 size="sm"
