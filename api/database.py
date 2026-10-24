@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -100,14 +101,102 @@ class UserSessionRow(Base):
     user_agent: Mapped[str | None] = mapped_column(String(255))
 
 
+class ProjectRow(Base):
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_projects_slug"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(
+        String(512), nullable=False, server_default=text("''")
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ProjectMemberRow(Base):
+    __tablename__ = "project_members"
+    __table_args__ = (
+        Index("ix_project_members_user_id", "user_id"),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class DocumentRow(Base):
+    __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_project_created", "project_id", "created_at"),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    doc_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class BidRunRow(Base):
     __tablename__ = "bid_runs"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "doc_id"],
+            ["documents.project_id", "documents.doc_id"],
+            name="fk_bid_runs_project_document",
+            ondelete="CASCADE",
+        ),
         Index("ix_bid_runs_doc_created", "doc_id", "created_at"),
+        Index("ix_bid_runs_project_created", "project_id", "created_at"),
         Index("ix_bid_runs_status", "status"),
         Index("ix_bid_runs_company", "company_id"),
         Index(
             "uq_bid_runs_active_doc",
+            "project_id",
             "doc_id",
             unique=True,
             postgresql_where=text(
@@ -117,6 +206,7 @@ class BidRunRow(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
     doc_id: Mapped[str] = mapped_column(String(128), nullable=False)
     company_id: Mapped[str | None] = mapped_column(
         String(36),
@@ -276,6 +366,7 @@ def make_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(
         database_url,
         pool_pre_ping=True,
+        hide_parameters=True,
         connect_args={"timeout": 5},
     )
 
@@ -300,6 +391,9 @@ __all__ = [
     "BidRunRow",
     "BidSectionStateRow",
     "CompanyRow",
+    "DocumentRow",
+    "ProjectMemberRow",
+    "ProjectRow",
     "UserRow",
     "UserSessionRow",
     "init_schema",

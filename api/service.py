@@ -35,15 +35,11 @@ from src.storage.keys import inbox_key
 
 from .config import ApiSettings
 from .jobs import Job, JobStoreError, JobStoreProtocol
+from .projects import ProjectError
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_CONTENT_TYPES = {
-    "application/pdf",
-    "application/x-pdf",
-    "application/octet-stream",
-    "binary/octet-stream",
-}
+ALLOWED_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 
 
 class UploadError(Exception):
@@ -66,6 +62,41 @@ class ParseFunc(Protocol):
 
 class Dispatcher(Protocol):
     def dispatch(self, job: Job) -> None: ...
+
+
+class DocumentRegistry(Protocol):
+    async def register_document(
+        self,
+        project_id: str,
+        doc_id: str,
+        filename: str,
+        created_by: str | None,
+    ) -> object: ...
+
+
+def _validate_pdf_file(path: Path, max_pages: int) -> None:
+    """Reject files that are not openable, encrypted, or larger than the cap."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception as exc:  # noqa: BLE001 - dependency is installed
+        raise UploadError(503, "PDF validation is unavailable") from exc
+    try:
+        document = fitz.open(path)
+    except Exception as exc:  # noqa: BLE001 - any parse failure means invalid
+        raise UploadError(400, "uploaded file is not a valid PDF") from exc
+    try:
+        if getattr(document, "needs_pass", False):
+            raise UploadError(400, "encrypted PDFs are not accepted")
+        pages = int(getattr(document, "page_count", 0) or 0)
+        if pages <= 0:
+            raise UploadError(400, "uploaded PDF has no pages")
+        if max_pages > 0 and pages > max_pages:
+            raise UploadError(
+                413,
+                f"PDF has {pages} pages; the limit is {max_pages}",
+            )
+    finally:
+        document.close()
 
 
 def sanitize_pdf_filename(filename: str | None) -> str:
@@ -116,7 +147,7 @@ async def save_upload(
 
     if size == 0:
         raise UploadError(400, "uploaded file is empty")
-    if b"%PDF-" not in head:
+    if not head.startswith(b"%PDF-"):
         raise UploadError(415, "uploaded file is not a PDF")
     return size, digest.hexdigest()
 
@@ -302,11 +333,13 @@ class ParseService:
         store: JobStoreProtocol,
         dispatch: Callable[[Job], None],
         storage: Storage | None = None,
+        document_registry: DocumentRegistry | None = None,
     ) -> None:
         self.api_settings = api_settings
         self.store = store
         self.dispatch = dispatch
         self.storage = storage
+        self.document_registry = document_registry
 
     async def submit(
         self,
@@ -315,6 +348,8 @@ class ParseService:
         parser: str,
         extract: bool,
         ingest: bool,
+        project_id: str | None = None,
+        created_by: str | None = None,
     ) -> Job:
         filename = sanitize_pdf_filename(upload.filename)
         validate_content_type(upload.content_type)
@@ -327,6 +362,11 @@ class ParseService:
         try:
             _size, digest = await save_upload(
                 upload, destination, self.api_settings.max_upload_bytes
+            )
+            await asyncio.to_thread(
+                _validate_pdf_file,
+                destination,
+                self.api_settings.max_pdf_pages,
             )
             if is_remote(self.storage):
                 assert self.storage is not None
@@ -342,6 +382,22 @@ class ParseService:
                     ) from exc
             stem = safe_stem(filename)[:60].strip(" .-") or "doc"
             doc_id = f"{stem}-{digest[:12]}"
+            registry = self.document_registry
+            if project_id and registry is not None:
+                try:
+                    await registry.register_document(
+                        project_id, doc_id, filename, created_by
+                    )
+                except ProjectError as exc:
+                    status_code = (
+                        exc.status_code if exc.status_code in (400, 404, 409) else 503
+                    )
+                    raise UploadError(status_code, exc.detail) from exc
+            payload: dict[str, str] = {}
+            if project_id:
+                payload["project_id"] = project_id
+            if created_by:
+                payload["created_by"] = created_by
             try:
                 job = self.store.create(
                     job_id=job_id,
@@ -351,6 +407,7 @@ class ParseService:
                     extract=extract,
                     ingest=ingest,
                     source_path=destination,
+                    payload=payload or None,
                 )
             except JobStoreError as exc:
                 raise UploadError(503, "job store is unavailable") from exc

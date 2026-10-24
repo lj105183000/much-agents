@@ -43,6 +43,31 @@ class Job:
     kind: JobKind = "parse"
     payload: dict[str, Any] | None = None
 
+    def _sanitized_result(self) -> dict[str, Any] | None:
+        """Return the job result without server-side absolute paths."""
+        if not isinstance(self.result, dict):
+            return self.result
+        run_id = str((self.payload or {}).get("run_id") or self.job_id)
+        output_rel = (
+            f"parsed/{self.doc_id}"
+            if self.kind == "parse"
+            else f"bids/{self.doc_id}/{run_id}"
+        )
+        sanitized = dict(self.result)
+        for key, value in {
+            "output_dir": output_rel,
+            "run_dir": output_rel,
+            "bid_markdown": "bid.md",
+            "bid_docx": "bid.docx",
+            "report_path": "report.json",
+            "outline_path": "outline.json",
+            "sections_dir": "sections",
+        }.items():
+            if key in sanitized:
+                sanitized[key] = value
+        sanitized.pop("source_path", None)
+        return sanitized
+
     def to_view(self) -> dict[str, Any]:
         """JSON-safe snapshot. ``source_path``/``payload`` are not exposed."""
         return {
@@ -61,7 +86,7 @@ class Job:
             "percent": self.percent,
             "message": self.message,
             "exit_code": self.exit_code,
-            "result": self.result,
+            "result": self._sanitized_result(),
             "error": self.error,
         }
 

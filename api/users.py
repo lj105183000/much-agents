@@ -24,6 +24,7 @@ from .auth import (
 )
 from .config import ApiSettings
 from .db import Database
+from .projects import ProjectRepository
 
 
 def _read_password(*, password_stdin: bool) -> str:
@@ -119,6 +120,8 @@ async def _run(args: argparse.Namespace) -> int:
                 display_name=args.display_name,
                 role=role,
             )
+            projects = ProjectRepository(database.session_factory)
+            await projects.add_default_member(user.id, user.role)
             print(f"已创建用户 {user.username}（{user.role}），id={user.id}")
             return 0
 

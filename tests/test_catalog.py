@@ -114,7 +114,8 @@ def test_bid_job_artifacts_exclude_profile(catalog_app) -> None:
         assert response.status_code == 200
         body = response.json()
         paths = {item["path"] for item in body["artifacts"]}
-        assert {"bid.md", "bid.docx", "report.json", "outline.json", "sections/narr-06-01.md"} <= paths
+        assert {"bid.md", "report.json", "outline.json", "sections/narr-06-01.md"} <= paths
+        assert "bid.docx" not in paths
         assert "profile.json" not in paths
         assert client.get("/api/jobs/bid-job/artifacts/profile.json").status_code == 404
 
@@ -151,8 +152,13 @@ def test_bid_run_artifacts_and_profile_exclusion(catalog_app) -> None:
             ).status_code
             == 404
         )
-        docx = next(item for item in body["artifacts"] if item["path"] == "bid.docx")
-        assert client.get(docx["download_url"]).status_code == 200
+        assert "bid.docx" not in paths
+        assert (
+            client.get(
+                "/api/documents/doc-1/bids/run-1/artifacts/bid.docx"
+            ).status_code
+            == 404
+        )
 
 
 def test_artifact_path_traversal_is_rejected(catalog_app) -> None:

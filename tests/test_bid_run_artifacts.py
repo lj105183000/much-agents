@@ -51,7 +51,6 @@ def test_staged_job_artifacts_use_run_id_and_hide_profile(tmp_path: Path) -> Non
     artifacts = list_artifacts(root, patterns, "/artifacts")
     assert {item.path for item in artifacts} == {
         "bid.md",
-        "bid.docx",
         "gate.json",
         "figures/fig-01.png",
         "figures/manifest.json",
@@ -64,11 +63,14 @@ def test_staged_job_artifacts_use_run_id_and_hide_profile(tmp_path: Path) -> Non
     with pytest.raises(ArtifactError):
         resolve_artifact(root, patterns, "profile.json")
     with pytest.raises(ArtifactError):
+        resolve_artifact(root, patterns, "bid.docx")
+    with pytest.raises(ArtifactError):
         resolve_artifact(root, patterns, "figures/../profile.json")
 
 
-def test_bid_patterns_never_include_profile() -> None:
+def test_bid_patterns_never_include_profile_or_docx() -> None:
     assert "gate.json" in BID_PATTERNS
     assert "figures/manifest.json" in BID_PATTERNS
     assert "figures/*.png" in BID_PATTERNS
     assert "profile.json" not in BID_PATTERNS
+    assert "bid.docx" not in BID_PATTERNS

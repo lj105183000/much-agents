@@ -19,6 +19,7 @@ def _now() -> datetime:
 @dataclass(frozen=True, slots=True)
 class BidRunRecord:
     run_id: str
+    project_id: str
     doc_id: str
     company_id: str | None
     status: str
@@ -91,6 +92,7 @@ class SectionStateRecord:
 def _run_record(row: BidRunRow) -> BidRunRecord:
     return BidRunRecord(
         run_id=row.id,
+        project_id=row.project_id,
         doc_id=row.doc_id,
         company_id=row.company_id,
         status=row.status,
@@ -176,6 +178,7 @@ class BidRunRepository:
         now = _now()
         run_row = BidRunRow(
             id=run.run_id,
+            project_id=run.project_id,
             doc_id=run.doc_id,
             company_id=run.company_id,
             status=run.status,
@@ -260,11 +263,14 @@ class BidRunRepository:
     async def list_runs(
         self,
         *,
+        project_id: str | None = None,
         doc_id: str | None = None,
         status: str | None = None,
         limit: int = 50,
     ) -> list[BidRunRecord]:
         statement = select(BidRunRow).order_by(BidRunRow.created_at.desc()).limit(limit)
+        if project_id:
+            statement = statement.where(BidRunRow.project_id == project_id)
         if doc_id:
             statement = statement.where(BidRunRow.doc_id == doc_id)
         if status:
@@ -273,9 +279,14 @@ class BidRunRepository:
             rows = (await session.execute(statement)).scalars().all()
             return [_run_record(row) for row in rows]
 
-    async def get_run(self, run_id: str) -> BidRunRecord | None:
+    async def get_run(
+        self, run_id: str, *, project_id: str | None = None
+    ) -> BidRunRecord | None:
+        statement = select(BidRunRow).where(BidRunRow.id == run_id)
+        if project_id:
+            statement = statement.where(BidRunRow.project_id == project_id)
         async with self._session_factory() as session:
-            row = await session.get(BidRunRow, run_id)
+            row = (await session.execute(statement)).scalar_one_or_none()
             return _run_record(row) if row is not None else None
 
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:

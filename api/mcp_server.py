@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal, Sequence
 from urllib.parse import quote, urlsplit
+from uuid import UUID
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -74,6 +75,7 @@ class McpServerSettings:
     http_port: int = DEFAULT_HTTP_PORT
     http_token: str = ""
     api_token: str = ""
+    project_id: str = ""
 
     @classmethod
     def from_env(cls) -> "McpServerSettings":
@@ -93,12 +95,21 @@ class McpServerSettings:
             raise ValueError("MCP_HTTP_PORT must be an integer") from exc
         if not 1 <= port <= 65535:
             raise ValueError("MCP_HTTP_PORT must be between 1 and 65535")
+        project_id = os.getenv("MCP_DEFAULT_PROJECT_ID", "").strip()
+        if project_id:
+            try:
+                project_id = str(UUID(project_id))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise ValueError(
+                    "MCP_DEFAULT_PROJECT_ID must be a UUID"
+                ) from exc
         return cls(
             api_base_url=base_url.rstrip("/"),
             http_host=host,
             http_port=port,
             http_token=os.getenv("MCP_HTTP_TOKEN", "").strip(),
             api_token=os.getenv("MCP_API_TOKEN", "").strip(),
+            project_id=project_id,
         )
 
 
@@ -157,22 +168,23 @@ class ApiProxy:
         timeout: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
         api_token: str = "",
+        project_id: str = "",
     ) -> None:
         _validate_api_base_url(base_url)
         self.base_url = base_url.rstrip("/")
         self._api_token = api_token.strip()
-        headers = (
-            {"Authorization": f"Bearer {self._api_token}"}
-            if self._api_token
-            else None
-        )
+        self._project_id = project_id.strip()
+        headers: dict[str, str] = {}
+        if self._api_token:
+            headers["Authorization"] = f"Bearer {self._api_token}"
+        if self._project_id:
+            headers["X-Project-Id"] = self._project_id
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
             transport=transport,
-            headers=headers,
+            headers=headers or None,
         )
-
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -357,6 +369,7 @@ def create_server(
     api_proxy = proxy or ApiProxy(
         settings.api_base_url,
         api_token=settings.api_token,
+        project_id=settings.project_id,
     )
     server = FastMCP(
         "much-agents",
@@ -721,6 +734,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         logger.warning(
             "MCP_API_TOKEN is not set; the API will reject MCP proxy calls "
             "with 401 while AUTH_ENABLED=true"
+        )
+    if not settings.project_id:
+        logger.warning(
+            "MCP_DEFAULT_PROJECT_ID is not set; project-scoped API calls will "
+            "fail with 400 until it is configured"
         )
 
     transport: Literal["stdio", "streamable-http"] = (

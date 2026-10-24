@@ -12,6 +12,7 @@ from api.artifacts import matches_pattern
 from api.bid_run_repo import BidRunRecord
 from api.bid_runs import BidRunService
 from api.jobs import JobStore
+from api.projects import DEFAULT_PROJECT_ID
 from api.runner import InlineRunner
 from api.service import execute_parse_job
 from api.streaming import parse_range
@@ -23,6 +24,7 @@ from tests.fakes import (
     MemoryStorage,
     make_api_settings,
     make_bid_settings,
+    make_pdf_bytes,
     make_parse_result,
     make_parse_settings,
     write_parsed_fixture,
@@ -204,7 +206,6 @@ def test_bid_run_artifacts_and_job_artifacts_from_storage(tmp_path: Path) -> Non
         paths = {item["path"] for item in listing.json()["artifacts"]}
         assert {
             "bid.md",
-            "bid.docx",
             "gate.json",
             "report.json",
             "sections/narr-06-01.md",
@@ -212,18 +213,19 @@ def test_bid_run_artifacts_and_job_artifacts_from_storage(tmp_path: Path) -> Non
             "figures/manifest.json",
         } <= paths
         assert "profile.json" not in paths
+        # DOCX is only available through the audited export endpoint.
+        assert "bid.docx" not in paths
         assert (
             client.get(
                 "/api/documents/doc-1/bids/run-1/artifacts/profile.json"
             ).status_code
             == 404
         )
-
-        docx = client.get("/api/documents/doc-1/bids/run-1/artifacts/bid.docx")
-        assert docx.status_code == 200
-        assert docx.content == b"PK\x03\x04fake-docx"
-        assert docx.headers["content-type"].startswith(
-            "application/vnd.openxmlformats"
+        assert (
+            client.get(
+                "/api/documents/doc-1/bids/run-1/artifacts/bid.docx"
+            ).status_code
+            == 404
         )
 
         parse_job = client.get("/api/jobs/parse-job/artifacts")
@@ -310,7 +312,13 @@ def test_upload_and_parse_sync_to_storage(tmp_path: Path) -> None:
     with TestClient(app) as client:
         created = client.post(
             "/api/parse",
-            files={"file": ("sample.pdf", b"%PDF-1.4 test", "application/pdf")},
+            files={
+                "file": (
+                    "sample.pdf",
+                    make_pdf_bytes(),
+                    "application/pdf",
+                )
+            },
         )
         assert created.status_code == 202
         body = created.json()
@@ -432,7 +440,13 @@ def test_storage_unavailable_returns_503(tmp_path: Path) -> None:
 
         uploaded = client.post(
             "/api/parse",
-            files={"file": ("sample.pdf", b"%PDF-1.4 test", "application/pdf")},
+            files={
+                "file": (
+                    "sample.pdf",
+                    make_pdf_bytes(),
+                    "application/pdf",
+                )
+            },
         )
         assert uploaded.status_code == 503
         inbox = tmp_path / "upload" / "inbox"
@@ -445,6 +459,7 @@ def test_export_streams_from_storage(tmp_path: Path) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     repo.runs["run-1"] = BidRunRecord(
         run_id="run-1",
+        project_id=DEFAULT_PROJECT_ID,
         doc_id="doc-1",
         company_id=None,
         status="assembled",

@@ -35,7 +35,6 @@ PARSE_PATTERNS: tuple[str, ...] = (
 )
 BID_PATTERNS: tuple[str, ...] = (
     "bid.md",
-    "bid.docx",
     "report.json",
     "outline.json",
     "gate.json",

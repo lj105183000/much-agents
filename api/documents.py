@@ -175,11 +175,14 @@ def _list_storage_documents(
     storage: Storage,
     *,
     limit: int,
+    allowed_doc_ids: set[str] | None = None,
 ) -> list[DocumentSummary]:
     parsed = _storage_docs(storage.list("parsed"), "parsed")
     runs_by_doc = _storage_bid_runs(storage.list("bids"))
     documents: list[DocumentSummary] = []
     for doc_id, files in parsed.items():
+        if allowed_doc_ids is not None and doc_id not in allowed_doc_ids:
+            continue
         meta = _storage_load_json(storage, f"parsed/{doc_id}/meta.json")
         if not isinstance(meta, dict) or "full.md" not in files:
             continue
@@ -242,9 +245,14 @@ def list_documents(
     *,
     limit: int = 200,
     storage: Storage | None = None,
+    allowed_doc_ids: set[str] | None = None,
 ) -> list[DocumentSummary]:
     if storage is not None and storage.backend != "local":
-        return _list_storage_documents(storage, limit=limit)
+        return _list_storage_documents(
+            storage,
+            limit=limit,
+            allowed_doc_ids=allowed_doc_ids,
+        )
     base = parse_settings.parsed_dir
     if not base.is_dir():
         return []
@@ -257,6 +265,8 @@ def list_documents(
     documents: list[DocumentSummary] = []
     for child in children:
         if not child.is_dir() or not is_safe_id(child.name):
+            continue
+        if allowed_doc_ids is not None and child.name not in allowed_doc_ids:
             continue
         meta = _load_json(child / "meta.json")
         if not isinstance(meta, dict) or not (child / "full.md").is_file():

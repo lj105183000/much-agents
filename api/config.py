@@ -59,6 +59,7 @@ class ApiSettings:
     host: str = "0.0.0.0"
     port: int = 8001
     max_upload_mb: int = 200
+    max_pdf_pages: int = 200
     job_workers: int = 1
     cors_origins: tuple[str, ...] = ("*",)
     task_backend: Literal["celery", "local"] = "celery"
@@ -75,6 +76,7 @@ class ApiSettings:
     auth_login_max_failures: int = 5
     auth_lockout_minutes: int = 15
     mcp_api_token: str = ""
+    mcp_default_project_id: str = ""
 
     @property
     def inbox_dir(self) -> Path:
@@ -115,6 +117,7 @@ class ApiSettings:
             host=_str(env, "API_HOST", "0.0.0.0"),
             port=_int(env, "API_PORT", 8001),
             max_upload_mb=_int(env, "MAX_UPLOAD_MB", 200),
+            max_pdf_pages=_int(env, "MAX_PDF_PAGES", 200),
             job_workers=_int(env, "API_JOB_WORKERS", 1),
             cors_origins=origins,
             task_backend=_choice(env, "TASK_BACKEND", "celery", {"celery", "local"}),
@@ -131,4 +134,5 @@ class ApiSettings:
             auth_login_max_failures=_int(env, "AUTH_LOGIN_MAX_FAILURES", 5),
             auth_lockout_minutes=_int(env, "AUTH_LOCKOUT_MINUTES", 15),
             mcp_api_token=_str(env, "MCP_API_TOKEN", ""),
+            mcp_default_project_id=_str(env, "MCP_DEFAULT_PROJECT_ID", ""),
         )

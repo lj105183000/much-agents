@@ -241,7 +241,9 @@ def test_unknown_job_returns_404(client: TestClient) -> None:
 
 
 def test_parse_exception_marks_job_failed(
-    api_settings: ApiSettings, parse_settings: Settings
+    api_settings: ApiSettings,
+    parse_settings: Settings,
+    sample_pdf: Path,
 ) -> None:
     capture = CaptureParse(error=ParseError("boom"))
     app = create_app(
@@ -251,7 +253,7 @@ def test_parse_exception_marks_job_failed(
         parse_func=capture,
     )
     with TestClient(app) as test_client:
-        created = upload(test_client, b"%PDF-1.4 test").json()
+        created = upload(test_client, sample_pdf.read_bytes()).json()
         view = test_client.get(created["poll_url"]).json()
     assert view["status"] == "failed"
     assert view["exit_code"] == 3
@@ -260,7 +262,9 @@ def test_parse_exception_marks_job_failed(
 
 
 def test_non_ok_result_keeps_summary(
-    api_settings: ApiSettings, parse_settings: Settings
+    api_settings: ApiSettings,
+    parse_settings: Settings,
+    sample_pdf: Path,
 ) -> None:
     capture = CaptureParse(
         result_factory=lambda doc_id: make_result(
@@ -274,7 +278,7 @@ def test_non_ok_result_keeps_summary(
         parse_func=capture,
     )
     with TestClient(app) as test_client:
-        created = upload(test_client, b"%PDF-1.4 test").json()
+        created = upload(test_client, sample_pdf.read_bytes()).json()
         view = test_client.get(created["poll_url"]).json()
     assert view["status"] == "failed"
     assert view["exit_code"] == 6
@@ -282,9 +286,14 @@ def test_non_ok_result_keeps_summary(
 
 
 def test_filename_traversal_is_sanitized(
-    client: TestClient, api_settings: ApiSettings, tmp_path: Path
+    client: TestClient,
+    api_settings: ApiSettings,
+    tmp_path: Path,
+    sample_pdf: Path,
 ) -> None:
-    response = upload(client, b"%PDF-1.4 test", filename="../../evil.pdf")
+    response = upload(
+        client, sample_pdf.read_bytes(), filename="../../evil.pdf"
+    )
     assert response.status_code == 202
     body = response.json()
     view = client.get(body["poll_url"]).json()

@@ -535,7 +535,14 @@ def test_bid_run_export_gate_blocks_and_force_overrides(tmp_path: Path) -> None:
 
         blocked = client.post(f"/api/bid-runs/{run_id}/export")
         assert blocked.status_code == 409
-        forced = client.post(f"/api/bid-runs/{run_id}/export", params={"force": "true"})
+        missing_reason = client.post(
+            f"/api/bid-runs/{run_id}/export", params={"force": "true"}
+        )
+        assert missing_reason.status_code == 422
+        forced = client.post(
+            f"/api/bid-runs/{run_id}/export",
+            params={"force": "true", "reason": "客户要求先出稿"},
+        )
         assert forced.status_code == 200
         assert forced.content[:2] == b"PK"
         gate = client.get(f"/api/bid-runs/{run_id}/gate").json()

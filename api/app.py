@@ -33,6 +33,7 @@ from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
+from .projects import ProjectError, ProjectRepository, ProjectService
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
 from .search import SearchService
@@ -58,6 +59,7 @@ def create_app(
     company_service: CompanyService | None = None,
     bid_run_service: BidRunService | None = None,
     auth_service: AuthService | None = None,
+    project_service: ProjectService | None = None,
     storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
@@ -154,22 +156,30 @@ def create_app(
                     celery, task_name=BID_TASK_NAME, queue=BID_QUEUE
                 )
 
+    bid_run_repo = (
+        BidRunRepository(database.session_factory)
+        if database.session_factory is not None
+        else None
+    )
+    project_service = project_service or ProjectService(
+        ProjectRepository(database.session_factory)
+        if database.session_factory is not None
+        else None,
+        auth_enabled=api_settings.auth_enabled,
+        bid_run_repo=bid_run_repo,
+    )
     parse_service = ParseService(
         api_settings=api_settings,
         store=store,
         dispatch=dispatcher.dispatch,
         storage=storage,
+        document_registry=project_service,
     )
     company_service = company_service or CompanyService(
         api_settings.database_url,
         profile_max_mb=bid_settings.profile_max_mb,
         engine=database.engine,
         session_factory=database.session_factory,
-    )
-    bid_run_repo = (
-        BidRunRepository(database.session_factory)
-        if database.session_factory is not None
-        else None
     )
     bid_run_service = bid_run_service or BidRunService(
         bid_settings=bid_settings,
@@ -252,6 +262,7 @@ def create_app(
     app.state.search_service = search_service
     app.state.company_service = company_service
     app.state.auth_service = resolved_auth_service
+    app.state.project_service = project_service
     app.state.storage = storage
     app.add_middleware(
         CORSMiddleware,
@@ -267,6 +278,12 @@ def create_app(
 
     @app.exception_handler(AuthError)
     async def handle_auth_error(_request: Request, exc: AuthError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(ProjectError)
+    async def handle_project_error(
+        _request: Request, exc: ProjectError
+    ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(BidRunError)

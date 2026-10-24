@@ -82,6 +82,8 @@ class BidService:
         profile: dict[str, Any],
         max_sections: int | None,
         company_id: str | None = None,
+        project_id: str | None = None,
+        created_by: str | None = None,
     ) -> Job:
         if is_remote(self.storage):
             assert self.storage is not None
@@ -144,9 +146,16 @@ class BidService:
             except StorageError as exc:
                 shutil.rmtree(run_dir, ignore_errors=True)
                 raise UploadError(503, "object storage is unavailable") from exc
-        payload = {"doc_id": doc_id, "max_sections": resolved_max}
+        payload: dict[str, Any] = {
+            "doc_id": doc_id,
+            "max_sections": resolved_max,
+        }
         if company_key:
             payload["company_id"] = company_key
+        if project_id:
+            payload["project_id"] = project_id
+        if created_by:
+            payload["created_by"] = created_by
         try:
             job = self.store.create(
                 job_id=job_id,

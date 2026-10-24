@@ -19,6 +19,16 @@ from api.bid_run_repo import (
 from api.companies import CompanyError, CompanyRecord
 from api.config import ApiSettings
 from api.jobs import Job, JobStore, JobStoreError
+from api.projects import (
+    DEFAULT_PROJECT_ID,
+    DocumentRecord,
+    MemberRecord,
+    ProjectError,
+    ProjectRecord,
+    ProjectService,
+    UserBrief,
+    project_role_for_global,
+)
 from src.bidding.config import BidSettings
 from src.bidding.errors import BidInputError
 from src.bidding.models import Evidence
@@ -390,12 +400,14 @@ class FailingStore(JobStore):
         self,
         *,
         fail_create: bool = False,
+        fail_get: bool = False,
         fail_get_view: bool = False,
         fail_count: bool = False,
         fail_ping: bool = False,
     ) -> None:
         super().__init__()
         self.fail_create = fail_create
+        self.fail_get = fail_get
         self.fail_get_view = fail_get_view
         self.fail_count = fail_count
         self.fail_ping = fail_ping
@@ -404,6 +416,11 @@ class FailingStore(JobStore):
         if self.fail_create:
             raise JobStoreError("store unavailable")
         return super().create(**kwargs)
+
+    def get(self, job_id: str) -> Job | None:
+        if self.fail_get:
+            raise JobStoreError("store unavailable")
+        return super().get(job_id)
 
     def get_view(self, job_id: str) -> dict[str, Any] | None:
         if self.fail_get_view:
@@ -702,6 +719,7 @@ class FakeBidRunRepository:
     async def list_runs(
         self,
         *,
+        project_id: str | None = None,
         doc_id: str | None = None,
         status: str | None = None,
         limit: int = 50,
@@ -709,14 +727,25 @@ class FakeBidRunRepository:
         rows = [
             run
             for run in self.runs.values()
-            if (doc_id is None or run.doc_id == doc_id)
+            if (project_id is None or run.project_id == project_id)
+            and (doc_id is None or run.doc_id == doc_id)
             and (status is None or run.status == status)
         ]
         rows.sort(key=lambda run: run.created_at, reverse=True)
         return rows[:limit]
 
-    async def get_run(self, run_id: str) -> BidRunRecord | None:
-        return self.runs.get(run_id)
+    async def get_run(
+        self,
+        run_id: str,
+        *,
+        project_id: str | None = None,
+    ) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        if project_id is not None and run.project_id != project_id:
+            return None
+        return run
 
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         return sorted(
@@ -957,6 +986,326 @@ class FakeBidRunRepository:
         updated = replace(run, cancel_requested=True)
         self.runs[run_id] = updated
         return updated
+
+
+def make_permissive_project_service() -> ProjectService:
+    """Project service for auth-enabled tests that do not exercise ACLs.
+
+    ``enforced=False`` keeps the existing global-role behaviour: callers get
+    the synthetic default project and no membership lookup is performed.
+    """
+    return ProjectService(None, auth_enabled=False)
+
+
+class FakeProjectRepository:
+    """In-memory ProjectRepository for ACL and project API tests."""
+
+    def __init__(self, *, bid_runs: FakeBidRunRepository | None = None) -> None:
+        self.projects: dict[str, ProjectRecord] = {}
+        self.memberships: dict[tuple[str, str], tuple[str, datetime]] = {}
+        self.documents: dict[tuple[str, str], DocumentRecord] = {}
+        self.users: dict[str, UserBrief] = {}
+        self.bid_runs = bid_runs
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    # ---- test helpers -------------------------------------------------
+
+    def add_user(
+        self,
+        user_id: str,
+        *,
+        username: str | None = None,
+        display_name: str | None = None,
+        role: str = "viewer",
+    ) -> UserBrief:
+        user = UserBrief(
+            id=user_id,
+            username=username or user_id,
+            display_name=display_name or username or user_id,
+            role=role,
+        )
+        self.users[user_id] = user
+        return user
+
+    def add_project(
+        self,
+        project_id: str = DEFAULT_PROJECT_ID,
+        *,
+        name: str = "默认项目",
+        slug: str = "default",
+        description: str = "",
+    ) -> ProjectRecord:
+        now = self._now()
+        project = ProjectRecord(
+            id=project_id,
+            name=name,
+            slug=slug,
+            description=description,
+            created_by=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.projects[project_id] = project
+        return project
+
+    def add_membership(self, project_id: str, user_id: str, role: str) -> None:
+        self.memberships[(project_id, user_id)] = (role, self._now())
+
+    # ---- repository API -----------------------------------------------
+
+    async def list_projects(
+        self,
+        *,
+        user_id: str | None = None,
+        include_all: bool = False,
+    ) -> list[ProjectRecord]:
+        rows: list[ProjectRecord] = []
+        for project in sorted(
+            self.projects.values(), key=lambda item: item.created_at
+        ):
+            membership = self.memberships.get((project.id, user_id or ""))
+            if not include_all and membership is None:
+                continue
+            count = sum(
+                1
+                for (project_id, _uid) in self.memberships
+                if project_id == project.id
+            )
+            rows.append(
+                replace(
+                    project,
+                    role=membership[0] if membership else None,
+                    member_count=count,
+                )
+            )
+        return rows
+
+    async def get_project(self, project_id: str) -> ProjectRecord | None:
+        project = self.projects.get(project_id)
+        if project is None:
+            return None
+        count = sum(
+            1 for (pid, _uid) in self.memberships if pid == project_id
+        )
+        return replace(project, member_count=count)
+
+    async def create_project(
+        self,
+        *,
+        name: str,
+        slug: str,
+        description: str,
+        created_by: str | None,
+    ) -> ProjectRecord:
+        if any(project.slug == slug for project in self.projects.values()):
+            raise ProjectError(409, "项目标识（slug）已存在")
+        now = self._now()
+        project = ProjectRecord(
+            id=str(uuid4()),
+            name=name,
+            slug=slug,
+            description=description,
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+        )
+        self.projects[project.id] = project
+        return project
+
+    async def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ProjectRecord | None:
+        project = self.projects.get(project_id)
+        if project is None:
+            return None
+        updated = replace(
+            project,
+            name=name if name is not None else project.name,
+            description=(
+                description
+                if description is not None
+                else project.description
+            ),
+            updated_at=self._now(),
+        )
+        self.projects[project_id] = updated
+        return updated
+
+    async def delete_project(self, project_id: str) -> bool:
+        if project_id not in self.projects:
+            return False
+        del self.projects[project_id]
+        self.memberships = {
+            key: value
+            for key, value in self.memberships.items()
+            if key[0] != project_id
+        }
+        self.documents = {
+            key: value
+            for key, value in self.documents.items()
+            if key[0] != project_id
+        }
+        return True
+
+    async def count_active_runs(self, project_id: str) -> int:
+        if self.bid_runs is None:
+            return 0
+        return sum(
+            1
+            for run in self.bid_runs.runs.values()
+            if run.project_id == project_id
+            and run.status in {"queued", "generating", "assembling"}
+        )
+
+    async def get_member_role(
+        self, project_id: str, user_id: str
+    ) -> str | None:
+        membership = self.memberships.get((project_id, user_id))
+        return membership[0] if membership else None
+
+    async def list_members(self, project_id: str) -> list[MemberRecord]:
+        rows: list[MemberRecord] = []
+        for (pid, user_id), (role, created_at) in self.memberships.items():
+            if pid != project_id:
+                continue
+            user = self.users.get(user_id)
+            if user is None:
+                continue
+            rows.append(
+                MemberRecord(
+                    project_id=project_id,
+                    user_id=user_id,
+                    username=user.username,
+                    display_name=user.display_name,
+                    role=role,
+                    created_at=created_at,
+                )
+            )
+        rows.sort(key=lambda item: item.username)
+        return rows
+
+    async def count_managers(self, project_id: str) -> int:
+        return sum(
+            1
+            for (pid, _uid), (role, _created) in self.memberships.items()
+            if pid == project_id and role == "manager"
+        )
+
+    async def add_member(
+        self,
+        project_id: str,
+        user_id: str,
+        role: str,
+    ) -> MemberRecord:
+        if project_id not in self.projects or user_id not in self.users:
+            raise ProjectError(404, "项目或用户不存在")
+        now = self._now()
+        self.memberships[(project_id, user_id)] = (role, now)
+        user = self.users[user_id]
+        return MemberRecord(
+            project_id=project_id,
+            user_id=user_id,
+            username=user.username,
+            display_name=user.display_name,
+            role=role,
+            created_at=now,
+        )
+
+    async def remove_member(self, project_id: str, user_id: str) -> bool:
+        membership = self.memberships.get((project_id, user_id))
+        if membership is None:
+            return False
+        if membership[0] == "manager" and await self.count_managers(project_id) <= 1:
+            raise ProjectError(409, "项目至少需要一名管理员")
+        del self.memberships[(project_id, user_id)]
+        return True
+
+    async def get_user_brief(self, user_id: str) -> UserBrief | None:
+        return self.users.get(user_id)
+
+    async def get_user_by_username(self, username: str) -> UserBrief | None:
+        return next(
+            (
+                user
+                for user in self.users.values()
+                if user.username == username
+            ),
+            None,
+        )
+
+    async def default_membership_exists(self, user_id: str) -> bool:
+        return (DEFAULT_PROJECT_ID, user_id) in self.memberships
+
+    async def add_default_member(self, user_id: str, global_role: str) -> None:
+        if await self.default_membership_exists(user_id):
+            return
+        if DEFAULT_PROJECT_ID not in self.projects:
+            self.add_project()
+        user = self.users.get(user_id)
+        if user is None:
+            raise ProjectError(404, "用户不存在")
+        self.add_membership(
+            DEFAULT_PROJECT_ID, user_id, project_role_for_global(global_role)
+        )
+
+    async def register_document(
+        self,
+        project_id: str,
+        doc_id: str,
+        filename: str,
+        created_by: str | None,
+    ) -> DocumentRecord:
+        if project_id not in self.projects:
+            raise ProjectError(404, "项目不存在或文档无法注册")
+        now = self._now()
+        existing = self.documents.get((project_id, doc_id))
+        record = DocumentRecord(
+            project_id=project_id,
+            doc_id=doc_id,
+            filename=filename,
+            created_by=created_by,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        self.documents[(project_id, doc_id)] = record
+        return record
+
+    async def get_document(
+        self, project_id: str, doc_id: str
+    ) -> DocumentRecord | None:
+        return self.documents.get((project_id, doc_id))
+
+    async def list_documents(self, project_id: str) -> list[DocumentRecord]:
+        rows = [
+            record
+            for (pid, _doc_id), record in self.documents.items()
+            if pid == project_id
+        ]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows
+
+    async def list_document_ids(self, project_id: str) -> set[str]:
+        return {
+            doc_id
+            for (pid, doc_id) in self.documents
+            if pid == project_id
+        }
+
+    async def list_run_ids(self, project_id: str) -> set[str]:
+        if self.bid_runs is None:
+            return set()
+        return {
+            run_id
+            for run_id, run in self.bid_runs.runs.items()
+            if run.project_id == project_id
+        }
 
 
 class FakeCompanyService:
@@ -1225,6 +1574,19 @@ class FakeAuthRepository:
                 )
                 count += 1
         return count
+
+
+def make_pdf_bytes(pages: int = 1) -> bytes:
+    """Build a small, valid PDF accepted by upload validation."""
+    import pymupdf
+
+    document = pymupdf.open()
+    for index in range(max(1, pages)):
+        page = document.new_page()
+        page.insert_text((72, 72), f"test page {index + 1}")
+    data = document.tobytes()
+    document.close()
+    return data
 
 
 def make_parse_result(

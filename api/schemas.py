@@ -526,3 +526,49 @@ class PasswordResetRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
+
+
+ProjectRole = Literal["manager", "writer", "reviewer", "viewer"]
+
+
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    slug: str
+    description: str = ""
+    role: str | None = None
+    member_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectSummary] = Field(default_factory=list)
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str = Field(min_length=2, max_length=64)
+    description: str = Field(default="", max_length=512)
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+
+
+class ProjectMemberSummary(BaseModel):
+    project_id: str
+    user_id: str
+    username: str
+    display_name: str
+    role: str
+    created_at: datetime
+
+
+class ProjectMemberListResponse(BaseModel):
+    members: list[ProjectMemberSummary] = Field(default_factory=list)
+
+
+class ProjectMemberUpsertRequest(BaseModel):
+    role: ProjectRole

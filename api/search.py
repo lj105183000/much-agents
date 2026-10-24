@@ -217,9 +217,14 @@ class SearchService:
             self._semantic_retriever = ChromaTenderRetriever(self.bid_settings)
         return self._semantic_retriever
 
-    def _catalog_names(self) -> tuple[dict[str, str], str | None]:
+    def _catalog_names(
+        self, allowed_doc_ids: set[str] | None = None
+    ) -> tuple[dict[str, str], str | None]:
         storage = self._remote_storage
-        kwargs: dict[str, Any] = {"limit": 1000}
+        kwargs: dict[str, Any] = {
+            "limit": 1000,
+            "allowed_doc_ids": allowed_doc_ids,
+        }
         if storage is not None:
             kwargs["storage"] = storage
         try:
@@ -237,7 +242,9 @@ class SearchService:
             if document.project_name
         }, None
 
-    def _searchable_dirs(self) -> list[Path]:
+    def _searchable_dirs(
+        self, allowed_doc_ids: set[str] | None = None
+    ) -> list[Path]:
         base = self.parse_settings.parsed_dir
         if not base.is_dir():
             return []
@@ -251,6 +258,9 @@ class SearchService:
             for child in children
             if child.is_dir()
             and is_safe_id(child.name)
+            and (
+                allowed_doc_ids is None or child.name in allowed_doc_ids
+            )
             and (child / "chunks.jsonl").is_file()
             and (child / "chunks.jsonl").stat().st_size > 0
         ]
@@ -266,7 +276,9 @@ class SearchService:
             raise SearchError(404, "document is unavailable")
         return candidate
 
-    def _remote_searchable_docs(self) -> list[str]:
+    def _remote_searchable_docs(
+        self, allowed_doc_ids: set[str] | None = None
+    ) -> list[str]:
         storage = self._remote_storage
         if storage is None:
             return []
@@ -277,6 +289,8 @@ class SearchService:
                 continue
             doc_id, name = parts[1], parts[2]
             if name != "chunks.jsonl" or info.size <= 0 or not is_safe_id(doc_id):
+                continue
+            if allowed_doc_ids is not None and doc_id not in allowed_doc_ids:
                 continue
             docs.add(doc_id)
         return sorted(docs)
@@ -296,16 +310,23 @@ class SearchService:
     def _load_remote_chunks(
         self,
         doc_id: str | None,
+        allowed_doc_ids: set[str] | None = None,
     ) -> tuple[list[ChunkRecord], set[str], list[str]]:
         storage = self._remote_storage
         assert storage is not None
         warnings: list[str] = []
         chunks: list[ChunkRecord] = []
         searchable: set[str] = set()
+        if (
+            doc_id
+            and allowed_doc_ids is not None
+            and doc_id not in allowed_doc_ids
+        ):
+            raise SearchError(404, "document is unavailable")
         doc_ids = (
             [self._remote_doc(doc_id)]
             if doc_id
-            else self._remote_searchable_docs()
+            else self._remote_searchable_docs(allowed_doc_ids)
         )
         if not doc_ids:
             return [], set(), ["没有可检索的已解析文档"]
@@ -334,16 +355,23 @@ class SearchService:
     def _load_keyword_chunks(
         self,
         doc_id: str | None,
+        allowed_doc_ids: set[str] | None = None,
     ) -> tuple[list[ChunkRecord], set[str], list[str]]:
         if self._remote_storage is not None:
-            return self._load_remote_chunks(doc_id)
+            return self._load_remote_chunks(doc_id, allowed_doc_ids)
         warnings: list[str] = []
         chunks: list[ChunkRecord] = []
         searchable: set[str] = set()
+        if (
+            doc_id
+            and allowed_doc_ids is not None
+            and doc_id not in allowed_doc_ids
+        ):
+            raise SearchError(404, "document is unavailable")
         directories = (
             [self._safe_doc_dir(doc_id)]
             if doc_id
-            else self._searchable_dirs()
+            else self._searchable_dirs(allowed_doc_ids)
         )
         if not directories:
             return [], set(), ["没有可检索的已解析文档"]
@@ -409,20 +437,44 @@ class SearchService:
                 break
         return hits
 
-    def search(self, request: SearchRequest) -> SearchResponse:
+    def search(
+        self,
+        request: SearchRequest,
+        *,
+        allowed_doc_ids: set[str] | None = None,
+    ) -> SearchResponse:
         started = time.perf_counter()
         query = request.query.strip()
         if not query:
             raise SearchError(422, "query must not be blank")
         doc_id = (request.doc_id or "").strip() or None
 
+        if allowed_doc_ids is not None:
+            if doc_id is not None:
+                if doc_id not in allowed_doc_ids:
+                    raise SearchError(404, "document is unavailable")
+            elif not allowed_doc_ids:
+                return SearchResponse(
+                    query=query,
+                    doc_id=None,
+                    mode=request.mode,
+                    mode_used="keyword",
+                    results=[],
+                    warnings=["没有可检索的已解析文档"],
+                    elapsed_ms=round(
+                        (time.perf_counter() - started) * 1000, 1
+                    ),
+                )
+
         if doc_id:
             if self._remote_storage is not None:
                 self._remote_doc(doc_id)
             else:
                 self._safe_doc_dir(doc_id)
-        chunks, searchable, warnings = self._load_keyword_chunks(doc_id)
-        names, catalog_warning = self._catalog_names()
+        chunks, searchable, warnings = self._load_keyword_chunks(
+            doc_id, allowed_doc_ids
+        )
+        names, catalog_warning = self._catalog_names(allowed_doc_ids)
         if catalog_warning:
             warnings.append(catalog_warning)
 

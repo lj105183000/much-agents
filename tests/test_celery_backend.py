@@ -171,7 +171,7 @@ def test_dispatch_failure_marks_failed_and_keeps_upload(
 
 def test_get_job_store_failure_returns_503(tmp_path: Path) -> None:
     settings = make_api_settings(tmp_path, TASK_BACKEND="celery")
-    store = FailingStore(fail_get_view=True)
+    store = FailingStore(fail_get=True)
     app = create_app(api_settings=settings, store=store, dispatcher=FakeDispatcher())
     with TestClient(app) as client:
         assert client.get("/api/jobs/anything").status_code == 503
@@ -252,6 +252,11 @@ def test_celery_mode_bid_submit_publishes_write_bid_task(
 
     job = store.get(job_id)
     assert job is not None
-    assert job.payload == {"doc_id": "doc-1", "max_sections": 1}
+    assert job.payload == {
+        "doc_id": "doc-1",
+        "max_sections": 1,
+        "project_id": "00000000-0000-0000-0000-000000000001",
+        "created_by": "local",
+    }
     assert "profile" not in job.payload
     assert (tmp_path / "bids" / "doc-1" / job_id / "profile.json").is_file()

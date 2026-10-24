@@ -83,6 +83,7 @@ def _base_headers(info: ObjectInfo, length: int) -> dict[str, str]:
         "Content-Length": str(length),
         "Content-Disposition": content_disposition(info.name),
         "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
     }
     if info.etag:
         headers["ETag"] = f'"{info.etag}"'
@@ -122,6 +123,7 @@ def stored_artifact_response(
             headers={
                 "Content-Range": f"bytes */{size}",
                 "Accept-Ranges": "bytes",
+                "Cache-Control": "no-store",
             },
         )
 

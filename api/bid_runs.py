@@ -73,6 +73,7 @@ from .bid_run_repo import (
 )
 from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
+from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
     BidComplianceResponse,
     BidConsistencyResponse,
@@ -525,7 +526,12 @@ class BidRunService:
             logger.warning("could not create compliance LLM client", exc_info=True)
             return None
 
-    async def create(self, payload: BidRequest) -> BidRunCreatedResponse:
+    async def create(
+        self,
+        payload: BidRequest,
+        *,
+        project_id: str = DEFAULT_PROJECT_ID,
+    ) -> BidRunCreatedResponse:
         await self._ensure_document(payload.doc_id)
         try:
             TenderContext.validate(payload.doc_id, self.bid_settings)
@@ -657,6 +663,7 @@ class BidRunService:
 
         run = BidRunRecord(
             run_id=run_id,
+            project_id=project_id,
             doc_id=payload.doc_id,
             company_id=company_id,
             status="outline_ready",
@@ -740,6 +747,7 @@ class BidRunService:
     async def list_runs(
         self,
         *,
+        project_id: str | None = None,
         doc_id: str | None = None,
         status: str | None = None,
         limit: int = 50,
@@ -747,7 +755,9 @@ class BidRunService:
         if status and status not in _RUN_STATUSES:
             raise BidRunError(422, f"unknown bid-run status: {status}")
         repo = self._repo()
-        runs = await repo.list_runs(doc_id=doc_id, status=status, limit=limit)
+        runs = await repo.list_runs(
+            project_id=project_id, doc_id=doc_id, status=status, limit=limit
+        )
         items: list[BidRunSummary] = []
         for run in runs:
             sections = await repo.get_outline(run.run_id)
@@ -1013,6 +1023,7 @@ class BidRunService:
                 payload={
                     "mode": "staged",
                     "run_id": run_id,
+                    "project_id": run.project_id,
                     "generation_token": generation_token,
                     "section_ids": generated_ids,
                     "assemble": bool(payload.assemble),

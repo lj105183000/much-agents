@@ -18,6 +18,7 @@ from tests.fakes import (
     make_api_settings,
     make_bid_settings,
     make_parse_settings,
+    make_permissive_project_service,
     write_parsed_fixture,
 )
 
@@ -82,6 +83,7 @@ def make_app(
         company_service=company_service,  # type: ignore[arg-type]
         bid_run_service=bid_run_service,
         auth_service=service if auth_enabled else None,
+        project_service=make_permissive_project_service(),
     )
     return app, service, company_service
 
@@ -377,9 +379,15 @@ def test_export_force_requires_admin(tmp_path: Path) -> None:
             ).status_code
             == 403
         )
-        forced = client.post(
+        missing_reason = client.post(
             "/api/bid-runs/run-1/export",
             params={"force": "true"},
+            headers=admin_headers,
+        )
+        assert missing_reason.status_code == 422
+        forced = client.post(
+            "/api/bid-runs/run-1/export",
+            params={"force": "true", "reason": "客户要求先出稿"},
             headers=admin_headers,
         )
         assert forced.status_code == 200
