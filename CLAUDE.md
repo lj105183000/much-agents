@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、React/Electron 前端工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、React/Electron 前端工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本与测试 `tests/`。用户/RBAC、项目实体、MinIO、PDF/DOC 导出、文生图与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -30,6 +30,12 @@ uv run python -m api                                            # 读取 API_HOS
 uv run celery -A api.celery_app:celery_app worker -Q parse --pool=solo --loglevel=INFO  # parse 队列同时消费 parse 与 bidding.write_bid
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
+uv run python -m api.mcp_server --check      # 列出 MCP 服务端工具后退出
+uv run python -m api.mcp_server              # stdio MCP 服务端（需先启动 API）
+uv run python -m api.mcp_server --transport http --host 127.0.0.1 --port 8765  # 可选 HTTP
+uv run python -m src.mcp_client list        # 列出白名单 MCP 客户端配置
+uv run python -m src.mcp_client check       # 连接并核对白名单工具（只读）
+uv run python -m src.mcp_client call company_kb search '{"query":"类似业绩"}'  # 排障调用
 ```
 
 FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；默认使用 Celery + Redis，Windows worker 必须 `--pool=solo`。
@@ -87,6 +93,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
 - 工作台为左侧导航 + 六个视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。
 - 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。门禁下方显示「合规检查与一致性台账」：21 项检查、跨章节事实核对、确定性/AI 修复方案与一键应用（应用等同人工编辑，需重新组装）。
+- 「AI 配图」面板位于合规台账与产物面板之间：缩略图/放大预览、图号/图题/章节/来源/免责声明、跳过与警告，以及「重新生成配图」；重新生成会清空 gate 并要求重新组装。`ArtifactPanel` 对图片产物直接渲染 `<img>`，`MarkdownPreview` 把 `bid.md`/`sections/*.md` 中的相对图片路径重写到 artifact URL（Electron `file://` 走 `apiUrl()`）。
 - 「任务历史」顶部显示服务端 `bid_runs`（可打开继续编辑/重写/组装），下方保留 localStorage 的解析/旧版任务记录；`LibraryView` 仍以磁盘产物为主。
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
 - 文档检索：查询已解析招标文件 chunks，展示章节/页码/片段/相关度；语义优先，Chroma/智谱不可用或空结果时自动回退关键词，并提示回退原因。
@@ -111,7 +118,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/health`。
 - `GET /api/documents`：扫描 `upload/parsed/*`，返回项目名、页数、chunks、bid_ready 与历史 bid run。
 - `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，未知 doc 404。
-- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`）；路径穿越返回 404，**`profile.json` 永不暴露**。
+- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；路径穿越返回 404，**`profile.json` 永不暴露**。
 - `GET /api/bids/profile-template`：返回 `bidder_profile.example.json` 的 JSON 模板。
 - `GET/POST /api/companies`、`GET/PUT/DELETE /api/companies/{company_id}`：PostgreSQL 公司库 CRUD；`profile` 为完整 BidderProfile；公司名称必填。
 - `POST /api/bids` 支持可选 `company_id`：未提供 profile 时从公司库载入；提供 profile 时使用当前编辑内容，company_id 写入 job payload 便于追踪。
@@ -161,21 +168,45 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 修复方案先由一致性冲突生成确定性 replace 项（找不到唯一原文则不生成）；可选 LLM 只提供候选，所有候选都会重新校验 check id、章节可编辑性、`find` 唯一、`replace` 不含未授权金额/日期/证件与占位符。LLM 失败自动回退确定性方案。
 - 应用修复要求 final 可编辑 narrative、`find` 恰好出现一次；替换后走 `edit_section` 语义（`final_source="manual"`、run `paused/edited`、清空 gate 与两份报告），下一次 assemble 重新计算。大纲失效、人工编辑、单节重写都会删除过期报告。
 
+### AI 配图（`src/bidding/figures/`）
+
+- 只在**组装时**生成，不新增数据库表；产物为 run 目录下的 `figures/manifest.json` + `figures/fig-*.png`，已加入 artifact allowlist，`profile.json` 仍排除。
+- 四类固定图与插入位置（`rules.py`）：组织架构图 `top-07`（章节末尾）、进度横道图 `att-06-04`（替换 `【待填写：施工进度网络图/横道图】`）、施工总平面图 `att-06-05`（替换 `【待填写：施工总平面图】`）、工艺流程图 `narr-06-02`（章节末尾）；`BID_FIGURES_MAX` 默认 4，按大纲顺序截断。
+- 数据只来自招标事实、投标人资料与已 redaction 的章节正文；人员/公司/日期/工期缺失时跳过或使用明确「【待填写】」节点，**严禁文生图或编造事实**。工艺步骤可选 LLM 补足，但每一步必须能在正文找到原文引用。
+- 采用两遍组装：基础组装与正文 redaction → 规划+渲染 → 插入 figure blocks → 最终组装 → 合规/一致性/门禁。DOCX 真实嵌入图片（`asset_dir` + 宽度限制），`sections/*.md` 图片路径改为 `../figures/...`，`bid.md` 保持 `figures/...`。
+- manifest 以 `source_hash`（正文+图数据+版本+宽度）复用未变图片；人工编辑、单节重写、大纲失效、应用修复都会删除 manifest 与图片。`POST /api/bid-runs/{id}/figures/regenerate` 强制重建但需重新组装；active run 返回 409。
+- 门禁新增 warn 级 `figures` 检查（失败/跳过提示人工补充），不新增 block，不改变 21 项合规检查。新增 `GET /api/bid-runs/{id}/figures` 与 `POST .../figures/regenerate`；前端「AI 配图」面板支持预览、来源/声明/警告与重新生成。
+- 需要 Pillow 与 CJK 字体；找不到字体时该图 failed + warning，不阻断组装。详细说明见 `docs/ai-figures-and-mcp.md`。
+
+### MCP 服务端与客户端（`api/mcp_server.py`、`src/mcp_client/`）
+
+- **服务端**是本地 FastAPI 的薄代理，不直接访问 DB/Redis/Celery/文件系统，复用 `BidRunService` 的守卫、revision CAS、artifact allowlist 与 profile 排除。默认 stdio：`uv run python -m api.mcp_server`；HTTP：`--transport http --host 127.0.0.1 --port 8765`。HTTP 默认仅回环，非回环绑定必须 `MCP_HTTP_TOKEN`，请求需 `Authorization: Bearer`。
+- 工具覆盖 health/文档检索/公司列表/run/大纲/章节/门禁/合规/一致性/job/artifact/配图查询，以及 create/patch/generate/resume/cancel/assemble/edit/regenerate/fix-plan/apply-fix/regenerate-figures 等写操作。长任务只返回 `job_id`，由调用方轮询 `get_job`。`create_bid_run` 不接受 inline profile；`read_artifact_text` 强制 allowlist 且拒绝 `profile.json`；`list_companies` 只返回 id/名称/信用代码。
+- **客户端**默认关闭（`MCP_CLIENT_ENABLED=false`），只连接 `mcp_servers.json` 中声明的服务器与 `allowed_tools`；参数只能使用固定占位符（`${query}`、`${doc_id}`、`${top_k}`、`${company_name}`、`${project_name}`、`${section_id}`、`${section_title}`、`${figure_spec}`），未知占位符启动报错。LLM 不能发现或调用任意 MCP 工具。
+- 支持 `stdio` 与 `streamable_http`；命令/参数/URL/headers/env 中的 `${VAR}` 从环境展开（如 `${DRAWING_TOKEN}`），缺失变量报错。真实 `mcp_servers.json` 已 gitignore，示例为 `mcp_servers.example.json`；`.mcp.json` 也已 gitignore，示例为 `.mcp.json.example`。
+- `purpose=evidence|company` 的工具在每节本地检索后并发调用，结果合并为带 `source="mcp"` / `MCP/<server>/<tool>` 标记的不可信证据；外部证据预算最多为总预算 1/3，未用满回补本地。单服务器失败/超时只 warning，不阻断章节。
+- `purpose=figure` 仅在 `BID_FIGURES_EXTERNAL=true` 时用于 `site_plan` / `process_flow`；接收 ImageContent/内嵌 blob/resource link/图片 URL，校验 MIME、base64、大小、Pillow 解码与尺寸，失败自动回退内置 Pillow。发送的 spec 不含 profile。
+- CLI：`uv run python -m src.mcp_client list|check|call`；`check` 只读，`call` 仅允许配置内工具。详细配置、隐私边界与手工测试见 `docs/ai-figures-and-mcp.md`。
+
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、RBAC/项目实体、Docker Compose。
+- **待办**：前端 IPC（打开本地目录）、MinIO、PDF/DOC 导出、RBAC/项目实体、Docker Compose、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
+- AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。
+- MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
 - PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run 接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
-- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与产物的根目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物）；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）。
+- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是输入 PDF 与产物的根目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）。
+- MCP 配置文件：真实 `mcp_servers.json` 与 `.mcp.json` 已 gitignore；提交的模板为 `mcp_servers.example.json`、`.mcp.json.example`。
 
 ## 注意
 
 - Windows 环境开发；长任务（解析/抽取/编写）不要阻塞 HTTP 请求，走 Celery 或轮询任务模型。
-- 不要提交 `.env`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`。
+- 不要提交 `.env`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`、真实的 `mcp_servers.json` 或 `.mcp.json`。
+- `profile.json` 永不进入 artifact allowlist、MCP 工具输出或 Redis/Celery payload；外部证据默认不可信，外部绘图默认关闭。
