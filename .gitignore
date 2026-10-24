@@ -20,6 +20,10 @@ venv/
 .env.*
 !.env.example
 
+# Local MCP configuration (may contain local paths or tokens)
+.mcp.json
+mcp_servers.json
+
 # Application data
 chroma_db/
 upload/

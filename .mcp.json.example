@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "much-agents": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "api.mcp_server"],
+      "env": {
+        "MCP_API_BASE_URL": "http://127.0.0.1:8001"
+      }
+    }
+  }
+}
