@@ -107,8 +107,11 @@ services:
     volumes:
       - chroma-data:/data
     healthcheck:
+      # The Chroma image is a Rust binary with bash but no Python/curl/wget.
       test:
-        ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v2/heartbeat', timeout=3)\""]
+        - CMD-SHELL
+        - |
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000; printf "GET /api/v2/heartbeat HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" >&3; head -c 64 <&3 | grep -q 200'
       interval: 15s
       timeout: 5s
       retries: 10
