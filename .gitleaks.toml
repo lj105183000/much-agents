@@ -1,0 +1,9 @@
+# Extend gitleaks' default rules; do not replace them.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic MCP token used only by production-config tests"
+regexes = [
+  '''0123456789abcdef0123456789abcdef''',
+]
