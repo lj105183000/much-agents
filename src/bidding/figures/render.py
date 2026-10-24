@@ -79,7 +79,11 @@ def _find_font(explicit: str | None, *, bold: bool = False) -> Path:
 class _Fonts:
     def __init__(self, explicit: str | None) -> None:
         self.regular_path = _find_font(explicit)
-        self.bold_path = _find_font(explicit, bold=True)
+        try:
+            self.bold_path = _find_font(explicit, bold=True)
+        except FigureRenderError:
+            # Some CJK fonts (e.g. WQY Zen Hei) ship a single weight only.
+            self.bold_path = self.regular_path
         self._cache: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
 
     def get(self, size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:

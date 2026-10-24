@@ -128,6 +128,21 @@ def test_all_figure_kinds_render_png(tmp_path: Path, kind: str, data: dict) -> N
     assert target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_bold_font_falls_back_to_regular(tmp_path: Path, monkeypatch) -> None:
+    regular = tmp_path / "cjk.ttc"
+    regular.write_bytes(b"path-only")
+
+    def fake_find(explicit: str | None, *, bold: bool = False) -> Path:
+        if bold:
+            raise FigureRenderError("no bold variant")
+        return regular
+
+    monkeypatch.setattr(figure_render, "_find_font", fake_find)
+    fonts = figure_render._Fonts(None)
+    assert fonts.regular_path == regular
+    assert fonts.bold_path == regular
+
+
 def test_render_fails_cleanly_without_cjk_font(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(figure_render, "_FONT_CANDIDATES", ())
     monkeypatch.setattr(figure_render, "_BOLD_CANDIDATES", ())
