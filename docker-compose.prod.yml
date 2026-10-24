@@ -145,6 +145,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      createbuckets:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -177,6 +179,8 @@ services:
       - upload-data:/app/upload
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      createbuckets:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -215,6 +219,8 @@ services:
       - upload-data:/app/upload
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      createbuckets:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
