@@ -1,18 +1,19 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24）。本文只描述产品化方向与阶段，不代表已实现；功能现状以代码与 `CLAUDE.md` 为准。
+> 状态：路线图（2026-10-24）。P0-A「认证 / RBAC」已实现；其余阶段仍为规划。功能现状以代码与 `CLAUDE.md` 为准，认证细节见 `docs/authentication.md`。
 
 ## Context
 
 Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结构化抽取 → Chroma 检索 → 多 Agent 编写/审查/修订 → 确定性组装 → 21 项合规 + 一致性台账 + 修复方案 → 配图 → 门禁 → DOCX 导出；存储层已有 MinIO + 私有 profile 边界，任务层已有 Celery/Redis + PostgreSQL 持久化 run。工程骨架和"不编造事实"的约束是真实优势。
 
-但它目前仍是**单机单用户工具**：API 没有认证、CORS 为 `*`、基础设施使用默认弱口令、没有 CI/Dockerfile/Compose/备份；生成内容没有引用契约，评分要求覆盖只靠关键词子串；没有项目隔离、审批、版本与审计；DOCX 只是草稿级。直接部署到内网多人环境不可接受。
+它起步时仍是**单机单用户工具**：API 没有认证、CORS 为 `*`、基础设施使用默认弱口令、没有 CI/Dockerfile/Compose/备份；生成内容没有引用契约，评分要求覆盖只靠关键词子串；没有项目隔离、审批、版本与审计；DOCX 只是草稿级。P0-A 已补上认证/RBAC，但其余差距仍使直接部署到内网多人环境不可接受。
 
-本路线图面向**内网多人系统**，覆盖用户选定的四个方向：生成质量与可信度、多用户与协作、部署与运维、交付物与复用。**本轮只交付路线图，不实现业务代码。**
+本路线图面向**内网多人系统**，覆盖用户选定的四个方向：生成质量与可信度、多用户与协作、部署与运维、交付物与复用。路线图最初只做规划；P0-A 认证/RBAC 已按独立计划先行落地，其余阶段仍待实施。
 
 ### 现状证据（关键差距）
 
-- **无认证/授权**：`api/app.py` 只注册 CORS；`api/config.py:59-64` 默认 `host=0.0.0.0`、`cors_origins=("*",)`；全仓库没有 user/RBAC 代码。MCP HTTP 的 bearer 只保护 MCP 自身，不保护业务 API。
+- **认证/RBAC（P0-A 已补）**：本地账号、可撤销会话、5 角色、默认拒绝 API、管理员用户管理与 MCP 服务账号已实现（`api/auth.py`、`api/users.py`、Alembic `0003`）。但项目隔离、审计与生产加固仍未做，见 3.2/3.3/3.6。
+- **开发默认仍不适合直接上内网**：`API_HOST=0.0.0.0`、`CORS_ORIGINS=*`、无 TLS、`/docs` 公开、token 存 localStorage；生产部署见 P0-D。
 - **无项目实体**：数据库只有 `companies`、`bid_runs`、`bid_outline_sections`、`bid_section_states`（`migrations/versions/0001`、`0002`）；文档库仍是扫描对象存储。
 - **无交付工程**：根目录没有 `Dockerfile`、`docker-compose.yml`、`.github/`、`README`，只有 `start.bat` 开发脚本；生产部署、升级、备份均无定义。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
@@ -22,7 +23,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 0. 结论
 
-1. **先做 P0 安全与部署基座**。没有认证、项目隔离、审计和备份的系统不能上内网；这是硬门槛。
+1. **先做 P0 安全与部署基座**。认证/RBAC 已完成，但项目隔离、审计和备份仍未补齐；没有这些能力的系统不能上内网，这是硬门槛。
 2. **质量的下一个杠杆不是更多 Agent，而是证据闭环**：每条关键事实能引用到招标文件页码，每条评分要求有登记与覆盖状态，每次生成有成本与参数溯源。
 3. **协作的核心是审批与版本**，不是聊天框：审批绑定内容哈希，任何修改使审批失效；版本可 diff/恢复；导出受审批锁。
 4. **交付物与复用决定长期价值**：高保真 DOCX/PDF、模板、企业资质库、跨标书复用。
@@ -69,7 +70,11 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 3. P0 — 可安全上内网（15–20 人日）
 
-### 3.1 认证、会话与 RBAC
+### 3.1 认证、会话与 RBAC（P0-A 已实现）
+
+> 已落地：默认拒绝 API、本地账号与 Argon2 密码、SHA-256 不透明会话、5 角色 + `service` 主体、登录锁定、最后管理员保护、管理员用户管理、MCP `MCP_API_TOKEN`、前端登录/登出/角色感知、认证 Blob 产物访问。实现与验证见 `docs/authentication.md`。
+>
+> 未落地：项目级 `project_members`（属于 3.2）、审计写入（3.3）、Redis/IP 登录限流、生产 TLS/安全头（3.6）。因此 P0-A 单独不能作为内网多人上线验收。
 
 **做什么**
 
@@ -82,7 +87,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 **技术选择**
 
-- `pwdlib[argon2]` + 随机 256-bit 会话 token（DB 存 SHA-256）；避免 JWT 撤销难题。
+- `argon2-cffi` + 随机 256-bit 会话 token（DB 存 SHA-256）；避免 JWT 撤销难题。实际实现见 `api/auth.py`。
 - FastAPI 依赖 `require_user` / `require_project_role(...)`；路由级默认挂载，减少漏配。
 - 登录限流（Redis 计数 + 失败锁定），审计登录成功/失败。
 
@@ -110,7 +115,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 **改动点**
 
-- 新迁移 `0003_projects_auth_audit.py`（可与 3.3 合并）。
+- 新迁移 `0004_projects_acl.py`（审计可另起；`0003` 已被 users/sessions 占用）。
 - `api/bid_run_repo.py`、`api/bid_runs.py`、`api/companies.py`、`api/documents.py`、`api/artifacts.py`、`api/streaming.py`。
 - 前端增加项目切换器、成员管理、项目维度历史。
 
@@ -325,7 +330,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 | 能力 | 推荐 | 说明 / 替代 |
 |---|---|---|
-| 密码与会话 | `pwdlib[argon2]` + DB 不透明 token | 简单、可撤销；后续可加 OIDC/LDAP 适配层 |
+| 密码与会话 | `argon2-cffi` + DB 不透明 token | 已实现；简单、可撤销；后续可加 OIDC/LDAP 适配层 |
 | RBAC | FastAPI 依赖 + `project_members` | 5 角色；项目级授权；不引入 Casbin，保持简单 |
 | 审计 | PostgreSQL 追加表 + 哈希链 | 可查询、可校验；更强需求可加 MinIO WORM 锚定 |
 | 部署 | Docker Compose + Nginx | 内网单机/小集群足够；后续再上 K8s |
@@ -351,7 +356,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 迁移策略：
 
-- `0003` 起递增；先加 nullable 列/表，回填"默认项目"，再加非空约束。
+- `0003` 已用于 `users`/`user_sessions`；后续从 `0004` 起递增。先加 nullable 列/表，回填"默认项目"，再加非空约束。
 - 现有 `upload/parsed|bids` 文件按 doc_id/run_id 建立注册表记录；MinIO key 不变，ACL 在 API 层。
 - 切换 embedding 模型时新建集合 + 后台重建；旧集合保留只读一个版本周期。
 - 所有迁移在 CI 空库 + 生产副本演练；迁移前自动备份。
@@ -416,9 +421,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 14. 落地方式与下一步
 
-本路线图**不包含业务代码实现**。建议按以下顺序落地：
+P0-A（认证/RBAC）已落地，其余阶段仍按独立实施计划推进。建议顺序：
 
-1. 把 P0 拆成 4 个独立实施计划：认证/RBAC、项目隔离、审计、部署/CI/备份；每个计划单独评审与验收。
+1. 把 P0 剩余部分拆成 3 个独立实施计划：项目隔离、审计、部署/CI/备份；每个计划单独评审与验收。
 2. 在 P0 开发同时，用现有系统跑 2–3 份真实标书建立质量/成本基线，作为 P1 评测集的种子。
 3. P0 上线前完成一次安全自查（认证绕过、越权、上传、CORS、默认口令、日志泄露）。
 4. 每个阶段结束按第 13 节做用户验收，不通过不进入下一阶段。

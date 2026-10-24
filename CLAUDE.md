@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、React/Electron 前端工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本与测试 `tests/`。用户/RBAC、项目实体、PDF/DOC 导出、文生图与前端 IPC 仍未实现，后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、React/Electron 前端登录与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本与测试 `tests/`。项目实体与项目级数据隔离、审计日志、生产部署/备份、PDF/DOC 导出、文生图与前端 IPC 仍未实现；P0-A 不是内网多人上线版本（登录用户仍可见全部数据），后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -20,6 +20,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync                                      # 安装/同步依赖
 uv run alembic upgrade head                  # 应用 PostgreSQL 迁移（API 默认启动时也会自动执行）
 uv run alembic current                       # 查看当前数据库版本
+uv run python -m api.users create-admin --username admin --display-name 管理员  # 交互式创建首个管理员
+uv run python -m api.users create-user --username zhangsan --role writer      # 创建普通用户
+uv run python -m api.users reset-password --username admin                    # 重置密码并撤销会话
+uv run python -m api.users list                                              # 列出用户
 uv run chroma run --path ./chroma_db         # 启动 Chroma，监听 8000
 uv run python -m src.storage check           # 检查 MinIO 连通性与各前缀对象数
 uv run python -m src.storage sync            # 把本地存量 upload/ 增量同步到 MinIO
@@ -40,7 +44,7 @@ uv run python -m src.mcp_client check       # 连接并核对白名单工具（�
 uv run python -m src.mcp_client call company_kb search '{"query":"类似业绩"}'  # 排障调用
 ```
 
-FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；默认使用 Celery + Redis，Windows worker 必须 `--pool=solo`。
+FastAPI 服务监听 `API_PORT=8001`（`/docs` 为 OpenAPI 文档）；默认使用 Celery + Redis，Windows worker 必须 `--pool=solo`。API 默认开启认证（`AUTH_ENABLED=true`），首次使用先创建管理员，否则只有 `/api/health` 与登录接口可访问。
 
 ### 一键启动（Windows）
 
@@ -96,15 +100,16 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - Electron 主进程是 CommonJS：`frontend/electron/main.cjs`。带 `--dev` 时加载 `http://localhost:5173`，否则通过 `file://` 加载 `dist/index.html`。
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
-- 工作台为左侧导航 + 六个视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。
+- 工作台为左侧导航 + 六个业务视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；管理员额外看到 ⑦ 用户管理。包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。
 - 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。门禁下方显示「合规检查与一致性台账」：21 项检查、跨章节事实核对、确定性/AI 修复方案与一键应用（应用等同人工编辑，需重新组装）。
-- 「AI 配图」面板位于合规台账与产物面板之间：缩略图/放大预览、图号/图题/章节/来源/免责声明、跳过与警告，以及「重新生成配图」；重新生成会清空 gate 并要求重新组装。`ArtifactPanel` 对图片产物直接渲染 `<img>`，`MarkdownPreview` 把 `bid.md`/`sections/*.md` 中的相对图片路径重写到 artifact URL（Electron `file://` 走 `apiUrl()`）。
+- 「AI 配图」面板位于合规台账与产物面板之间：缩略图/放大预览、图号/图题/章节/来源/免责声明、跳过与警告，以及「重新生成配图」；重新生成会清空 gate 并要求重新组装。产物图片与 Markdown 内图片通过 `AuthenticatedImage` 带 `Authorization` 取 Blob 后渲染（不能直接用 `<img src>` 指向 artifact URL）；`MarkdownPreview` 把 `bid.md`/`sections/*.md` 中的相对图片路径重写到 artifact URL 后再交给该组件（Electron `file://` 走 `apiUrl()`）。
 - 「任务历史」顶部显示服务端 `bid_runs`（可打开继续编辑/重写/组装），下方保留 localStorage 的解析/旧版任务记录；`LibraryView` 仍以磁盘产物为主。
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
 - 文档检索：查询已解析招标文件 chunks，展示章节/页码/片段/相关度；语义优先，Chroma/智谱不可用或空结果时自动回退关键词，并提示回退原因。
 - 支持深色/浅色主题切换（Header 按钮），偏好保存在 localStorage，首屏由 `index.html` 内联脚本恢复，避免闪烁。
-- API base：http(s) 页面默认同源 `/api`（Vite 通过 `server.proxy`、Nginx 通过 `/api/` 反代）；Electron `file://` 默认 `http://127.0.0.1:8001`。可用 `VITE_API_BASE_URL` 或界面设置覆盖；留空恢复同源。解析/旧版任务历史存 localStorage，服务端投标 run 历史来自 `/api/bid-runs`，文档库来自后端扫描。
-- 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过后端 artifact 接口访问，浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
+- API base：http(s) 页面默认同源 `/api`（Vite 通过 `server.proxy`、Nginx 通过 `/api/` 反代）；Electron `file://` 默认 `http://127.0.0.1:8001`。可用 `VITE_API_BASE_URL` 或界面设置覆盖；留空恢复同源。切换 API base 会清除已保存会话并重新加载，避免把 A 后端的 token 发给 B 后端。解析/旧版任务历史按用户 id 存 localStorage，服务端投标 run 历史来自 `/api/bid-runs`，文档库来自后端扫描。
+- 认证：`AuthProvider` 挂载时总是探测 `GET /api/auth/me`（支持 `AUTH_ENABLED=false` 本地模式）；token 存在 `localStorage` 键 `much-agents:auth:v1`，与 API base、过期时间绑定；任意 401 清除会话回登录页。登录页、管理员「用户管理」、Header/Sidebar 用户卡片与登出均已实现；角色感知用 `usePermissions` 隐藏/禁用写操作，后端仍是权威。
+- 目前没有 preload/IPC；`contextIsolation: true`、`nodeIntegration: false`。产物通过带认证头的 Blob 请求访问（下载转 object URL，预览用 `AuthenticatedImage`），浏览器与 Electron 均可用；`profile.json` 不在产物 allowlist 中。
 
 ### 文档解析管线（已实现，`src/parsing/`）
 
@@ -124,6 +129,18 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 流程边界：`hydration.py` 提供 `ensure_document_cached`、`ensure_run_cached`、`ensure_private_profile`、`sync_document`、`sync_run`、`sync_run_derived`；异步服务统一用 `asyncio.to_thread` 调用同步存储 API。
 - artifact 下载由 `api/streaming.py` 流式返回，支持 `Range`(206/416)、`HEAD`、`ETag` 与 RFC 5987 中文文件名，**不使用 presigned 重定向**；`profile.json` 不在 allowlist。MinIO 不可用时 artifact/上传/目录/搜索/run 接口返回 503；health 仍 200 但 `status=degraded`、`storage_ok=false`。
 - `uv run python -m src.storage check|sync` 用于连通性排障与存量迁移；启动时不做自动全量迁移。详见 `docs/minio-storage.md`。
+
+### 认证、会话与 RBAC（P0-A，`api/auth.py`、`api/users.py`）
+
+- 默认拒绝：`build_router()` 把业务路由挂在 `Depends(require_user)` 下，公开例外仅 `GET /api/health` 与 `POST /api/auth/login`；`/docs` 与 `/openapi.json` 仍未保护。`POST /api/search` 是需认证的只读 POST，不能按 HTTP 方法一刀切。
+- PostgreSQL `users`/`user_sessions`（Alembic `0003`）是账号与会话的事实来源；密码 Argon2，数据库只存会话 token 的 SHA-256。登录、登出、改密、重置密码、停用账号、修改角色均有撤销语义；默认 12h TTL、5 次失败锁 15 分钟。最后一个启用管理员不可停用/降级。
+- 角色：`admin`、`bid_manager`、`writer`、`reviewer`、`viewer`，外加不可登录的 `service` 主体。`require_write` = admin/bid_manager/writer；`require_review` 再加 reviewer；`require_manage` = admin/bid_manager；`require_admin` 仅交互式 admin（service 拒绝）。`service` 可通过 write/review/manage，但不能管理用户、删除公司或强制导出。
+- 端点：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`、`POST /api/auth/password`；管理员 `GET/POST /api/users`、`PATCH /api/users/{user_id}`、`POST /api/users/{user_id}/password`。守卫映射：parse/bids/bid-runs 创建与所有写操作 `require_write`；合规 check/fix-plan `require_review`；公司新增/编辑与普通导出 `require_manage`；用户管理、公司删除、`force=true` 导出 `require_admin`。
+- 公司数据脱敏：非 manage/admin 的 `GET /api/companies` 去掉电话、开户行、银行账号，`GET /api/companies/{id}` 还返回空 `profile`；完整 `BidderProfile` 仅 admin/bid_manager 可见。
+- CLI `uv run python -m api.users create-admin|create-user|reset-password|list`；交互式 getpass 或 `--password-stdin`，不提供 `--password`。密码 12–128 字符、不得等于用户名、拒绝少量常见弱口令。
+- `AUTH_ENABLED=false` 是仅限本机的逃生口：所有请求以本地 admin 处理，`/api/auth/me` 返回 `auth_enabled=false`，登录接口 400；禁止在监听 `0.0.0.0`/内网时使用。`AUTH_ENABLED=true` 但数据库不可用时受保护接口 503（fail closed），不会匿名放行。
+- `MCP_API_TOKEN` 是 MCP 服务端调用业务 API 的 service token（与入站 `MCP_HTTP_TOKEN` 无关）；认证开启时必须设置，否则 MCP 调用 401。轮换需同时重启 API 与 MCP。
+- 当前边界：没有项目隔离（任何登录用户可见所有 run/文档/产物）、没有审计表、没有 IP 级限流、CORS 仍为 `*`、无 TLS、token 存 localStorage、`/docs` 公开。P0-A 不是可上线里程碑；详见 `docs/authentication.md`。
 
 ### FastAPI 上传接口（已实现，`api/`）
 
@@ -147,7 +164,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - Worker 与 API 必须同一 checkout、共享 `.env`；local 模式还需共享 `upload/`，minio 模式通过对象存储交换输入/产物。Windows 用 `--pool=solo`（单任务串行，保护 MinerU 配额），不自动重试（`acks_late=False`），`mark_running` 原子 claim 防重复解析。
 - Redis 不可用时 `POST /api/parse` 与 `GET /api/jobs/{id}` 返回 503，health 为 `status=degraded, redis_ok=false`。
 - `TASK_BACKEND=local` 使用进程内 `JobStore` + `ThreadJobRunner`，无需 Redis/worker，但 API 重启即丢任务；测试与本地离线开发用它。
-- CORS 默认 `*`、无 credentials，兼容 Vite dev 与 Electron `file://`；对外暴露前需改成显式来源并加鉴权。`result.output_dir` 是绝对路径，仅适合本地桌面端。
+- CORS 默认 `*`、无 credentials，兼容 Vite dev 与 Electron `file://`；认证已加（Bearer token），但对外暴露前仍需改成显式来源、加 TLS/安全头并做生产加固。`result.output_dir` 是绝对路径，仅适合本地桌面端。
 
 ### 多 Agent 投标文件编写（已实现，`src/bidding/`）
 
@@ -171,7 +188,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - profile 隐私不变：DB 只存 `profile_source/profile_sha256/profile_relpath` 与缺失字段标签；Redis/Celery payload 只有 `run_id/generation_token/section_ids/assemble/mode`；`profile.json` 只存私有对象 key，不在 artifact allowlist、MCP 输出、下载 URL 或 Redis/Celery payload 中。
 - minio 模式在 create/generate/assemble/edit/regenerate/export 前 hydration parsed 与 run，写后同步产物；人工编辑/重写/大纲失效会清理远程过期报告、门禁、合规、一致性与配图对象，但保留 `bid.md` 与私有 profile。
 - `POST /api/bids`、CLI、旧 artifact 接口保持兼容；staged job 的 artifact 目录通过 job payload 的 `run_id` 解析（`job_id != run_id`）。
-- 仍未实现：PDF/DOC 导出、RBAC、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
+- 仍未实现：PDF/DOC 导出、项目级数据隔离、审计日志、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
 
 ### 合规检查、一致性台账与修复方案（P1-B，`src/bidding/compliance.py`、`consistency.py`、`fix_plan.py`）
 
@@ -195,7 +212,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### MCP 服务端与客户端（`api/mcp_server.py`、`src/mcp_client/`）
 
-- **服务端**是本地 FastAPI 的薄代理，不直接访问 DB/Redis/Celery/文件系统，复用 `BidRunService` 的守卫、revision CAS、artifact allowlist 与 profile 排除。默认 stdio：`uv run python -m api.mcp_server`；HTTP：`--transport http --host 127.0.0.1 --port 8765`。HTTP 默认仅回环，非回环绑定必须 `MCP_HTTP_TOKEN`，请求需 `Authorization: Bearer`。
+- **服务端**是本地 FastAPI 的薄代理，不直接访问 DB/Redis/Celery/文件系统，复用 `BidRunService` 的守卫、revision CAS、artifact allowlist 与 profile 排除。默认 stdio：`uv run python -m api.mcp_server`；HTTP：`--transport http --host 127.0.0.1 --port 8765`。HTTP 默认仅回环，非回环绑定必须 `MCP_HTTP_TOKEN`，请求需 `Authorization: Bearer`。服务端调用业务 API 时另用 `MCP_API_TOKEN`（service 身份）；`AUTH_ENABLED=true` 且未设置时调用 401，启动日志会警告。
 - 工具覆盖 health/文档检索/公司列表/run/大纲/章节/门禁/合规/一致性/job/artifact/配图查询，以及 create/patch/generate/resume/cancel/assemble/edit/regenerate/fix-plan/apply-fix/regenerate-figures 等写操作。长任务只返回 `job_id`，由调用方轮询 `get_job`。`create_bid_run` 不接受 inline profile；`read_artifact_text` 强制 allowlist 且拒绝 `profile.json`；`list_companies` 只返回 id/名称/信用代码。
 - **客户端**默认关闭（`MCP_CLIENT_ENABLED=false`），只连接 `mcp_servers.json` 中声明的服务器与 `allowed_tools`；参数只能使用固定占位符（`${query}`、`${doc_id}`、`${top_k}`、`${company_name}`、`${project_name}`、`${section_id}`、`${section_title}`、`${figure_spec}`），未知占位符启动报错。LLM 不能发现或调用任意 MCP 工具。
 - 支持 `stdio` 与 `streamable_http`；命令/参数/URL/headers/env 中的 `${VAR}` 从环境展开（如 `${DRAWING_TOKEN}`），缺失变量报错。真实 `mcp_servers.json` 已 gitignore，示例为 `mcp_servers.example.json`；`.mcp.json` 也已 gitignore，示例为 `.mcp.json.example`。
@@ -205,16 +222,17 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、RBAC/项目实体、Docker Compose、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
+- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、项目实体与项目级 ACL（P0-B）、审计日志（P0-C）、生产部署/CI/备份/TLS/限流（P0-D）、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
+- 认证：`AUTH_ENABLED`（默认 true）、`AUTH_SESSION_TTL_HOURS`、`AUTH_LOGIN_MAX_FAILURES`、`AUTH_LOCKOUT_MINUTES`、`MCP_API_TOKEN`。`AUTH_ENABLED=false` 仅用于无数据库的本机开发，所有请求按本地 admin 处理。
 - 对象存储：`STORAGE_BACKEND`（默认 minio）、`MINIO_ENDPOINT`、`MINIO_SECURE`、`MINIO_BUCKET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_CONSOLE_PORT`（仅 start.bat）、`MINIO_TIMEOUT_SECONDS`。
 - AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。
-- MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
+- MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`、`MCP_API_TOKEN`（调用业务 API 的 service token）。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
-- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run 接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
+- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
@@ -224,5 +242,6 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 ## 注意
 
 - Windows 环境开发；长任务（解析/抽取/编写）不要阻塞 HTTP 请求，走 Celery 或轮询任务模型。
+- API 默认开启认证；新增 `/api/*` 业务路由必须挂 `require_user` 或更严格的角色依赖，只有 health/login 可以公开。不要用「所有 POST 都算写」的中间件，因为 `/api/search` 是需认证的只读 POST。`AUTH_ENABLED=false` 只能用于本机开发。
 - 不要提交 `.env`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`、真实的 `mcp_servers.json` 或 `.mcp.json`。
-- `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL；只存 MinIO 私有 key `private/profiles/<doc_id>/<run_id>.json`。外部证据默认不可信，外部绘图默认关闭。
+- `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL；只存 MinIO 私有 key `private/profiles/<doc_id>/<run_id>.json`。外部证据默认不可信，外部绘图默认关闭。认证 token 也不得进入 URL、日志或 Redis/Celery payload。
