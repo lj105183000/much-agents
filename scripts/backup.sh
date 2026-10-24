@@ -5,6 +5,7 @@
 #   scripts/backup.sh [destination]
 #   BACKUP_CHROMA=1 scripts/backup.sh
 #   BACKUP_RETENTION_DAYS=14 scripts/backup.sh
+#   ALLOW_EMPTY_MINIO=1 scripts/backup.sh   # accept an intentionally empty bucket
 #
 # Run on the production Docker host. The compose stack must be running.
 set -euo pipefail
@@ -57,6 +58,18 @@ echo "[2/3] MinIO objects"
     mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
     mc mirror --overwrite "local/$MINIO_BUCKET" /backup
   '
+
+# An empty mirror usually means the wrong bucket/alias, not an empty system.
+# Restoring it later would wipe the bucket, so refuse by default.
+if [[ -z "$(find "$DEST/minio" -type f -print -quit)" ]]; then
+  if [[ "${ALLOW_EMPTY_MINIO:-0}" == "1" ]]; then
+    echo "warning: MinIO backup is empty (ALLOW_EMPTY_MINIO=1)" >&2
+  else
+    echo "MinIO backup is empty; refusing to create an unusable backup" >&2
+    echo "Set ALLOW_EMPTY_MINIO=1 only if the bucket is intentionally empty." >&2
+    exit 1
+  fi
+fi
 
 if [[ "$BACKUP_CHROMA" == "1" ]]; then
   echo "[3/3] Chroma volume (optional)"

@@ -96,7 +96,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps
 ```
 
-启动顺序由 Compose 控制：Postgres/Redis/MinIO/Chroma 健康 → `migrate` 完成 → API/worker 启动 → Nginx 等待 API 健康。
+启动顺序由 Compose 控制：Postgres/Redis/MinIO/Chroma 健康 → `migrate` 与 `createbuckets` 完成 → API/worker 启动 → Nginx 等待 API 健康。`createbuckets` 失败时 API/worker 不会启动，避免首次上传遇到 bucket 不存在。
 
 镜像内默认使用 `deb.debian.org`、`pypi.org` 与 `registry.npmjs.org`。受限网络（如国内内网）可在构建时改用镜像源；这些构建参数不会进入运行时配置：
 
@@ -156,7 +156,9 @@ scripts/backup.sh
 # 2. 获取新代码 / 新镜像
 git pull
 
-# 3. 先迁移，再滚动重启
+# 3. 先重建并执行迁移，再滚动重启
+#    `run` 会复用本地已有的 migrate 镜像，不随代码自动更新。
+docker compose -f docker-compose.prod.yml build migrate
 docker compose -f docker-compose.prod.yml run --rm migrate
 docker compose -f docker-compose.prod.yml up -d --build api worker-parse worker-bid nginx
 
@@ -205,6 +207,7 @@ BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天
 注意事项：
 
 - 备份期间建议暂停写入（至少暂停上传与生成），避免 Postgres 与 MinIO 跨系统不一致。
+- 如果 MinIO 备份为空，脚本默认失败，避免生成一个恢复时会清空 bucket 的不可用备份。确实使用空 bucket 时才设置 `ALLOW_EMPTY_MINIO=1`。
 - `deploy/env.production` 与 TLS 私钥**不在备份内**，单独加密保存。
 - 保留策略只删除 `backups/` 下的旧目录；自定义目标目录需自行清理。
 
@@ -214,9 +217,17 @@ BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天
 scripts/restore.sh backups/20261024T120000Z
 FORCE=1 scripts/restore.sh <dir>               # 自动化，无交互确认
 RESTORE_CHROMA=1 scripts/restore.sh <dir>      # 同时恢复 Chroma
+ALLOW_MISSING_CHECKSUMS=1 scripts/restore.sh <dir>  # 无 SHA256SUMS 时才使用
+ALLOW_EMPTY_MINIO=1 scripts/restore.sh <dir>        # 仅限确实为空的 bucket
 ```
 
-脚本会：校验 SHA256 → 停止 API/worker → 用 `mc mirror --remove` 恢复 MinIO → `pg_restore --clean --if-exists` → 可选恢复 Chroma → 重启 API/worker → 打印表行数与对象数。
+脚本会：校验 SHA256 → 停止 API/worker → 用 `mc mirror --remove` 恢复 MinIO → `pg_restore --clean --if-exists --exit-on-error` → 可选恢复 Chroma → 重启 API/worker → 打印表行数与对象数。
+
+安全前置条件：
+
+- 默认要求 `SHA256SUMS` 且校验通过；缺失时拒绝恢复（`ALLOW_MISSING_CHECKSUMS=1` 仅用于可信备份）。
+- 默认拒绝缺失或为空的 `minio/` 备份，避免 `mc mirror --remove` 清空 bucket；确有空 bucket 时才用 `ALLOW_EMPTY_MINIO=1`。
+- 恢复顺序是先 MinIO、后 PostgreSQL。任一步失败时脚本退出，**API/worker 保持停止**，不会把半恢复的数据库暴露给用户；排查后重跑同一备份，或改用更早的备份。脚本不自动执行迁移。
 
 恢复后必须验证：登录、打开一个 run、下载产物、`GET /api/ready`、`python -m api.audit verify`。建议每季度在测试栈演练一次，并记录实际 RPO/RTO。
 

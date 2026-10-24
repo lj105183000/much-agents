@@ -5,10 +5,13 @@
 #   scripts/restore.sh backups/20261024T120000Z
 #   FORCE=1 scripts/restore.sh <dir>          # non-interactive (automation)
 #   RESTORE_CHROMA=1 scripts/restore.sh <dir>
+#   ALLOW_MISSING_CHECKSUMS=1 scripts/restore.sh <dir>  # no SHA256SUMS file
+#   ALLOW_EMPTY_MINIO=1 scripts/restore.sh <dir>        # intentionally empty bucket
 #
 # This replaces database contents and MinIO objects. API and workers are
-# stopped during the restore and started again at the end.
-set -euo pipefail
+# stopped during the restore and started again at the end. On failure they
+# stay stopped; the script never exposes a partially restored database.
+set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if docker compose version >/dev/null 2>&1; then
@@ -22,7 +25,25 @@ fi
 SOURCE="${1:-}"
 FORCE="${FORCE:-0}"
 RESTORE_CHROMA="${RESTORE_CHROMA:-0}"
+ALLOW_MISSING_CHECKSUMS="${ALLOW_MISSING_CHECKSUMS:-0}"
+ALLOW_EMPTY_MINIO="${ALLOW_EMPTY_MINIO:-0}"
 CHROMA_VOLUME="${CHROMA_VOLUME:-much-agents-prod_chroma-data}"
+STOPPED=0
+
+restore_failed() {
+  status=$?
+  echo >&2
+  echo "Restore failed (exit $status)." >&2
+  if [[ "$STOPPED" == "1" ]]; then
+    echo "API/workers are stopped and MinIO may already have been restored." >&2
+    echo "Do not start API/workers against a partially restored database." >&2
+  else
+    echo "API/workers were not stopped yet." >&2
+  fi
+  echo "Fix the error, then rerun: FORCE=1 scripts/restore.sh <dir>" >&2
+  exit "$status"
+}
+trap restore_failed ERR
 
 if [[ -z "$SOURCE" || ! -d "$SOURCE" ]]; then
   echo "usage: scripts/restore.sh <backup-directory>" >&2
@@ -36,8 +57,43 @@ fi
 # relative backup directory.
 SOURCE="$(cd "$SOURCE" && pwd)"
 
-echo "Verifying backup checksums..."
-(cd "$SOURCE" && if [[ -f SHA256SUMS ]]; then sha256sum -c SHA256SUMS; else echo "SHA256SUMS missing; skipping"; fi)
+if [[ ! -f "$SOURCE/SHA256SUMS" ]]; then
+  if [[ "$ALLOW_MISSING_CHECKSUMS" == "1" ]]; then
+    echo "warning: SHA256SUMS missing; skipping checksum verification" >&2
+  else
+    echo "$SOURCE/SHA256SUMS is missing; refusing to restore an unverified backup" >&2
+    echo "Set ALLOW_MISSING_CHECKSUMS=1 only if you trust this backup." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -d "$SOURCE/minio" ]]; then
+  if [[ "$ALLOW_EMPTY_MINIO" == "1" ]]; then
+    echo "warning: $SOURCE/minio is missing; treating the bucket as empty" >&2
+    mkdir -p "$SOURCE/minio"
+  else
+    echo "$SOURCE/minio is missing; refusing to wipe the bucket" >&2
+    echo "Set ALLOW_EMPTY_MINIO=1 only if the bucket is intentionally empty." >&2
+    exit 1
+  fi
+elif [[ -z "$(find "$SOURCE/minio" -type f -print -quit)" ]]; then
+  if [[ "$ALLOW_EMPTY_MINIO" == "1" ]]; then
+    echo "warning: $SOURCE/minio is empty; treating the bucket as empty" >&2
+  else
+    echo "$SOURCE/minio is empty; refusing to wipe the bucket" >&2
+    echo "Set ALLOW_EMPTY_MINIO=1 only if the bucket is intentionally empty." >&2
+    exit 1
+  fi
+fi
+
+if [[ -f "$SOURCE/SHA256SUMS" ]]; then
+  echo "Verifying backup checksums..."
+  # Keep this out of the ERR trap so a bad checksum reports once.
+  if ! (cd "$SOURCE" && sha256sum -c SHA256SUMS); then
+    echo "Checksum verification failed; refusing to restore" >&2
+    exit 1
+  fi
+fi
 
 if [[ "$FORCE" != "1" ]]; then
   echo
@@ -52,6 +108,7 @@ fi
 
 echo "[1/5] Stopping API and workers"
 "${COMPOSE[@]}" stop api worker-parse worker-bid
+STOPPED=1
 
 restore_minio() {
   echo "[2/5] Restoring MinIO objects"
@@ -68,7 +125,7 @@ restore_minio
 
 echo "[3/5] Restoring PostgreSQL"
 "${COMPOSE[@]}" exec -T postgres sh -c \
-  'pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  'pg_restore --clean --if-exists --exit-on-error --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < "$SOURCE/postgres.dump"
 
 if [[ "$RESTORE_CHROMA" == "1" && -f "$SOURCE/chroma/chroma.tgz" ]]; then
