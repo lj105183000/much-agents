@@ -1,21 +1,22 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24）。P0-A「认证 / RBAC」已实现；其余阶段仍为规划。功能现状以代码与 `CLAUDE.md` 为准，认证细节见 `docs/authentication.md`。
+> 状态：路线图（2026-10-24）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`。
 
 ## Context
 
 Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结构化抽取 → Chroma 检索 → 多 Agent 编写/审查/修订 → 确定性组装 → 21 项合规 + 一致性台账 + 修复方案 → 配图 → 门禁 → DOCX 导出；存储层已有 MinIO + 私有 profile 边界，任务层已有 Celery/Redis + PostgreSQL 持久化 run。工程骨架和"不编造事实"的约束是真实优势。
 
-它起步时仍是**单机单用户工具**：API 没有认证、CORS 为 `*`、基础设施使用默认弱口令、没有 CI/Dockerfile/Compose/备份；生成内容没有引用契约，评分要求覆盖只靠关键词子串；没有项目隔离、审批、版本与审计；DOCX 只是草稿级。P0-A 已补上认证/RBAC，但其余差距仍使直接部署到内网多人环境不可接受。
+它起步时是**单机单用户工具**：API 没有认证、CORS 为 `*`、基础设施使用默认弱口令、没有 CI/Dockerfile/Compose/备份；生成内容没有引用契约，评分要求覆盖只靠关键词子串；没有项目隔离、审批、版本与审计；DOCX 只是草稿级。P0 已完成认证/RBAC、项目隔离、审计与生产部署基座；生成可信度、审批/版本与交付物仍是后续阶段。
 
-本路线图面向**内网多人系统**，覆盖用户选定的四个方向：生成质量与可信度、多用户与协作、部署与运维、交付物与复用。路线图最初只做规划；P0-A 认证/RBAC 已按独立计划先行落地，其余阶段仍待实施。
+本路线图面向**内网多人系统**，覆盖用户选定的四个方向：生成质量与可信度、多用户与协作、部署与运维、交付物与复用。路线图最初只做规划；P0-A/B/C/D 已按独立计划落地，P1–P4 仍待实施。
 
 ### 现状证据（关键差距）
 
-- **认证/RBAC（P0-A 已补）**：本地账号、可撤销会话、5 角色、默认拒绝 API、管理员用户管理与 MCP 服务账号已实现（`api/auth.py`、`api/users.py`、Alembic `0003`）。但项目隔离、审计与生产加固仍未做，见 3.2/3.3/3.6。
-- **开发默认仍不适合直接上内网**：`API_HOST=0.0.0.0`、`CORS_ORIGINS=*`、无 TLS、`/docs` 公开、token 存 localStorage；生产部署见 P0-D。
-- **无项目实体**：数据库只有 `companies`、`bid_runs`、`bid_outline_sections`、`bid_section_states`（`migrations/versions/0001`、`0002`）；文档库仍是扫描对象存储。
-- **无交付工程**：根目录没有 `Dockerfile`、`docker-compose.yml`、`.github/`、`README`，只有 `start.bat` 开发脚本；生产部署、升级、备份均无定义。
+- **认证/RBAC（P0-A 已补）**：本地账号、可撤销会话、5 角色、默认拒绝 API、管理员用户管理与 MCP 服务账号（`api/auth.py`、`api/users.py`、Alembic `0003`）。
+- **项目隔离与审计（P0-B/C 已补）**：`projects`/`project_members`/`documents` + `bid_runs.project_id`（`0004`）、`X-Project-Id` 与角色求交、append-only `audit_events` 哈希链（`0005`）。
+- **生产部署（P0-D 已补）**：多阶段 `Dockerfile`、`docker-compose.prod.yml`、Nginx TLS/安全头、`/api/live` 与 `/api/ready`、拆分 parse/bid 队列、备份/恢复脚本、GitHub Actions CI。
+- **开发默认仍不等于生产**：`.env.example` 保留 `0.0.0.0` 与 `CORS_ORIGINS=*` 以兼容本机启动；`ENVIRONMENT=production` 会拒绝这些值并 fail-fast。
+- **前端测试仍薄**：已有 Vitest 覆盖 URL 信任边界与 API 客户端，但没有组件/E2E 测试；token 仍存 localStorage。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
 - **无审批/版本**：`src/bidding/gate.py:214-220` 的强制导出只记录不拦截；没有审批人、审批状态、版本 diff 或恢复。
 - **交付物有限**：`src/bidding/docx_export.py:286-370` 仅基础标题/段落/表格/图片；无 PDF；无模板管理。
@@ -23,7 +24,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 0. 结论
 
-1. **先做 P0 安全与部署基座**。认证/RBAC 已完成，但项目隔离、审计和备份仍未补齐；没有这些能力的系统不能上内网，这是硬门槛。
+1. **P0 安全与部署基座已完成**：认证/RBAC、项目隔离、审计、Compose/TLS/CI/备份均已落地；上线前仍需按 `docs/deployment.md` 做一次干净主机演练与手工验收。
 2. **质量的下一个杠杆不是更多 Agent，而是证据闭环**：每条关键事实能引用到招标文件页码，每条评分要求有登记与覆盖状态，每次生成有成本与参数溯源。
 3. **协作的核心是审批与版本**，不是聊天框：审批绑定内容哈希，任何修改使审批失效；版本可 diff/恢复；导出受审批锁。
 4. **交付物与复用决定长期价值**：高保真 DOCX/PDF、模板、企业资质库、跨标书复用。
@@ -74,7 +75,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 > 已落地：默认拒绝 API、本地账号与 Argon2 密码、SHA-256 不透明会话、5 角色 + `service` 主体、登录锁定、最后管理员保护、管理员用户管理、MCP `MCP_API_TOKEN`、前端登录/登出/角色感知、认证 Blob 产物访问。实现与验证见 `docs/authentication.md`。
 >
-> 未落地：项目级 `project_members`（属于 3.2）、审计写入（3.3）、Redis/IP 登录限流、生产 TLS/安全头（3.6）。因此 P0-A 单独不能作为内网多人上线验收。
+> 配套已落地：项目级 `project_members`（3.2）、审计（3.3）、IP 登录限流与生产 TLS/安全头（3.6）。
 
 **做什么**
 
@@ -103,11 +104,13 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 会话过期/撤销后立即失效；登录失败 5 次锁定 15 分钟。
 - pytest 覆盖每个角色 × 关键端点矩阵。
 
-### 3.2 项目实体与数据隔离
+### 3.2 项目实体与数据隔离（P0-B 已实现）
+
+> 已落地：`projects`/`project_members`/`documents`（`0004`）、`bid_runs.project_id`、`X-Project-Id`、角色求交、run/任务/产物/检索隔离、默认项目回填与 `backfill-documents`。细节见 `docs/projects.md`。
 
 **做什么**
 
-- 新增 `projects`（招标项目）、`project_members`、`documents`（doc_id 注册表）、`project_documents`。
+- 新增 `projects`（招标项目）、`project_members`、`documents`（以 `(project_id, doc_id)` 为主键的注册表）。
 - `bid_runs.project_id` 必填；公司库默认组织级共享（编辑需 `bid_manager`/`admin`），如多事业部需要隔离再加 `company_scope`。
 - 所有列表/查询/产物下载按项目成员校验；artifact 流式接口先查 ACL 再读对象。
 - 现有数据迁移：创建"默认项目"，把现有 companies/bid_runs/documents 归入；管理员自动成为成员。
@@ -125,7 +128,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 现有数据全部归入默认项目且可正常打开。
 - 文档列表不再全量扫描对象存储（走 DB 注册表 + 分页）。
 
-### 3.3 审计日志
+### 3.3 审计日志（P0-C 已实现）
+
+> 已落地：`audit_events`（`0005`）、SHA-256 哈希链、数据库 append-only 触发器、请求 ID、显式动作覆盖、管理员查询/校验/CSV。细节见 `docs/audit.md`。
 
 **做什么**
 
@@ -156,16 +161,18 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 切换 embedding 模型触发重建且旧集合不被混用；检索结果可复现。
 - 断网环境（除内网网关）下解析（PyMuPDF）、生成、检索、导出可运行；云解析/云嵌入明确报可读错误。
 
-### 3.5 部署、CI 与备份
+### 3.5 部署、CI 与备份（P0-D 已实现）
+
+> 已落地：多阶段 `Dockerfile`、`docker-compose.prod.yml`、parse/bid 队列拆分、`/api/live` `/api/ready`、Nginx TLS、`scripts/backup.sh` / `restore.sh`、GitHub Actions。细节见 `docs/deployment.md`。
 
 **做什么**
 
 - 多阶段 `Dockerfile`（后端 uv + Python 3.12-slim，非 root；前端 Node build → Nginx）。
-- `docker-compose.yml`：api、worker-parse、worker-bid、postgres、redis、minio、chroma、nginx；healthcheck + `depends_on: service_healthy`；命名卷；内部网络；仅 Nginx 暴露 443。
-- **拆分队列**：`parse` 与 `bid` 分开，parse worker 并发 1，bid worker 并发 2–4，避免长标书任务阻塞解析（当前两者共用 `parse` 队列且 `--pool=solo`）。
-- CI：`.github/workflows/ci.yml` — 后端 pytest、前端 lint/build、docker build、`alembic upgrade head`（空库）、gitleaks/pip-audit/npm audit。
-- 备份：`scripts/backup.py` 用 `pg_dump -Fc` + MinIO 镜像 + Chroma 卷快照，经 `restic` 加密到 NAS；`scripts/restore.py` + 季度演练文档。
-- 升级：镜像 tag + 迁移前置备份 + 回滚步骤；`start.bat` 保留为开发入口。
+- `docker-compose.prod.yml`：api、worker-parse、worker-bid、postgres、redis、minio、chroma、nginx；healthcheck + `depends_on: service_healthy`；命名卷；内部网络；仅 Nginx 暴露 80/443。
+- **拆分队列**：`parse` 与 `bid` 分开，parse worker 并发 1，bid worker 独立消费，避免长标书任务阻塞解析。
+- CI：`.github/workflows/ci.yml` — 后端 pytest/ruff、前端 lint/test/build、docker build、`alembic upgrade head`（空库）、gitleaks/pip-audit/npm audit。
+- 备份：`scripts/backup.sh` 用 `pg_dump -Fc` + MinIO `mc mirror` + 可选 Chroma 卷 tar，生成 SHA-256 清单并保留 14 天；`scripts/restore.sh` + 季度演练文档。归档到 NAS 与静态加密需由主机侧承担。
+- 升级：升级前备份 + 一次性 `migrate` 服务 + 重建/重启 + 回滚步骤；`start.bat` 保留为开发入口。
 - TLS：企业证书挂载；HTTP→HTTPS；安全响应头；SSE 关 buffering。
 
 **验收**
@@ -174,7 +181,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - CI 在 PR 上全绿；镜像可复现构建。
 - 备份 → 删除测试库 → 恢复，数据与对象一致；RTO/RPO 写入运维文档。
 
-### 3.6 安全加固
+### 3.6 安全加固（P0-D 已实现）
+
+> 已落地：生产 fail-fast、显式 CORS、`API_HOST` 默认回环、文档禁用、安全头/CSP、上传魔数与页数校验、登录 IP 限流、SQL 参数隐藏、Electron 导航/权限守卫、最后管理员 TOCTOU 修复。
 
 - CORS 默认改为显式来源（生产同源，可不需要 CORS）；API 默认绑定 `127.0.0.1`，由 Nginx 反代。生产环境若 `AUTH_ENABLED=false` 或仍使用示例口令，启动直接失败（不仅是 warning）。
 - 生产禁用 `/docs`/`/redoc` 或仅 admin；安全头（CSP、X-Content-Type-Options、Referrer-Policy、frame-ancestors）。
@@ -349,7 +358,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 新增表（按阶段）：
 
-- **P0**：`users`、`user_sessions`、`projects`、`project_members`、`documents`、`project_documents`、`audit_events`。
+- **P0（已实现）**：`users`、`user_sessions`、`projects`、`project_members`、`documents`、`audit_events`。
 - **P1**：`document_requirements`（或先 JSON 产物）、`run_usage`（成本/用量）。
 - **P2**：`bid_section_versions`、`section_comments`、`section_assignments`、`run_events`、`notifications`、审批字段/表。
 - **P3**：`templates`、`company_assets`、`approved_content`。
@@ -421,9 +430,8 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 14. 落地方式与下一步
 
-P0-A（认证/RBAC）已落地，其余阶段仍按独立实施计划推进。建议顺序：
+P0 全部四个切片（认证/RBAC、项目隔离、审计、部署/CI/备份）已落地。建议顺序：
 
-1. 把 P0 剩余部分拆成 3 个独立实施计划：项目隔离、审计、部署/CI/备份；每个计划单独评审与验收。
-2. 在 P0 开发同时，用现有系统跑 2–3 份真实标书建立质量/成本基线，作为 P1 评测集的种子。
-3. P0 上线前完成一次安全自查（认证绕过、越权、上传、CORS、默认口令、日志泄露）。
-4. 每个阶段结束按第 13 节做用户验收，不通过不进入下一阶段。
+1. 按 `docs/deployment.md` 在干净 Linux 主机完成一次部署、备份恢复与跨项目隔离验收。
+2. 用现有系统跑 2–3 份真实标书建立质量/成本基线，作为 P1 评测集的种子。
+3. P1 从引用契约与需求覆盖矩阵开始；每个阶段结束按第 13 节做用户验收，不通过不进入下一阶段。

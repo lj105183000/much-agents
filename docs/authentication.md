@@ -1,12 +1,12 @@
 # 认证、会话与 RBAC
 
-> 状态：P0-A 已实现（2026-10-24）。本切片提供本地账号、可撤销会话、角色守卫、管理员用户管理和 MCP 服务账号。它**不是可以安全上内网多人的完整版本**：项目隔离、审计日志、IP 级限流、TLS 与生产安全加固仍未实现，详见文末「当前边界」。
+> 状态：P0-A 已实现（2026-10-24）。本切片提供本地账号、可撤销会话、角色守卫、管理员用户管理和 MCP 服务账号。P0-B 项目隔离、P0-C 审计、P0-D 生产加固与 TLS 已补齐，见 `docs/projects.md`、`docs/audit.md`、`docs/deployment.md`；剩余边界见文末。
 
 ## 1. 范围与设计
 
-- 所有 `/api/*` 默认要求认证，公开例外只有 `GET /api/health` 和 `POST /api/auth/login`。
+- 所有 `/api/*` 默认要求认证，公开例外只有 `GET /api/health`、`GET /api/live`、`GET /api/ready` 和 `POST /api/auth/login`。
 - 使用**不透明 Bearer token**（`secrets.token_urlsafe(32)`），服务端只保存 SHA-256 哈希，不保存明文；登出、改密、重置密码、停用账号或修改角色都会撤销会话。
-- 密码使用 Argon2（`argon2-cffi`）哈希；校验在线程池中执行，避免阻塞事件循环。
+- 密码使用 Argon2（`argon2-cffi`）哈希；校验在线程池中执行，并受 `AUTH_HASH_CONCURRENCY` 信号量限制，避免并发登录耗尽线程池。
 - 认证状态保存在 PostgreSQL 的 `users` 与 `user_sessions` 表（Alembic `0003`）。Redis 仍只保存 Celery 任务状态。
 - 前端登录后把 token 保存在 `localStorage`（键 `much-agents:auth:v1`），所有 API 请求通过 `Authorization: Bearer <token>` 发送；产物图片和下载也用带认证头的 `fetch` 取 Blob，不使用 query token 或 cookie。
 - `AUTH_ENABLED=false` 是显式的本地开发逃生口，不是生产模式。
@@ -102,18 +102,21 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/api/auth/me
 
 - 默认有效期 12 小时（`AUTH_SESSION_TTL_HOURS`），不做滑动续期；过期后重新登录。
 - 连续登录失败默认 5 次后锁定 15 分钟（`AUTH_LOGIN_MAX_FAILURES` / `AUTH_LOCKOUT_MINUTES`）。锁定期间即使密码正确也返回 429。
+- 另有按 IP 的失败窗口：默认 300 秒内失败 20 次后拒绝该地址的登录（`AUTH_LOGIN_IP_*`）；生产 Nginx 还有 `limit_req`。只有来自 `TRUSTED_PROXIES` 的 `X-Forwarded-For` 才被采信。
 - 未知用户名也会执行一次 dummy Argon2 校验，降低用户名枚举的时间侧信道。
 - 角色修改或停用账号会立即撤销该用户全部会话。
 - 认证开启但数据库不可用时，受保护接口返回 503（fail closed），不会退化为匿名访问。
+- 最后一个启用管理员的停用/降级检查在单事务内使用 `pg_advisory_xact_lock`，避免并发请求同时通过检查。
 
 ## 5. 前端行为
 
 - 应用挂载时无论有没有本地 token 都请求 `GET /api/auth/me`：认证关闭时直接进入本地模式；有 token 时验证；401 则显示登录页。
 - 登录页支持切换「API 连接设置」。切换 API base 会清除已保存的会话并重新加载页面，避免把 A 后端的 token 发给 B 后端。
-- 任意请求返回 401 会清除本地会话并回到登录页；登录接口本身的 401 只显示错误，不做全局登出。
+- 任意请求返回 401 会清除本地会话并回到登录页；登录接口本身的 401 只显示错误，不做全局登出。旧 token 的在途请求不会误踢新会话。
 - 会话保存在 `localStorage` 的 `much-agents:auth:v1`，并与当前 API base、过期时间绑定；不写入 URL、不使用 cookie。
 - 任务历史按用户 id 分键保存，避免共享浏览器串数据。
-- 「用户管理」视图只对管理员显示；角色感知按钮覆盖上传、编写、组装、编辑、重写、配图重新生成、公司管理和导出。
+- 「用户管理」与「审计日志」视图只对管理员显示；角色感知按钮覆盖上传、编写、组装、编辑、重写、配图重新生成、公司管理和导出。
+- Header 提供项目切换器（业务请求自动带 `X-Project-Id`）、修改密码对话框与登出；登出会清除当前用户的解析/任务历史与项目选择。
 - 产物预览与下载通过带认证的 Blob 请求完成；图片使用 `AuthenticatedImage`，Markdown 内图片也会被重写为认证 Blob。没有 query token。
 
 ## 6. MCP 服务账号
@@ -149,16 +152,16 @@ MCP_API_TOKEN=<随机长字符串>
 
 ## 8. 当前边界与已知风险
 
-以下事项明确**尚未实现**，P0-A 不能作为内网多人的上线验收：
+P0-B/C/D 已补齐项目隔离、审计与生产部署基线，但仍存在以下边界：
 
-1. **没有项目隔离**：任何登录用户仍能列出、读取、下载所有文档、run、章节和产物，也能检索所有已解析招标文件。角色只限制动作，不限制数据范围。P0-B 将加入项目/成员 ACL。
-2. **没有审计表**：登录成功/失败只写应用日志，用户、公司、run、导出等变更没有不可篡改的审计记录。P0-C 将加入 `audit_events` 与哈希链。
-3. **没有 IP 级限流**：账号锁定可被用来对已知用户名做短时 DoS；登录失败只按账号计数。
-4. **CORS 仍为 `*`，没有 TLS**：开发默认 `API_HOST=0.0.0.0`、`CORS_ORIGINS=*`，仅适合可信本机/实验网。生产需显式来源、反向代理 HTTPS、安全响应头，并考虑关闭公开 `/docs` 与 `/openapi.json`。
-5. **token 存在 localStorage**：XSS 可窃取会话。当前没有 CSP，Electron 也没有安全存储；后续在 P0-D 加固。
-6. **共享的 `MCP_API_TOKEN`**：泄露即获得 service 权限；只应在本机 MCP 使用，并定期轮换。
-7. **默认开发凭据**：`.env.example` 中的 PostgreSQL/MinIO 口令只用于本地开发，生产必须替换。
-8. **没有自助改密界面**：`POST /api/auth/password` 已可用（前端 `authApi.changePassword` 也已封装），但当前 UI 只提供管理员重置密码；用户自助入口可在后续补齐。
+1. **项目成员只能由管理员管理**：没有项目 `manager` 自助加人；公司库仍是全局共享，不做项目隔离。
+2. **token 存在 localStorage**：XSS 仍可窃取会话。生产已启用 CSP、Electron 导航/权限守卫与 HTTPS，但没有安全存储或短时 token；后续可评估 Electron `safeStorage` 或会话 cookie。
+3. **共享的 `MCP_API_TOKEN`**：泄露即获得 service 权限；只应在受控 MCP 进程使用，定期轮换并同时重启 API/MCP。
+4. **`/docs` 的生产保护依赖配置**：`DOCS_ENABLED=false` + Nginx 404 双保险；开发环境仍公开。
+5. **审计与业务写入非同一事务**：`required=True` 的操作审计失败会返回 503，但业务可能已提交；见 `docs/audit.md` 的残余窗口说明。
+6. **没有 MFA/OIDC/LDAP**：仍是本地账号 + 密码；外网暴露前应增加多因素或接入企业身份源。
+7. **没有 IP 白名单/下载水印**：内网部署仍需网络层访问控制；敏感资料下载可被有权限用户转存。
+8. **`AUTH_ENABLED=false` 仍是本机逃生口**：生产 fail-fast 会拒绝启动，但开发误配置仍可能暴露端口；不要用 `0.0.0.0` 监听。
 
 ## 9. 配置速查
 
@@ -168,6 +171,12 @@ MCP_API_TOKEN=<随机长字符串>
 | `AUTH_SESSION_TTL_HOURS` | `12` | 会话有效期（小时） |
 | `AUTH_LOGIN_MAX_FAILURES` | `5` | 连续失败多少次后锁定 |
 | `AUTH_LOCKOUT_MINUTES` | `15` | 锁定时长（分钟） |
+| `AUTH_HASH_CONCURRENCY` | `2` | Argon2 并发上限 |
+| `AUTH_LOGIN_IP_MAX_FAILURES` | `20` | 单 IP 失败窗口阈值 |
+| `AUTH_LOGIN_IP_WINDOW_SECONDS` | `300` | 单 IP 失败窗口长度 |
+| `TRUSTED_PROXIES` | 空 | 可信代理地址，逗号分隔；`*` 表示信任直连代理 |
+| `DOCS_ENABLED` | `true` | 是否暴露 `/docs`、`/redoc`、`/openapi.json` |
+| `ENVIRONMENT` | `development` | `production` 时执行 fail-fast 检查 |
 | `MCP_API_TOKEN` | 空 | MCP 服务端调用业务 API 的服务 token |
 | `MCP_HTTP_TOKEN` | 空 | MCP HTTP 入站 token（非回环绑定必填） |
 
@@ -176,6 +185,8 @@ MCP_API_TOKEN=<随机长字符串>
 - `0001`：`companies`
 - `0002`：`bid_runs` / `bid_outline_sections` / `bid_section_states`
 - `0003`：`users` / `user_sessions`
+- `0004`：`projects` / `project_members` / `documents` + `bid_runs.project_id`
+- `0005`：`audit_events`（追加写 + 哈希链）
 
 ## 10. 排障
 

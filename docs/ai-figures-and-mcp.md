@@ -189,6 +189,10 @@ MCP_API_BASE_URL=http://127.0.0.1:8001
 MCP_HTTP_HOST=127.0.0.1
 MCP_HTTP_PORT=8765
 MCP_HTTP_TOKEN=
+# 业务 API 开启认证时必须设置 service token
+MCP_API_TOKEN=
+# 一个 MCP 进程只服务一个项目；项目类工具调用会带 X-Project-Id
+MCP_DEFAULT_PROJECT_ID=
 ```
 
 安全规则：
@@ -196,8 +200,10 @@ MCP_HTTP_TOKEN=
 - HTTP 默认只绑定 `127.0.0.1` / `::1` / `localhost`。
 - 绑定非回环地址且未配置 `MCP_HTTP_TOKEN` 时拒绝启动。
 - 配置 token 后，所有 HTTP 请求必须带 `Authorization: Bearer <token>`；比较使用常量时间算法。
-- 非回环绑定启用 DNS rebinding 防护；但这不等于公网安全，API 本身仍无鉴权。
-- API 服务不应直接暴露到公网；远程访问需自行加 TLS、反代与网络访问控制。
+- 非回环绑定启用 DNS rebinding 防护；但这不等于公网安全，仍需 TLS/反代/网络访问控制。
+- `AUTH_ENABLED=true` 时 MCP 通过 `MCP_API_TOKEN` 以 `service` 身份调用业务 API；未设置时工具调用返回 401。
+- `MCP_DEFAULT_PROJECT_ID` 必须是合法 UUID，且 MCP 进程只能访问该项目的数据；缺失时项目类工具返回明确的 400，不会自动落到默认项目。
+- API 服务不应直接暴露到公网；`profile.json` 不会出现在 MCP 工具输出中。
 
 ### 2.3 客户端配置示例
 
@@ -462,7 +468,7 @@ cd frontend && npm run build && npm run lint
 1. `start.bat local` 启动 API。
 2. 创建并生成一个 run，等待自动组装。
 3. 打开「编写标书」→「AI 配图」，确认四类图、图号、来源与免责声明。
-4. 下载 `bid.docx`，确认图片真实嵌入、宽度合适、没有残留「【图片：...】」文字。
+4. 通过「导出 DOCX」（严格门禁）下载 `bid.docx`，确认图片真实嵌入、宽度合适、没有残留「【图片：...】」文字。
 5. 编辑章节后保存，确认配图 manifest 被删除、门禁清空；重新组装后配图恢复。
 6. 点击「重新生成配图」，确认提示门禁失效，再组装恢复。
 7. 打开 `bid.md` 与 `sections/*.md` 预览，确认图片在浏览器和 Electron 下都能显示。

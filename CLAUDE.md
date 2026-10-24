@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、React/Electron 前端登录与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本与测试 `tests/`。项目实体与项目级数据隔离、审计日志、生产部署/备份、PDF/DOC 导出、文生图与前端 IPC 仍未实现；P0-A 不是内网多人上线版本（登录用户仍可见全部数据），后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。PDF/DOC 导出、审批与版本、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -24,6 +24,11 @@ uv run python -m api.users create-admin --username admin --display-name 管理�
 uv run python -m api.users create-user --username zhangsan --role writer      # 创建普通用户
 uv run python -m api.users reset-password --username admin                    # 重置密码并撤销会话
 uv run python -m api.users list                                              # 列出用户
+uv run python -m api.projects list                                            # 列出项目
+uv run python -m api.projects create --name 项目名 --slug demo-2026            # 创建项目
+uv run python -m api.projects add-member --project-id <uuid> --username zhangsan --role writer  # 项目成员
+uv run python -m api.projects backfill-documents                              # 把已解析文档注册到默认项目（启用 ACL 前必跑）
+uv run python -m api.audit verify                                             # 校验审计哈希链
 uv run chroma run --path ./chroma_db         # 启动 Chroma，监听 8000
 uv run python -m src.storage check           # 检查 MinIO 连通性与各前缀对象数
 uv run python -m src.storage sync            # 把本地存量 upload/ 增量同步到 MinIO
@@ -33,7 +38,10 @@ uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽�
 uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
 uv run uvicorn api.main:app --host 0.0.0.0 --port 8001          # 启动 API（单进程）
 uv run python -m api                                            # 读取 API_HOST/API_PORT
-uv run celery -A api.celery_app:celery_app worker -Q parse --pool=solo --loglevel=INFO  # parse 队列同时消费 parse 与 bidding.write_bid
+uv run celery -A api.celery_app:celery_app worker -Q parse,bid --pool=solo --loglevel=INFO  # 开发单 worker 同时消费 parse 与 bid
+docker compose -f docker-compose.prod.yml up -d --build                      # 生产单机部署（Nginx TLS + 全部依赖）
+scripts/backup.sh && scripts/restore.sh backups/<timestamp>                  # 备份 / 恢复（bash，生产主机）
+uv run python -m scripts.worker_healthcheck parse                             # 检查是否有 worker 消费指定队列
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
 uv run python -m api.mcp_server --check      # 列出 MCP 服务端工具后退出
@@ -89,7 +97,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - **Redis**：本机无原生 `redis-server.exe`，使用 Docker 容器 `much-agents-redis`（映射 6379，`--restart unless-stopped`）：`docker start much-agents-redis`。连接串 `redis://localhost:6379/0`。
 - **PostgreSQL**：Docker 容器 `much-agents-postgres`（`postgres:16-alpine`，映射 5433，`--restart unless-stopped`，数据卷 `much-agents-postgres-data`）：`docker start much-agents-postgres`。连接串 `postgresql+asyncpg://much_agents:much_agents_dev@localhost:5433/much_agents`；表结构由 Alembic 管理，API 启动默认执行 `alembic upgrade head`（`DB_AUTO_MIGRATE=false` 可关闭）。
 - **Nginx**：Docker 容器 `much-agents-nginx`（`nginx:alpine`，`127.0.0.1:8080->80`，`--restart unless-stopped`），配置 `deploy/nginx.conf`，静态目录挂载 `frontend/dist`；`http://127.0.0.1:8080` 提供前端页面，`/api/*`、`/docs` 反向代理到 `host.docker.internal:8001`。重建前端后无需重启容器。
-- **MinIO**：Docker 容器 `much-agents-minio`（`minio/minio:latest`，映射 9000/9001，数据卷 `much-agents-minio-data`，`--restart unless-stopped`）；`start.bat` 自动启动/复用，`stop.bat` 不关闭。控制台 `http://127.0.0.1:9001`，凭据来自 `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`（缺失时回退 `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`）。`STORAGE_BACKEND=local` 时不需要。详细说明见 `docs/minio-storage.md`。
+- **MinIO**：Docker 容器 `much-agents-minio`（`minio/minio:latest`，数据卷 `much-agents-minio-data`，`--restart unless-stopped`）；`start.bat` 自动启动/复用，`stop.bat` 不关闭。端口以 `.env` 的 `MINIO_ENDPOINT` 为准（默认 9000/9001；本机因 `bidding-agent` 占用改为 9010/9011），凭据来自 `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`（缺失时回退 `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`）。`STORAGE_BACKEND=local` 时不需要。详细说明见 `docs/minio-storage.md`。
 - **Chroma**：`uv run chroma run --path ./chroma_db`，向量数据落在 `chroma_db/`（已 gitignore）。
 - **MinerU**：云端解析，需要 `MINERU_API_KEY`（有效期 90 天）；单文件页数上限 200，超过需先分片。
 
@@ -132,7 +140,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 认证、会话与 RBAC（P0-A，`api/auth.py`、`api/users.py`）
 
-- 默认拒绝：`build_router()` 把业务路由挂在 `Depends(require_user)` 下，公开例外仅 `GET /api/health` 与 `POST /api/auth/login`；`/docs` 与 `/openapi.json` 仍未保护。`POST /api/search` 是需认证的只读 POST，不能按 HTTP 方法一刀切。
+- 默认拒绝：`build_router()` 把业务路由挂在 `Depends(require_user)` 下，公开例外仅 `GET /api/health`、`GET /api/live`、`GET /api/ready` 与 `POST /api/auth/login`。`DOCS_ENABLED=false` 或 `ENVIRONMENT=production` 时 `/docs`、`/redoc`、`/openapi.json` 不注册（生产 Nginx 也返回 404）。`POST /api/search` 是需认证的只读 POST，不能按 HTTP 方法一刀切。
 - PostgreSQL `users`/`user_sessions`（Alembic `0003`）是账号与会话的事实来源；密码 Argon2，数据库只存会话 token 的 SHA-256。登录、登出、改密、重置密码、停用账号、修改角色均有撤销语义；默认 12h TTL、5 次失败锁 15 分钟。最后一个启用管理员不可停用/降级。
 - 角色：`admin`、`bid_manager`、`writer`、`reviewer`、`viewer`，外加不可登录的 `service` 主体。`require_write` = admin/bid_manager/writer；`require_review` 再加 reviewer；`require_manage` = admin/bid_manager；`require_admin` 仅交互式 admin（service 拒绝）。`service` 可通过 write/review/manage，但不能管理用户、删除公司或强制导出。
 - 端点：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`、`POST /api/auth/password`；管理员 `GET/POST /api/users`、`PATCH /api/users/{user_id}`、`POST /api/users/{user_id}/password`。守卫映射：parse/bids/bid-runs 创建与所有写操作 `require_write`；合规 check/fix-plan `require_review`；公司新增/编辑与普通导出 `require_manage`；用户管理、公司删除、`force=true` 导出 `require_admin`。
@@ -140,19 +148,27 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - CLI `uv run python -m api.users create-admin|create-user|reset-password|list`；交互式 getpass 或 `--password-stdin`，不提供 `--password`。密码 12–128 字符、不得等于用户名、拒绝少量常见弱口令。
 - `AUTH_ENABLED=false` 是仅限本机的逃生口：所有请求以本地 admin 处理，`/api/auth/me` 返回 `auth_enabled=false`，登录接口 400；禁止在监听 `0.0.0.0`/内网时使用。`AUTH_ENABLED=true` 但数据库不可用时受保护接口 503（fail closed），不会匿名放行。
 - `MCP_API_TOKEN` 是 MCP 服务端调用业务 API 的 service token（与入站 `MCP_HTTP_TOKEN` 无关）；认证开启时必须设置，否则 MCP 调用 401。轮换需同时重启 API 与 MCP。
-- 当前边界：没有项目隔离（任何登录用户可见所有 run/文档/产物）、没有审计表、没有 IP 级限流、CORS 仍为 `*`、无 TLS、token 存 localStorage、`/docs` 公开。P0-A 不是可上线里程碑；详见 `docs/authentication.md`。
+- 生产加固：`ENVIRONMENT=production` 启动时 fail-fast（拒绝关闭认证、开放 CORS、`/docs`、自动迁移、非 celery/minio、开发凭据、过短 MCP token 等）；`API_HOST` 默认 `127.0.0.1`；生产 `DOCS_ENABLED=false` 且 Nginx 对 `/docs` 返回 404；CORS 显式 methods/headers；登录按 IP 失败窗口限流（`AUTH_LOGIN_IP_*`，仅信任 `TRUSTED_PROXIES` 的 `X-Forwarded-For`）；Argon2 并发受 `AUTH_HASH_CONCURRENCY` 限制；最后管理员检查使用 `pg_advisory_xact_lock` 消除 TOCTOU；SQL 引擎 `hide_parameters=True`，错误日志不含 SQL 参数。
+- 当前边界：没有 MFA/OIDC/LDAP、没有 IP 白名单；token 仍存 localStorage（依赖 CSP/HTTPS/Electron 守卫）；`MCP_API_TOKEN` 为静态共享 secret。详见 `docs/authentication.md`。
+
+### 项目、审计与生产部署（P0-B/C/D）
+
+- **项目隔离（P0-B）**：Alembic `0004` 新增 `projects`、`project_members`、`documents`（PK `(project_id, doc_id)`），`bid_runs.project_id` 非空；默认项目 `00000000-0000-0000-0000-000000000001`。业务请求必须带 `X-Project-Id`（缺失 400，非成员/不存在 404）；有效权限 = 全局角色 AND 项目角色（`manager|writer|reviewer|viewer`）。`require_project_read/write/review/manage` 和 `require_run_*` 是统一守卫；文档/检索/任务/产物/run 全部按项目过滤。公司库保持全局共享。CLI `python -m api.projects` 管理项目、成员与 `backfill-documents`；首次启用 ACL 前必须回填历史解析文档。详见 `docs/projects.md`。
+- **审计（P0-C）**：Alembic `0005` 新增 `audit_events`，数据库触发器禁止 UPDATE/DELETE/TRUNCATE；追加时用 `pg_advisory_xact_lock` 串行化并计算 `sha256(prev_hash + canonical_json)` 链。中间件校验/生成 `X-Request-ID`，所有写请求有显式事件或 `http.request` 兜底；敏感操作 `required=True`，审计失败返回 503。管理员接口 `GET /api/audit`、`/api/audit/verify`、`/api/audit/export.csv`（CSV 公式转义），CLI `python -m api.audit verify`。审计只记元数据，不记密码/token/profile/正文。详见 `docs/audit.md`。
+- **生产部署（P0-D）**：多阶段 `Dockerfile`（`api-base`/`api`/`worker`/`migrate`/`web-build`/`web`）+ `docker-compose.prod.yml`，仅 Nginx 发布 80/443，Postgres/Redis/MinIO/Chroma 仅内部；`migrate` 成功后才启动 API/worker；API/worker 非 root、只读根文件系统。Nginx TLS 1.2/1.3、HSTS、CSP（内联主题脚本 SHA-256 固定）、登录/API `limit_req`、`/docs` 404；`deploy/env.production.example` 为占位模板（真实文件已 gitignore）。Celery 拆分 `parse`/`bid` 队列（开发单 worker 用 `-Q parse,bid`），`acks_late`/`reject_on_worker_lost`/prefetch 1/time limits。健康检查 `GET /api/live`（进程）与 `GET /api/ready`（依赖，5s 缓存，失败 503）。`scripts/backup.sh`（pg_dump + MinIO mirror + 可选 Chroma + SHA256SUMS）与 `scripts/restore.sh`；`.github/workflows/ci.yml` 覆盖后端/迁移/前端/Docker/安全扫描。详见 `docs/deployment.md`。
 
 ### FastAPI 上传接口（已实现，`api/`）
 
 - `POST /api/parse`：multipart `file`，查询参数 `parser=auto|mineru|pymupdf`、`extract=true`、`ingest=true`；**默认执行完整流程**；返回 202 + `job_id`/`poll_url`/`doc_id`。
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
-- `GET /api/health`：返回 `storage_backend`/`storage_ok`；MinIO 不可达时 `status=degraded` 但仍 200。
-- `GET /api/documents`：扫描解析产物（minio 模式读对象列表），返回项目名、页数、chunks、bid_ready 与历史 bid run。
-- `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，未知 doc 404。minio 模式的关键词检索通过 `iter_lines` 直接读 `chunks.jsonl`。
-- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；minio 模式流式返回对象字节并支持 `GET`/`HEAD`/`Range`；路径穿越返回 404，**`profile.json` 永不暴露**。
+- `GET /api/health`：返回 `storage_backend`/`storage_ok`；MinIO 不可达时 `status=degraded` 但仍 200。`GET /api/live` 始终 200；`GET /api/ready` 检查 Redis/DB/storage，失败 503，结果缓存 `READINESS_CACHE_SECONDS`。
+- `GET /api/documents`：只列出当前项目 `documents` 注册表内的文档（minio 模式结合对象列表），返回项目名、页数、chunks、bid_ready 与历史 bid run。
+- `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；只检索当前项目允许的文档；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，项目外/未知 doc 404。minio 模式的关键词检索通过 `iter_lines` 直接读 `chunks.jsonl`。
+- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：先校验项目归属，再按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；minio 模式流式返回对象字节并支持 `GET`/`HEAD`/`Range`；路径穿越返回 404，**`profile.json` 永不暴露**；`bid.docx` 已从 allowlist 移除，DOCX 只能走严格门禁导出。
+- `GET/POST/PATCH/DELETE /api/projects*`：项目列表（普通用户只看自己的项目）、创建/修改/删除、成员管理（写操作仅 admin）；`GET /api/audit`、`/api/audit/verify`、`/api/audit/export.csv` 仅 admin。
 - `GET /api/bids/profile-template`：返回 `bidder_profile.example.json` 的 JSON 模板。
 - `GET/POST /api/companies`、`GET/PUT/DELETE /api/companies/{company_id}`：PostgreSQL 公司库 CRUD；`profile` 为完整 BidderProfile；公司名称必填。
-- `POST /api/bids` 支持可选 `company_id`：未提供 profile 时从公司库载入；提供 profile 时使用当前编辑内容，company_id 写入 job payload 便于追踪。
+- `POST /api/bids` 与 `/api/bid-runs*` 需要 `X-Project-Id`；`POST /api/bids` 支持可选 `company_id`：未提供 profile 时从公司库载入；提供 profile 时使用当前编辑内容，company_id 写入 job payload 便于追踪。
 
   ```bash
   curl -X POST http://127.0.0.1:8001/api/search \
@@ -160,7 +176,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
     -d '{"query":"施工组织设计","doc_id":"6055594244948","top_k":5,"mode":"auto"}'
   ```
 - 上传落盘 `upload/inbox/<job_id>/source.pdf`；minio 模式还会先写 `inbox/<job_id>/source.pdf` 对象（失败返回 503），worker 从对象存储重建本地 source，解析成功后同步 parsed 树并尽力删除 inbox 对象。`doc_id = <文件名>-<内容 sha256 前 12 位>`，相同内容重复上传可命中解析缓存。
-- 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash，Celery worker 消费 `parse` 队列（同时承载 parse 与 bid 任务，按 `Job.kind` 区分）；API 重启后仍可轮询，任务记录 24h TTL。
+- 默认 `TASK_BACKEND=celery`：任务状态保存在 Redis `much-agents:job:<job_id>` hash；生产由 `worker-parse` 消费 `parse` 队列、`worker-bid` 消费 `bid` 队列，开发单 worker 用 `-Q parse,bid` 同时消费（按 `Job.kind` 区分）；API 重启后仍可轮询，任务记录 24h TTL。
 - Worker 与 API 必须同一 checkout、共享 `.env`；local 模式还需共享 `upload/`，minio 模式通过对象存储交换输入/产物。Windows 用 `--pool=solo`（单任务串行，保护 MinerU 配额），不自动重试（`acks_late=False`），`mark_running` 原子 claim 防重复解析。
 - Redis 不可用时 `POST /api/parse` 与 `GET /api/jobs/{id}` 返回 503，health 为 `status=degraded, redis_ok=false`。
 - `TASK_BACKEND=local` 使用进程内 `JobStore` + `ThreadJobRunner`，无需 Redis/worker，但 API 重启即丢任务；测试与本地离线开发用它。
@@ -168,7 +184,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 多 Agent 投标文件编写（已实现，`src/bidding/`）
 
-- 入口：CLI `uv run python -m src.cli write <doc_id>` 与 legacy `POST /api/bids`（一次性创建并立即生成），以及新的持久化流程 `/api/bid-runs`（见下）。两者复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `parse` 队列（任务名 `bidding.write_bid`）。
+- 入口：CLI `uv run python -m src.cli write <doc_id>` 与 legacy `POST /api/bids`（一次性创建并立即生成），以及新的持久化流程 `/api/bid-runs`（见下）。两者复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `bid` 队列（任务名 `bidding.write_bid`；开发单 worker 同时消费两个队列）。
 - 产物：`upload/bids/<doc_id>/<run_id>/` 下的 `profile.json`、`outline.json`、`bid.md`、`bid.docx`、`report.json`、`gate.json`、`compliance.json`、`consistency.json`、`sections/*.md`；minio 模式同前缀对象 + 私有 `private/profiles/<doc_id>/<run_id>.json`。
 - LangGraph 流程（legacy/CLI）：确定性 plan → 逐节检索（Chroma/关键词兜底）→ 并行 Writer → 并行 Reviewer → 条件 Reviser → 确定性 assemble；只有施工组织设计的 11 个 narrative 子章节经过 LLM，其余表单/附件为确定性模板。
 - 投标人资料：`bidder_profile.example.json` 模板；缺失字段一律 `【待填写：...】`，严禁编造公司、人员、证书、业绩、报价、日期。Writer/Reviewer 不接收完整 profile；profile 快照只落本地 run 目录与私有对象 key，不进入 Redis/Celery 消息。
@@ -188,7 +204,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - profile 隐私不变：DB 只存 `profile_source/profile_sha256/profile_relpath` 与缺失字段标签；Redis/Celery payload 只有 `run_id/generation_token/section_ids/assemble/mode`；`profile.json` 只存私有对象 key，不在 artifact allowlist、MCP 输出、下载 URL 或 Redis/Celery payload 中。
 - minio 模式在 create/generate/assemble/edit/regenerate/export 前 hydration parsed 与 run，写后同步产物；人工编辑/重写/大纲失效会清理远程过期报告、门禁、合规、一致性与配图对象，但保留 `bid.md` 与私有 profile。
 - `POST /api/bids`、CLI、旧 artifact 接口保持兼容；staged job 的 artifact 目录通过 job payload 的 `run_id` 解析（`job_id != run_id`）。
-- 仍未实现：PDF/DOC 导出、项目级数据隔离、审计日志、Celery beat、Docker Compose；失败章节用现有「重试失败章节」，不做任意章节增删。
+- 仍未实现：PDF/DOC 导出、审批流/版本 diff、评论与 SSE、Celery beat；失败章节用现有「重试失败章节」，不做任意章节增删。
 
 ### 合规检查、一致性台账与修复方案（P1-B，`src/bidding/compliance.py`、`consistency.py`、`fix_plan.py`）
 
@@ -222,26 +238,29 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、项目实体与项目级 ACL（P0-B）、审计日志（P0-C）、生产部署/CI/备份/TLS/限流（P0-D）、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
+- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批流与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、监控告警与 Celery beat、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
 
 ### 配置与数据
 
-- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`API_HOST/API_PORT`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
-- 认证：`AUTH_ENABLED`（默认 true）、`AUTH_SESSION_TTL_HOURS`、`AUTH_LOGIN_MAX_FAILURES`、`AUTH_LOCKOUT_MINUTES`、`MCP_API_TOKEN`。`AUTH_ENABLED=false` 仅用于无数据库的本机开发，所有请求按本地 admin 处理。
+- `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`ENVIRONMENT`、`API_HOST/API_PORT`、`DOCS_ENABLED`、`TRUSTED_PROXIES`、`READINESS_CACHE_SECONDS`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`MAX_PDF_PAGES`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`CELERY_SOFT_TIME_LIMIT_SECONDS`、`CELERY_TIME_LIMIT_SECONDS`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
+- 认证：`AUTH_ENABLED`（默认 true）、`AUTH_SESSION_TTL_HOURS`、`AUTH_LOGIN_MAX_FAILURES`、`AUTH_LOCKOUT_MINUTES`、`AUTH_HASH_CONCURRENCY`、`AUTH_LOGIN_IP_MAX_FAILURES`、`AUTH_LOGIN_IP_WINDOW_SECONDS`、`TRUSTED_PROXIES`、`MCP_API_TOKEN`、`MCP_DEFAULT_PROJECT_ID`。`AUTH_ENABLED=false` 仅用于无数据库的本机开发，所有请求按本地 admin 处理。
 - 对象存储：`STORAGE_BACKEND`（默认 minio）、`MINIO_ENDPOINT`、`MINIO_SECURE`、`MINIO_BUCKET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_CONSOLE_PORT`（仅 start.bat）、`MINIO_TIMEOUT_SECONDS`。
 - AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。
 - MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`、`MCP_API_TOKEN`（调用业务 API 的 service token）。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
+- 生产部署：`deploy/env.production` 从 `deploy/env.production.example` 复制（真实文件已 gitignore），其中 `ENVIRONMENT=production` 触发 fail-fast；TLS 证书放在 `deploy/nginx/certs/{fullchain.pem,privkey.pem}`（已 gitignore，可用 `generate-self-signed.sh` 生成）。生产只通过 `docker compose -f docker-compose.prod.yml` 启动，详见 `docs/deployment.md`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
 - PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
-- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是本地输入/产物目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）——minio 模式下它是工作缓存，权威对象在 MinIO bucket；Docker 数据卷 `much-agents-minio-data` 保存 MinIO 对象；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）。
+- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是本地输入/产物目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）——minio 模式下它是工作缓存，权威对象在 MinIO bucket；Docker 数据卷 `much-agents-minio-data` 保存 MinIO 对象；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）；`backups/` 保存 `scripts/backup.sh` 输出；`deploy/nginx/certs/` 下的证书与私钥永不入库。
 - MCP 配置文件：真实 `mcp_servers.json` 与 `.mcp.json` 已 gitignore；提交的模板为 `mcp_servers.example.json`、`.mcp.json.example`。
 
 ## 注意
 
 - Windows 环境开发；长任务（解析/抽取/编写）不要阻塞 HTTP 请求，走 Celery 或轮询任务模型。
-- API 默认开启认证；新增 `/api/*` 业务路由必须挂 `require_user` 或更严格的角色依赖，只有 health/login 可以公开。不要用「所有 POST 都算写」的中间件，因为 `/api/search` 是需认证的只读 POST。`AUTH_ENABLED=false` 只能用于本机开发。
-- 不要提交 `.env`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`、真实的 `mcp_servers.json` 或 `.mcp.json`。
-- `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL；只存 MinIO 私有 key `private/profiles/<doc_id>/<run_id>.json`。外部证据默认不可信，外部绘图默认关闭。认证 token 也不得进入 URL、日志或 Redis/Celery payload。
+- API 默认开启认证；新增 `/api/*` 业务路由必须挂 `require_user` 或更严格的角色依赖，只有 health/live/ready/login 可以公开。不要用「所有 POST 都算写」的中间件，因为 `/api/search` 是需认证的只读 POST。`AUTH_ENABLED=false` 只能用于本机开发。
+- 新增业务路由还必须挂项目守卫（`require_project_*` / `require_run_*` / `require_document_*`），并带 `X-Project-Id`；资源查询必须按 `project_id` 过滤，跨项目按 404 处理。写操作同时满足全局角色与项目角色。敏感写操作要写审计（`required=True`）。
+- `ENVIRONMENT=production` 会在启动时拒绝不安全配置；不要绕过 fail-fast。生产部署只用 `docker-compose.prod.yml`，不要直接用 `start.bat`。
+- 不要提交 `.env`、`deploy/env.production`、`backups/`、`deploy/nginx/certs/*.pem|key|crt`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`、真实的 `mcp_servers.json` 或 `.mcp.json`。
+- `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload、审计 detail 或任何下载 URL；只存 MinIO 私有 key `private/profiles/<doc_id>/<run_id>.json`。外部证据默认不可信，外部绘图默认关闭。认证 token、密码也不得进入 URL、日志、审计 detail 或 Redis/Celery payload。
