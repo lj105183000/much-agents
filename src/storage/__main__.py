@@ -16,6 +16,7 @@ from src.bidding.config import BidSettings
 from src.parsing.config import Settings
 
 from .base import Storage
+from .errors import StorageError
 from .factory import build_storage
 from .hydration import (
     sync_document,
@@ -48,6 +49,12 @@ def _check(storage: Storage) -> int:
     if settings is not None:
         print(f"endpoint {settings.endpoint} (secure={settings.secure})")
         print(f"bucket   {settings.bucket}")
+    try:
+        # Create the bucket on first use, exactly like the API and worker do.
+        storage.ensure_ready()
+    except StorageError as exc:
+        print(f"reachable no ({exc})")
+        return 1
     ready = storage.ping()
     print(f"reachable {'yes' if ready else 'no'}")
     if not ready:
