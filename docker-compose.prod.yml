@@ -19,6 +19,8 @@ x-app-build: &app-build
     PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
 
 x-app-service: &app-service
+  env_file:
+    - ./deploy/env.production
   restart: unless-stopped
   read_only: true
   tmpfs:
