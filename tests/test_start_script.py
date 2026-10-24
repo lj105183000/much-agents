@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -730,3 +731,110 @@ def test_ensure_storage_local_skips_health_check(
     assert calls == []
     assert launcher.config.storage_backend == "local"
     assert "本地" in launcher.storage_status
+
+
+class _FakeResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def test_http_status_reports_codes_and_transport_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        start_all.urllib.request,
+        "urlopen",
+        lambda url, timeout=2.0: _FakeResponse(204),
+    )
+    assert start_all.http_status("http://api/api/live") == 204
+    assert start_all.http_ok("http://api/api/live") is True
+
+    def missing(url: str, timeout: float = 2.0) -> None:
+        raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+
+    monkeypatch.setattr(start_all.urllib.request, "urlopen", missing)
+    assert start_all.http_status("http://api/api/live") == 404
+    assert start_all.http_ok("http://api/api/live") is False
+
+    def unreachable(url: str, timeout: float = 2.0) -> None:
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(start_all.urllib.request, "urlopen", unreachable)
+    assert start_all.http_status("http://api/api/live") is None
+    assert start_all.http_ok("http://api/api/live") is False
+
+
+def test_start_api_reuses_a_current_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    seen: list[str] = []
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        start_all,
+        "http_status",
+        lambda url, timeout=2.0: seen.append(url) or 204,
+    )
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        launcher, "_start_service", lambda *args, **kwargs: started.append(args)
+    )
+
+    launcher._start_api()
+
+    assert launcher.api_external is True
+    assert started == []
+    assert seen == [f"{launcher.api_url}/api/live"]
+
+
+def test_start_api_rejects_an_old_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        start_all, "http_status", lambda url, timeout=2.0: 404
+    )
+    monkeypatch.setattr(start_all, "http_ok", lambda url, timeout=2.0: True)
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        launcher, "_start_service", lambda *args, **kwargs: started.append(args)
+    )
+
+    with pytest.raises(start_all.LaunchError) as excinfo:
+        launcher._start_api()
+
+    message = str(excinfo.value)
+    assert "旧版本" in message
+    assert "stop.bat" in message
+    assert started == []
+
+
+def test_start_api_reports_a_foreign_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        start_all, "http_status", lambda url, timeout=2.0: None
+    )
+    monkeypatch.setattr(start_all, "http_ok", lambda url, timeout=2.0: False)
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        launcher, "_start_service", lambda *args, **kwargs: started.append(args)
+    )
+
+    with pytest.raises(start_all.LaunchError) as excinfo:
+        launcher._start_api()
+
+    assert "不是 Much Agents API" in str(excinfo.value)
+    assert started == []

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ApiError, setProjectId } from '../api/client'
+import { setProjectId } from '../api/client'
 import { projectApi } from '../api/projects'
 import type { AuthUser, ProjectSummary } from '../api/types'
 import { ProjectContext, type ProjectContextValue } from './context'
+import { projectContextErrorMessage } from './errors'
 import {
   clearProjectSelection,
   loadProjectSelection,
@@ -52,9 +53,7 @@ export function ProjectProvider({
         setProjects([])
         setSelectedId(null)
         setProjectId(null)
-        setError(
-          caught instanceof ApiError ? caught.message : '项目列表读取失败',
-        )
+        setError(projectContextErrorMessage(caught))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -77,6 +76,8 @@ export function ProjectProvider({
   )
 
   const refresh = useCallback(() => {
+    // Clear the old failure immediately so a retry shows progress, not a stale banner.
+    setError(null)
     // Never send a project header while the project list is being reloaded.
     setProjectId(null)
     setSelectedId(null)

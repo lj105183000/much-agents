@@ -114,6 +114,7 @@ def test_health_is_public_and_business_routes_require_auth(tmp_path: Path) -> No
         assert response.status_code == 401
         assert response.headers["www-authenticate"] == "Bearer"
 
+        assert client.get("/api/projects").status_code == 401
         assert client.get("/api/auth/me").status_code == 401
         assert client.post("/api/auth/login", json={}).status_code == 422
 

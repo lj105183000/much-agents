@@ -73,7 +73,7 @@ stop.bat                # 停止由 start.bat 拉起的 Python/Node 进程
 - 启动/复用 `much-agents-postgres`、`much-agents-redis`、`much-agents-minio`（prod 还会启动 `much-agents-nginx`）；容器带 `--restart unless-stopped`，`stop.bat` 不会关闭容器。
 - MinIO 容器使用 `minio/minio:latest`、数据卷 `much-agents-minio-data`，映射 `MINIO_ENDPOINT` 端口到 9000、`MINIO_CONSOLE_PORT` 到同名控制台端口；启动脚本等待 `/minio/health/live`，并把 `STORAGE_BACKEND` 传给 API/worker。端口被占用时会提示修改 `MINIO_ENDPOINT`/`MINIO_CONSOLE_PORT`。
 - PID 记录在 `.run/start.json`（已 gitignore）；再次运行会先清理上次拉起的进程，`stop.bat` 在 Windows 用 `taskkill /T /F` 结束进程树。
-- 端口已有 Much Agents API / Vite 时直接复用；被其他程序占用则报错。`--skip-docker` 可连接已有 PostgreSQL/Redis/MinIO；本地 Redis 不可用时自动降级为 `TASK_BACKEND=local`，MinIO 不可用时降级为 `STORAGE_BACKEND=local`。
+- 端口已有 Much Agents API 时，仅当 `GET /api/live` 返回 2xx 才复用；health 正常但 `/api/live` 404 说明是旧版本 API，脚本会提示先 `stop.bat`。Vite 端口已有可访问页面时直接复用；被其他程序占用则报错。`--skip-docker` 可连接已有 PostgreSQL/Redis/MinIO；本地 Redis 不可用时自动降级为 `TASK_BACKEND=local`，MinIO 不可用时降级为 `STORAGE_BACKEND=local`。
 - 每个服务使用独立控制台窗口；强制关闭 supervisor 窗口不会触发自动停止，改用 `stop.bat`。`--dry-run` 不写 `.env`、不启动进程。
 
 ### 前端（`frontend/`）

@@ -36,6 +36,7 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
     loading: projectsLoading,
     error: projectsError,
     selectProject,
+    refresh: refreshProjects,
   } = useProject()
   const [view, setView] = useState<ViewKey>('workbench')
   const [apiBase, setApiBase] = useState(getApiBase)
@@ -155,10 +156,19 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
             {projectsError ? (
               <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs leading-6 text-red-200">
                 <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="font-medium">项目上下文不可用</p>
                   <p className="text-red-200/70">{projectsError}</p>
                 </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="ml-auto shrink-0"
+                  onClick={refreshProjects}
+                >
+                  <Icon name="refresh" className="h-3.5 w-3.5" />
+                  重试
+                </Button>
               </div>
             ) : null}
 

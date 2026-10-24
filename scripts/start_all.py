@@ -238,12 +238,20 @@ def wait_port(host: str, port: int, timeout: int, label: str) -> bool:
     return False
 
 
-def http_ok(url: str, timeout: float = 2.0) -> bool:
+def http_status(url: str, timeout: float = 2.0) -> int | None:
+    """Return the HTTP status code, or None when the URL is unreachable."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return 200 <= response.status < 300
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
     except (OSError, urllib.error.URLError, ValueError):
-        return False
+        return None
+
+
+def http_ok(url: str, timeout: float = 2.0) -> bool:
+    status = http_status(url, timeout)
+    return status is not None and 200 <= status < 300
 
 
 def wait_http(url: str, timeout: int, label: str) -> bool:
@@ -1151,12 +1159,25 @@ class Launcher:
     def _start_api(self) -> None:
         config = self.config
         if port_open("127.0.0.1", config.api_port):
-            if http_ok(f"{self.api_url}/api/health"):
+            live_url = f"{self.api_url}/api/live"
+            live_status = http_status(live_url)
+            if live_status is not None and 200 <= live_status < 300:
                 ok(f"API 已在运行（{self.api_url}），跳过启动")
                 self.api_external = True
                 return
+            status_text = (
+                f"HTTP {live_status}" if live_status is not None else "无法连接"
+            )
+            if http_ok(f"{self.api_url}/api/health"):
+                raise LaunchError(
+                    f"{live_url} 返回 {status_text}，正在运行的 API 未加载当前版本路由"
+                    "（通常是旧版本，缺少项目接口）。请先运行 stop.bat 停止旧服务，"
+                    "再重新运行 start.bat；启动脚本不会自动结束已有进程。"
+                )
             raise LaunchError(
-                f"端口 {config.api_port} 已被其他程序占用，且不是 Much Agents API。"
+                f"端口 {config.api_port} 已被其他程序占用，且不是 Much Agents API"
+                f"（{live_url} 返回 {status_text}）。如果是旧版 Much Agents API，"
+                "请先运行 stop.bat 停止；否则请手动结束占用该端口的进程。"
             )
         command = [
             self.uv or "uv",
@@ -1394,7 +1415,7 @@ class Launcher:
         api_label = "外部已有" if self.api_external else planned
         log(f" API      {self.api_url}/docs（{api_label}）")
         if self.config.task_backend == "celery":
-            log(" Worker    Celery parse 队列")
+            log(" Worker    Celery parse、bid 队列")
         else:
             log(" Worker    未启动（TASK_BACKEND=local）")
         log(f" Chroma    {self.chroma_status}")
