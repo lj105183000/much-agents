@@ -21,6 +21,17 @@ def _clear_start_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DATABASE_URL",
         "REDIS_URL",
         "TASK_BACKEND",
+        "STORAGE_BACKEND",
+        "MINIO_ACCESS_KEY",
+        "MINIO_BUCKET",
+        "MINIO_CONSOLE_PORT",
+        "MINIO_ENDPOINT",
+        "MINIO_REGION",
+        "MINIO_ROOT_PASSWORD",
+        "MINIO_ROOT_USER",
+        "MINIO_SECRET_KEY",
+        "MINIO_SECURE",
+        "MINIO_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -75,6 +86,24 @@ def test_parse_url_host_port() -> None:
     assert start_all.parse_url_host_port(
         "redis://localhost:not-a-port/0", "localhost", 6379
     ) == ("localhost", 6379)
+
+
+def test_parse_endpoint_host_port() -> None:
+    assert start_all.parse_endpoint_host_port(
+        "localhost:9000", "localhost", 9000
+    ) == ("localhost", 9000)
+    assert start_all.parse_endpoint_host_port(
+        "http://minio.local:9100", "localhost", 9000
+    ) == ("minio.local", 9100)
+    assert start_all.parse_endpoint_host_port(
+        "https://minio.local", "localhost", 9000
+    ) == ("minio.local", 9000)
+    assert start_all.parse_endpoint_host_port(
+        "http://[::1]:9001/path", "localhost", 9000
+    ) == ("::1", 9001)
+    assert start_all.parse_endpoint_host_port(
+        "", "localhost", 9000
+    ) == ("localhost", 9000)
 
 
 def test_parse_db_identity() -> None:
@@ -206,6 +235,13 @@ def test_build_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.task_backend == "celery"
     assert config.celery_pool == "solo"
     assert config.chroma_dir == start_all.ROOT / "chroma_db"
+    assert config.storage_backend == "minio"
+    assert config.minio_host == "localhost"
+    assert config.minio_port == 9000
+    assert config.minio_console_port == 9001
+    assert config.minio_root_user == "much_agents"
+    assert config.minio_root_password == "much_agents_dev"
+    assert config.minio_bucket == "much-agents"
 
 
 def test_build_config_reads_env_and_local_flag(
@@ -224,6 +260,12 @@ def test_build_config_reads_env_and_local_flag(
         ),
         "REDIS_URL": "redis://redis.local:6380/1",
         "TASK_BACKEND": "celery",
+        "STORAGE_BACKEND": "minio",
+        "MINIO_ENDPOINT": "http://minio.local:9100",
+        "MINIO_CONSOLE_PORT": "9101",
+        "MINIO_ACCESS_KEY": "bidder",
+        "MINIO_SECRET_KEY": "bidder-secret",
+        "MINIO_BUCKET": "bid-bucket",
     }
     config = start_all.build_config(
         env, start_all.build_parser().parse_args([])
@@ -241,12 +283,47 @@ def test_build_config_reads_env_and_local_flag(
     assert config.chroma_port == 9000
     assert config.chroma_dir == tmp_path / "chroma"
     assert config.celery_pool == "prefork"
+    assert config.storage_backend == "minio"
+    assert config.minio_host == "minio.local"
+    assert config.minio_port == 9100
+    assert config.minio_console_port == 9101
+    assert config.minio_root_user == "bidder"
+    assert config.minio_root_password == "bidder-secret"
+    assert config.minio_bucket == "bid-bucket"
 
     local = start_all.build_config(
         {"TASK_BACKEND": "celery"},
         start_all.build_parser().parse_args(["local"]),
     )
     assert local.task_backend == "local"
+    assert local.storage_backend == "local"
+
+    no_minio = start_all.build_config(
+        {"STORAGE_BACKEND": "minio"},
+        start_all.build_parser().parse_args(["--no-minio"]),
+    )
+    assert no_minio.storage_backend == "local"
+
+    root_only = start_all.build_config(
+        {
+            "MINIO_ROOT_USER": "root_user",
+            "MINIO_ROOT_PASSWORD": "root_secret",
+        },
+        start_all.build_parser().parse_args([]),
+    )
+    assert root_only.minio_root_user == "root_user"
+    assert root_only.minio_root_password == "root_secret"
+
+
+def test_build_config_invalid_storage_backend_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    config = start_all.build_config(
+        {"STORAGE_BACKEND": "s3"},
+        start_all.build_parser().parse_args([]),
+    )
+    assert config.storage_backend == "minio"
 
 
 def test_build_config_invalid_port_falls_back(
@@ -258,3 +335,180 @@ def test_build_config_invalid_port_falls_back(
         start_all.build_parser().parse_args([]),
     )
     assert config.api_port == 8001
+
+
+def test_ensure_container_appends_command_after_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    inspect_calls = 0
+
+    def fake_run_quiet(command, **_kwargs):
+        nonlocal inspect_calls
+        calls.append(command)
+        if command[1] == "inspect":
+            inspect_calls += 1
+            if inspect_calls == 1:
+                return subprocess.CompletedProcess(
+                    command, 1, "", "no such container"
+                )
+            return subprocess.CompletedProcess(command, 0, "true\n", "")
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(start_all, "run_quiet", fake_run_quiet)
+    assert start_all.ensure_container(
+        "much-agents-minio",
+        ["-p", "9000:9000"],
+        "minio/minio:latest",
+        dry_run=False,
+        command=["server", "/data", "--console-address", ":9001"],
+    )
+    run_call = next(command for command in calls if command[1] == "run")
+    assert run_call == [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        "much-agents-minio",
+        "-p",
+        "9000:9000",
+        "minio/minio:latest",
+        "server",
+        "/data",
+        "--console-address",
+        ":9001",
+    ]
+
+
+def _launcher_with_recorded_containers(
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+    argv: list[str] | None = None,
+) -> tuple[start_all.Launcher, list[tuple[str, list[str], str, dict]]]:
+    _clear_start_env(monkeypatch)
+    calls: list[tuple[str, list[str], str, dict]] = []
+
+    def fake_ensure_container(name, run_args, image, **kwargs):
+        calls.append((name, run_args, image, kwargs))
+        return True
+
+    monkeypatch.setattr(start_all, "ensure_container", fake_ensure_container)
+    launcher = start_all.Launcher(
+        start_all.build_parser().parse_args(argv or []), env
+    )
+    return launcher, calls
+
+
+def test_infrastructure_starts_minio_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher, calls = _launcher_with_recorded_containers(monkeypatch, {})
+    launcher._start_infrastructure()
+    minio_calls = [
+        call for call in calls if call[0] == start_all.MINIO_CONTAINER
+    ]
+    assert len(minio_calls) == 1
+    _name, run_args, image, kwargs = minio_calls[0]
+    assert image == start_all.MINIO_IMAGE
+    assert "9000:9000" in run_args
+    assert "9001:9001" in run_args
+    assert f"{start_all.MINIO_VOLUME}:/data" in run_args
+    assert kwargs["command"] == [
+        "server",
+        "/data",
+        "--console-address",
+        ":9001",
+    ]
+
+
+def test_infrastructure_reports_minio_port_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    monkeypatch.setattr(
+        start_all,
+        "ensure_container",
+        lambda name, *args, **kwargs: name != start_all.MINIO_CONTAINER,
+    )
+    monkeypatch.setattr(
+        start_all,
+        "port_open",
+        lambda host, port, timeout=0.6: port == 9000,
+    )
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    with pytest.raises(start_all.LaunchError) as excinfo:
+        launcher._start_infrastructure()
+    assert "MINIO_ENDPOINT" in str(excinfo.value)
+
+
+def test_infrastructure_uses_external_minio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher, calls = _launcher_with_recorded_containers(
+        monkeypatch, {"MINIO_ENDPOINT": "minio.example.com:9000"}
+    )
+    launcher._start_infrastructure()
+    assert start_all.MINIO_CONTAINER not in [call[0] for call in calls]
+
+
+def test_infrastructure_local_storage_skips_minio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher, calls = _launcher_with_recorded_containers(
+        monkeypatch, {"STORAGE_BACKEND": "local"}
+    )
+    launcher._start_infrastructure()
+    assert start_all.MINIO_CONTAINER not in [call[0] for call in calls]
+
+
+def test_ensure_storage_waits_for_minio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    seen: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        start_all,
+        "wait_http",
+        lambda url, timeout, label: seen.append((url, timeout, label)) or True,
+    )
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    launcher._ensure_storage()
+    assert seen == [
+        ("http://127.0.0.1:9000/minio/health/live", 90, "MinIO")
+    ]
+    assert launcher.config.storage_backend == "minio"
+    assert "MinIO" in launcher.storage_status
+
+
+def test_ensure_storage_degrades_with_skip_docker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    monkeypatch.setattr(start_all, "wait_http", lambda *args, **kwargs: False)
+    launcher = start_all.Launcher(
+        start_all.build_parser().parse_args(["--skip-docker"]), {}
+    )
+    launcher._ensure_storage()
+    assert launcher.config.storage_backend == "local"
+    assert "降级" in launcher.storage_status
+
+
+def test_ensure_storage_local_skips_health_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        start_all,
+        "wait_http",
+        lambda *args, **kwargs: calls.append(args) or True,
+    )
+    launcher = start_all.Launcher(
+        start_all.build_parser().parse_args([]),
+        {"STORAGE_BACKEND": "local"},
+    )
+    launcher._ensure_storage()
+    assert calls == []
+    assert launcher.config.storage_backend == "local"
+    assert "本地" in launcher.storage_status

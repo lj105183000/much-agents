@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """One-click launcher for the local Much Agents stack.
 
-Starts the Docker-backed infrastructure (PostgreSQL, Redis, optional Nginx),
-applies database migrations, then launches Chroma, the FastAPI API, the Celery
-worker and the React frontend.  Each long-running service gets its own console
-window; this supervisor window can stop them again with Enter / Ctrl+C.
+Starts the Docker-backed infrastructure (PostgreSQL, Redis, MinIO, optional
+Nginx), applies database migrations, then launches Chroma, the FastAPI API, the
+Celery worker and the React frontend.  Each long-running service gets its own
+console window; this supervisor window can stop them again with Enter / Ctrl+C.
 
 Usage (from the repository root):
     uv run python scripts/start_all.py            # Vite dev UI on :5173
     uv run python scripts/start_all.py prod       # build + Nginx on :8080
-    uv run python scripts/start_all.py local      # TASK_BACKEND=local, no worker
+    uv run python scripts/start_all.py local      # local task + storage backends
     uv run python scripts/start_all.py --dry-run  # print the plan only
     uv run python scripts/start_all.py --stop     # stop recorded services
 """
@@ -43,7 +43,17 @@ DEFAULT_API_PORT = 8001
 
 POSTGRES_CONTAINER = "much-agents-postgres"
 REDIS_CONTAINER = "much-agents-redis"
+MINIO_CONTAINER = "much-agents-minio"
 NGINX_CONTAINER = "much-agents-nginx"
+
+MINIO_IMAGE = "minio/minio:latest"
+MINIO_VOLUME = "much-agents-minio-data"
+DEFAULT_STORAGE_BACKEND = "minio"
+DEFAULT_MINIO_ENDPOINT = "localhost:9000"
+DEFAULT_MINIO_CONSOLE_PORT = 9001
+DEFAULT_MINIO_ACCESS_KEY = "much_agents"
+DEFAULT_MINIO_SECRET_KEY = "much_agents_dev"
+DEFAULT_MINIO_BUCKET = "much-agents"
 
 
 class LaunchError(RuntimeError):
@@ -74,6 +84,13 @@ class LaunchConfig:
     redis_port: int
     task_backend: str
     celery_pool: str
+    storage_backend: str
+    minio_host: str
+    minio_port: int
+    minio_console_port: int
+    minio_root_user: str
+    minio_root_password: str
+    minio_bucket: str
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +171,24 @@ def parse_url_host_port(
 ) -> tuple[str, int]:
     try:
         parts = urlsplit(url)
+        host = parts.hostname or default_host
+        port = parts.port or default_port
+    except ValueError:
+        return default_host, default_port
+    return host, port
+
+
+def parse_endpoint_host_port(
+    endpoint: str, default_host: str, default_port: int
+) -> tuple[str, int]:
+    """Parse ``host:port`` or ``http(s)://host:port`` MinIO endpoints."""
+    raw = endpoint.strip()
+    if not raw:
+        return default_host, default_port
+    if "://" not in raw:
+        raw = "//" + raw
+    try:
+        parts = urlsplit(raw)
         host = parts.hostname or default_host
         port = parts.port or default_port
     except ValueError:
@@ -515,6 +550,7 @@ def ensure_container(
     image: str,
     *,
     dry_run: bool,
+    command: list[str] | None = None,
 ) -> bool:
     if dry_run:
         log(f"[dry-run] 会确保容器 {name} 运行（镜像 {image}）")
@@ -535,8 +571,17 @@ def ensure_container(
         result = run_quiet([docker, "start", name], timeout=120)
     else:
         log(f"创建容器 {name}（首次运行可能需要拉取镜像）…")
-        command = [docker, "run", "-d", "--name", name, *run_args, image]
-        result = run_quiet(command, timeout=900)
+        run_command = [
+            docker,
+            "run",
+            "-d",
+            "--name",
+            name,
+            *run_args,
+            image,
+            *(command or []),
+        ]
+        result = run_quiet(run_command, timeout=900)
 
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
@@ -575,6 +620,7 @@ class Launcher:
         self.api_external = False
         self.frontend_external = False
         self.chroma_status = "未启动"
+        self.storage_status = "未启动"
         self.api_url = f"http://127.0.0.1:{self.config.api_port}"
         self.frontend_url = (
             f"http://127.0.0.1:{PROD_FRONTEND_PORT}"
@@ -589,6 +635,7 @@ class Launcher:
             self._check_tools()
             self._cleanup_previous()
             self._start_infrastructure()
+            self._ensure_storage()
             self._ensure_database()
             self._start_chroma()
             self._start_api()
@@ -720,6 +767,85 @@ class Launcher:
         else:
             log(f"使用外部 Redis：{config.redis_host}:{config.redis_port}")
 
+        if config.storage_backend == "local":
+            log("STORAGE_BACKEND=local：不需要 MinIO。")
+        elif not is_local_host(config.minio_host):
+            log(f"使用外部 MinIO：{config.minio_host}:{config.minio_port}")
+        else:
+            console = config.minio_console_port
+            if not ensure_container(
+                MINIO_CONTAINER,
+                [
+                    "--restart",
+                    "unless-stopped",
+                    "-e",
+                    "MINIO_ROOT_USER=" + config.minio_root_user,
+                    "-e",
+                    "MINIO_ROOT_PASSWORD=" + config.minio_root_password,
+                    "-p",
+                    f"{config.minio_port}:9000",
+                    "-p",
+                    f"{console}:{console}",
+                    "-v",
+                    f"{MINIO_VOLUME}:/data",
+                ],
+                MINIO_IMAGE,
+                dry_run=self.dry_run,
+                command=[
+                    "server",
+                    "/data",
+                    "--console-address",
+                    f":{console}",
+                ],
+            ):
+                if port_open("127.0.0.1", config.minio_port):
+                    raise LaunchError(
+                        f"端口 {config.minio_port} 已被其他程序占用，"
+                        "MinIO 容器无法映射该端口。请修改 .env 中的 "
+                        "MINIO_ENDPOINT（例如 localhost:9010）和 "
+                        "MINIO_CONSOLE_PORT（例如 9011）后重试，"
+                        "或先停止占用该端口的程序。"
+                    )
+                raise LaunchError("MinIO 容器启动失败。")
+
+    def _ensure_storage(self) -> None:
+        config = self.config
+        if config.storage_backend == "local":
+            self.storage_status = "本地 upload/（STORAGE_BACKEND=local）"
+            if self.dry_run:
+                log("[dry-run] 使用本地存储，不会启动 MinIO")
+            return
+        host = connect_host(config.minio_host)
+        url = f"http://{host}:{config.minio_port}/minio/health/live"
+        if self.dry_run:
+            log(
+                f"[dry-run] 会等待 MinIO {url} "
+                f"（bucket {config.minio_bucket}）"
+            )
+            self.storage_status = (
+                f"计划 MinIO {host}:{config.minio_port}"
+                f"（bucket {config.minio_bucket}）"
+            )
+            return
+        if wait_http(url, 90, "MinIO"):
+            self.storage_status = (
+                f"MinIO {host}:{config.minio_port}"
+                f"（bucket {config.minio_bucket}）"
+            )
+            ok(f"MinIO 已就绪（{host}:{config.minio_port}）")
+            return
+        if self.args.skip_docker:
+            warn("MinIO 未就绪，自动改用 STORAGE_BACKEND=local。")
+            config.storage_backend = "local"
+            self.storage_status = (
+                "本地 upload/（MinIO 不可用，已降级 STORAGE_BACKEND=local）"
+            )
+            return
+        raise LaunchError(
+            f"MinIO 在 {host}:{config.minio_port} 未就绪。"
+            "请检查 Docker 容器日志。"
+        )
+
     def _ensure_database(self) -> None:
         config = self.config
         host = connect_host(config.db_host)
@@ -840,9 +966,9 @@ class Launcher:
             "--port",
             str(config.api_port),
         ]
-        extra_env = (
-            {"TASK_BACKEND": "local"} if config.task_backend == "local" else None
-        )
+        extra_env = {"STORAGE_BACKEND": config.storage_backend}
+        if config.task_backend == "local":
+            extra_env["TASK_BACKEND"] = "local"
         record = self._start_service("API", command, env=extra_env)
         if self.dry_run:
             return
@@ -873,7 +999,11 @@ class Launcher:
             config.celery_pool,
             "--loglevel=INFO",
         ]
-        record = self._start_service("Celery worker", command)
+        record = self._start_service(
+            "Celery worker",
+            command,
+            env={"STORAGE_BACKEND": config.storage_backend},
+        )
         if record is not None and not self.dry_run:
             self.started.append(record)
             save_state(self.started)
@@ -1069,6 +1199,7 @@ class Launcher:
         frontend_label = "外部已有" if self.frontend_external else planned
         log(f" 前端      {self.frontend_url}（{frontend_label}）")
         log(f" 数据库    {self.config.db_host}:{self.config.db_port}")
+        log(f" 存储      {self.storage_status}")
         if self.config.task_backend == "celery":
             log(f" Redis     {self.config.redis_host}:{self.config.redis_port}")
         log("=" * 62)
@@ -1098,6 +1229,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prod", action="store_true", help="构建前端并使用 Nginx")
     parser.add_argument("--local", action="store_true", help="使用 TASK_BACKEND=local")
     parser.add_argument("--skip-docker", action="store_true", help="不管理 Docker 容器")
+    parser.add_argument(
+        "--no-minio",
+        action="store_true",
+        help="不启动 MinIO，强制 STORAGE_BACKEND=local",
+    )
     parser.add_argument("--no-chroma", action="store_true", help="不启动 Chroma")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--detach", action="store_true", help="启动后立即退出")
@@ -1125,6 +1261,32 @@ def build_config(env: dict[str, str], args: argparse.Namespace) -> LaunchConfig:
     task_backend = setting(env, "TASK_BACKEND", "celery").lower()
     if args.local or args.mode == "local":
         task_backend = "local"
+
+    storage_backend = setting(
+        env, "STORAGE_BACKEND", DEFAULT_STORAGE_BACKEND
+    ).strip().lower()
+    if storage_backend not in {"local", "minio"}:
+        warn(
+            f"STORAGE_BACKEND={storage_backend!r} 无效，"
+            f"使用 {DEFAULT_STORAGE_BACKEND}"
+        )
+        storage_backend = DEFAULT_STORAGE_BACKEND
+    if getattr(args, "no_minio", False) or args.local or args.mode == "local":
+        storage_backend = "local"
+    minio_host, minio_port = parse_endpoint_host_port(
+        setting(env, "MINIO_ENDPOINT", DEFAULT_MINIO_ENDPOINT),
+        "localhost",
+        9000,
+    )
+    # The API client prefers MINIO_ACCESS_KEY/SECRET_KEY, so the local container
+    # must use the same values as its root credentials.
+    minio_root_user = setting(env, "MINIO_ACCESS_KEY", "") or setting(
+        env, "MINIO_ROOT_USER", DEFAULT_MINIO_ACCESS_KEY
+    )
+    minio_root_password = setting(env, "MINIO_SECRET_KEY", "") or setting(
+        env, "MINIO_ROOT_PASSWORD", DEFAULT_MINIO_SECRET_KEY
+    )
+
     chroma_dir = Path(setting(env, "CHROMA_DIR", "./chroma_db"))
     if not chroma_dir.is_absolute():
         chroma_dir = ROOT / chroma_dir
@@ -1143,6 +1305,15 @@ def build_config(env: dict[str, str], args: argparse.Namespace) -> LaunchConfig:
         redis_port=redis_port,
         task_backend=task_backend,
         celery_pool=setting(env, "CELERY_WORKER_POOL", "solo"),
+        storage_backend=storage_backend,
+        minio_host=minio_host,
+        minio_port=minio_port,
+        minio_console_port=int_setting(
+            env, "MINIO_CONSOLE_PORT", DEFAULT_MINIO_CONSOLE_PORT
+        ),
+        minio_root_user=minio_root_user,
+        minio_root_password=minio_root_password,
+        minio_bucket=setting(env, "MINIO_BUCKET", DEFAULT_MINIO_BUCKET),
     )
 
 
