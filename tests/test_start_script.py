@@ -381,6 +381,28 @@ def test_ensure_container_appends_command_after_image(
     ]
 
 
+def _container_info(
+    api_host_port: int = 9000,
+    console_host_port: int = 9001,
+    *,
+    running: bool = True,
+    effective: dict | None = None,
+) -> dict:
+    bindings = {
+        "9000/tcp": [{"HostIp": "", "HostPort": str(api_host_port)}],
+        f"{console_host_port}/tcp": [
+            {"HostIp": "", "HostPort": str(console_host_port)}
+        ],
+    }
+    return {
+        "State": {"Running": running},
+        "HostConfig": {"PortBindings": bindings},
+        "NetworkSettings": {
+            "Ports": bindings if effective is None else effective
+        },
+    }
+
+
 def _launcher_with_recorded_containers(
     monkeypatch: pytest.MonkeyPatch,
     env: dict[str, str],
@@ -397,6 +419,16 @@ def _launcher_with_recorded_containers(
     launcher = start_all.Launcher(
         start_all.build_parser().parse_args(argv or []), env
     )
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(
+        start_all,
+        "inspect_container",
+        lambda name: _container_info(
+            launcher.config.minio_port, launcher.config.minio_console_port
+        ),
+    )
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: False)
+    monkeypatch.setattr(start_all, "containers_publishing", lambda port: [])
     return launcher, calls
 
 
@@ -431,15 +463,201 @@ def test_infrastructure_reports_minio_port_conflict(
         "ensure_container",
         lambda name, *args, **kwargs: name != start_all.MINIO_CONTAINER,
     )
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(start_all, "inspect_container", lambda name: None)
     monkeypatch.setattr(
         start_all,
         "port_open",
         lambda host, port, timeout=0.6: port == 9000,
     )
+    monkeypatch.setattr(
+        start_all,
+        "containers_publishing",
+        lambda port: ["bid-minio"] if port == 9000 else [],
+    )
     launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
     with pytest.raises(start_all.LaunchError) as excinfo:
         launcher._start_infrastructure()
-    assert "MINIO_ENDPOINT" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "MINIO_ENDPOINT" in message
+    assert "9010" in message
+    assert "bid-minio" in message
+
+
+def test_minio_port_change_recreates_container_with_volume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    state = {"removed": False}
+    calls: list[tuple[str, list[str], str, dict]] = []
+    removals: list[list[str]] = []
+
+    def fake_inspect(name: str) -> dict:
+        if state["removed"]:
+            return _container_info(9010, 9011)
+        return _container_info(9000, 9001)
+
+    def fake_ensure_container(name, run_args, image, **kwargs):
+        calls.append((name, run_args, image, kwargs))
+        return True
+
+    def fake_run_quiet(command, **kwargs):
+        removals.append(command)
+        state["removed"] = True
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(start_all, "inspect_container", fake_inspect)
+    monkeypatch.setattr(start_all, "ensure_container", fake_ensure_container)
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: False)
+    monkeypatch.setattr(start_all, "containers_publishing", lambda port: [])
+    monkeypatch.setattr(start_all, "run_quiet", fake_run_quiet)
+
+    launcher = start_all.Launcher(
+        start_all.build_parser().parse_args([]),
+        {"MINIO_ENDPOINT": "localhost:9010", "MINIO_CONSOLE_PORT": "9011"},
+    )
+    launcher._start_infrastructure()
+
+    assert removals == [["docker", "rm", "-f", start_all.MINIO_CONTAINER]]
+    minio_calls = [
+        call for call in calls if call[0] == start_all.MINIO_CONTAINER
+    ]
+    assert len(minio_calls) == 1
+    _name, run_args, _image, _kwargs = minio_calls[0]
+    assert "9010:9000" in run_args
+    assert "9011:9011" in run_args
+    assert f"{start_all.MINIO_VOLUME}:/data" in run_args
+
+
+def test_minio_running_without_effective_ports_reports_foreign_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(
+        start_all,
+        "inspect_container",
+        lambda name: _container_info(9000, 9001, effective={}),
+    )
+    monkeypatch.setattr(
+        start_all, "ensure_container", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        start_all, "containers_publishing", lambda port: ["bid-minio"]
+    )
+
+    def unexpected_remove(command, **kwargs):
+        raise AssertionError(f"container must not be removed: {command}")
+
+    monkeypatch.setattr(start_all, "run_quiet", unexpected_remove)
+
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    with pytest.raises(start_all.LaunchError) as excinfo:
+        launcher._start_infrastructure()
+    message = str(excinfo.value)
+    assert "MINIO_ENDPOINT" in message
+    assert "9010" in message
+    assert "bid-minio" in message
+
+
+def test_minio_effective_mapping_missing_recreates_when_ports_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    state = {"removed": False}
+    removals: list[list[str]] = []
+    starts = 0
+
+    def fake_inspect(name: str) -> dict:
+        if state["removed"]:
+            return _container_info(9000, 9001)
+        return _container_info(9000, 9001, effective={})
+
+    def fake_ensure_container(name, run_args, image, **kwargs):
+        nonlocal starts
+        if name == start_all.MINIO_CONTAINER:
+            starts += 1
+        return True
+
+    def fake_run_quiet(command, **kwargs):
+        removals.append(command)
+        state["removed"] = True
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(start_all.shutil, "which", lambda name: "docker")
+    monkeypatch.setattr(start_all, "inspect_container", fake_inspect)
+    monkeypatch.setattr(start_all, "ensure_container", fake_ensure_container)
+    monkeypatch.setattr(start_all, "port_open", lambda *args, **kwargs: False)
+    monkeypatch.setattr(start_all, "containers_publishing", lambda port: [])
+    monkeypatch.setattr(start_all, "run_quiet", fake_run_quiet)
+
+    launcher = start_all.Launcher(start_all.build_parser().parse_args([]), {})
+    launcher._start_infrastructure()
+
+    assert removals == [["docker", "rm", "-f", start_all.MINIO_CONTAINER]]
+    assert starts == 2
+
+
+def test_publishes_host_port_reads_effective_and_configured_bindings() -> None:
+    info = _container_info(9010, 9011)
+    assert start_all.publishes_host_port(info, 9000, 9010, effective=True)
+    assert start_all.publishes_host_port(info, 9011, 9011, effective=True)
+    assert not start_all.publishes_host_port(info, 9000, 9000, effective=True)
+    assert not start_all.publishes_host_port({}, 9000, 9010, effective=True)
+    assert not start_all.publishes_host_port(
+        {"NetworkSettings": {"Ports": {"9000/tcp": []}}},
+        9000,
+        9010,
+        effective=True,
+    )
+    assert start_all.publishes_host_port(
+        {
+            "HostConfig": {
+                "PortBindings": {"9000/tcp": [{"HostPort": "9010"}]}
+            }
+        },
+        9000,
+        9010,
+        effective=False,
+    )
+    expected = ((9000, 9010), (9011, 9011))
+    assert start_all.publishes_all_host_ports(info, expected, effective=True)
+    assert not start_all.publishes_all_host_ports(
+        _container_info(9000, 9001), expected, effective=True
+    )
+
+
+def test_minio_dry_run_skips_docker_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_start_env(monkeypatch)
+    calls: list[tuple[str, list[str], str, dict]] = []
+
+    def fake_ensure_container(name, run_args, image, **kwargs):
+        calls.append((name, run_args, image, kwargs))
+        return True
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("dry-run must not query Docker")
+
+    monkeypatch.setattr(start_all, "ensure_container", fake_ensure_container)
+    monkeypatch.setattr(start_all, "inspect_container", unexpected)
+    monkeypatch.setattr(start_all.shutil, "which", unexpected)
+    monkeypatch.setattr(start_all, "run_quiet", unexpected)
+
+    launcher = start_all.Launcher(
+        start_all.build_parser().parse_args(["--dry-run"]),
+        {"MINIO_ENDPOINT": "localhost:9010", "MINIO_CONSOLE_PORT": "9011"},
+    )
+    launcher._start_infrastructure()
+
+    minio_calls = [
+        call for call in calls if call[0] == start_all.MINIO_CONTAINER
+    ]
+    assert len(minio_calls) == 1
+    assert minio_calls[0][3]["dry_run"] is True
 
 
 def test_infrastructure_uses_external_minio(

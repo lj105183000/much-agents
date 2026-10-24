@@ -69,6 +69,7 @@ API       <MINIO_ENDPOINT 端口>:9000
 | `start.bat --skip-docker` | celery | minio；不可达时降级 local | 不管理 |
 
 - `stop.bat` 只停止由本次启动拉起的 Python/Node 进程，不关闭 PostgreSQL、Redis、MinIO 等容器。
+- 启动脚本会校验 `much-agents-minio` 的**实际**端口发布（`NetworkSettings.Ports`）。`.env` 端口变化或容器启动时端口被占用时，脚本会指出占用者；目标端口空闲时自动重建容器（`docker rm -f`，数据卷保留）。`--skip-docker` 模式不做此检查。
 - 端口被其他程序占用时，启动脚本会给出可操作提示：修改 `.env` 的 `MINIO_ENDPOINT`（例如 `localhost:9010`）和 `MINIO_CONSOLE_PORT`（例如 `9011`）后重试。
 - `--dry-run` 只打印计划，不创建容器、不写 `.env`。
 
@@ -110,6 +111,7 @@ uv run python -m src.storage sync    # 把本地存量 upload/ 数据增量上�
 | worker 无法获取输入或同步产物 | 任务标记 failed，本地文件保留；恢复后可重试 |
 | `start.bat --skip-docker` 且 MinIO 不可达 | warning 并降级 `STORAGE_BACKEND=local` |
 | 凭据变更后旧容器仍用旧账号 | 客户端收到 `AccessDenied`；执行 `docker rm -f much-agents-minio` 后重新运行 `start.bat`（数据卷保留） |
+| 容器在运行但未发布宿主端口（端口被其他程序占用） | 启动脚本校验 `NetworkSettings.Ports`；目标端口空闲时自动重建容器，被占用时报出占用者并提示修改 `MINIO_ENDPOINT`/`MINIO_CONSOLE_PORT` |
 | bucket 名非法 | 回退 `much-agents` 并记录 warning |
 | 找不到对象 | 404（`StorageObjectNotFound`）；元数据缺失的 run 编辑/组装返回 409 |
 

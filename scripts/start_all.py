@@ -30,6 +30,7 @@ import urllib.request
 import webbrowser
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +49,7 @@ NGINX_CONTAINER = "much-agents-nginx"
 
 MINIO_IMAGE = "minio/minio:latest"
 MINIO_VOLUME = "much-agents-minio-data"
+MINIO_API_CONTAINER_PORT = 9000
 DEFAULT_STORAGE_BACKEND = "minio"
 DEFAULT_MINIO_ENDPOINT = "localhost:9000"
 DEFAULT_MINIO_CONSOLE_PORT = 9001
@@ -507,6 +509,87 @@ def docker_ready() -> bool:
     return result.returncode == 0
 
 
+def inspect_container(name: str) -> dict[str, Any] | None:
+    """Return the first ``docker inspect`` record, or None when unavailable."""
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
+    result = run_quiet([docker, "inspect", name], timeout=20)
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    record = payload[0]
+    return record if isinstance(record, dict) else None
+
+
+def port_bindings(info: dict[str, Any], *, effective: bool) -> dict[str, Any]:
+    """Return live (NetworkSettings) or configured (HostConfig) port bindings."""
+    section_key = "NetworkSettings" if effective else "HostConfig"
+    bindings_key = "Ports" if effective else "PortBindings"
+    section = info.get(section_key)
+    if not isinstance(section, dict):
+        return {}
+    value = section.get(bindings_key)
+    return value if isinstance(value, dict) else {}
+
+
+def publishes_host_port(
+    info: dict[str, Any],
+    container_port: int,
+    host_port: int,
+    *,
+    effective: bool,
+) -> bool:
+    entries = port_bindings(info, effective=effective).get(
+        f"{container_port}/tcp"
+    )
+    if not isinstance(entries, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and str(entry.get("HostPort") or "") == str(host_port)
+        for entry in entries
+    )
+
+
+def publishes_all_host_ports(
+    info: dict[str, Any],
+    expected: tuple[tuple[int, int], ...],
+    *,
+    effective: bool,
+) -> bool:
+    return all(
+        publishes_host_port(info, container_port, host_port, effective=effective)
+        for container_port, host_port in expected
+    )
+
+
+def containers_publishing(host_port: int) -> list[str]:
+    """Return container names publishing *host_port* (empty when unknown)."""
+    docker = shutil.which("docker")
+    if docker is None:
+        return []
+    result = run_quiet(
+        [
+            docker,
+            "ps",
+            "--filter",
+            f"publish={host_port}",
+            "--format",
+            "{{.Names}}",
+        ],
+        timeout=15,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def start_docker_desktop(timeout: int = 150) -> bool:
     candidates = [
         Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
@@ -772,41 +855,149 @@ class Launcher:
         elif not is_local_host(config.minio_host):
             log(f"使用外部 MinIO：{config.minio_host}:{config.minio_port}")
         else:
-            console = config.minio_console_port
-            if not ensure_container(
-                MINIO_CONTAINER,
-                [
-                    "--restart",
-                    "unless-stopped",
-                    "-e",
-                    "MINIO_ROOT_USER=" + config.minio_root_user,
-                    "-e",
-                    "MINIO_ROOT_PASSWORD=" + config.minio_root_password,
-                    "-p",
-                    f"{config.minio_port}:9000",
-                    "-p",
-                    f"{console}:{console}",
-                    "-v",
-                    f"{MINIO_VOLUME}:/data",
-                ],
-                MINIO_IMAGE,
-                dry_run=self.dry_run,
-                command=[
-                    "server",
-                    "/data",
-                    "--console-address",
-                    f":{console}",
-                ],
-            ):
-                if port_open("127.0.0.1", config.minio_port):
-                    raise LaunchError(
-                        f"端口 {config.minio_port} 已被其他程序占用，"
-                        "MinIO 容器无法映射该端口。请修改 .env 中的 "
-                        "MINIO_ENDPOINT（例如 localhost:9010）和 "
-                        "MINIO_CONSOLE_PORT（例如 9011）后重试，"
-                        "或先停止占用该端口的程序。"
-                    )
+            if not self._ensure_minio_container():
                 raise LaunchError("MinIO 容器启动失败。")
+
+    def _minio_expected_ports(self) -> tuple[tuple[int, int], ...]:
+        console = self.config.minio_console_port
+        return (
+            (MINIO_API_CONTAINER_PORT, self.config.minio_port),
+            (console, console),
+        )
+
+    def _minio_port_conflict(
+        self, expected: tuple[tuple[int, int], ...], info: dict[str, Any] | None
+    ) -> str | None:
+        conflicts: list[str] = []
+        for container_port, host_port in expected:
+            if info is not None and publishes_host_port(
+                info, container_port, host_port, effective=True
+            ):
+                continue
+            if not (
+                port_open("127.0.0.1", host_port)
+                or port_open("::1", host_port)
+            ):
+                continue
+            publishers = containers_publishing(host_port)
+            if publishers and all(name == MINIO_CONTAINER for name in publishers):
+                continue
+            owners = [name for name in publishers if name != MINIO_CONTAINER]
+            suffix = f"（Docker 容器：{', '.join(owners)}）" if owners else ""
+            conflicts.append(f"{host_port}→{container_port}{suffix}")
+        if not conflicts:
+            return None
+        return (
+            f"MinIO 容器 {MINIO_CONTAINER} 无法发布期望的宿主机端口："
+            f"{'、'.join(conflicts)}。请修改 .env 中的 MINIO_ENDPOINT"
+            f"（例如 localhost:9010）和 MINIO_CONSOLE_PORT（例如 9011）"
+            "后重试，或先停止占用该端口的程序。"
+        )
+
+    def _remove_minio_container(self, docker: str) -> None:
+        # Never pass -v: the named volume keeps every stored artifact.
+        result = run_quiet([docker, "rm", "-f", MINIO_CONTAINER], timeout=60)
+        if result.returncode != 0:
+            raise LaunchError(
+                f"无法移除容器 {MINIO_CONTAINER}："
+                f"{(result.stderr or result.stdout or '').strip()[-800:]}"
+            )
+
+    def _ensure_minio_container(self) -> bool:
+        config = self.config
+        console = config.minio_console_port
+        expected = self._minio_expected_ports()
+        run_args = [
+            "--restart",
+            "unless-stopped",
+            "-e",
+            "MINIO_ROOT_USER=" + config.minio_root_user,
+            "-e",
+            "MINIO_ROOT_PASSWORD=" + config.minio_root_password,
+            "-p",
+            f"{config.minio_port}:{MINIO_API_CONTAINER_PORT}",
+            "-p",
+            f"{console}:{console}",
+            "-v",
+            f"{MINIO_VOLUME}:/data",
+        ]
+        command = [
+            "server",
+            "/data",
+            "--console-address",
+            f":{console}",
+        ]
+
+        if self.dry_run:
+            return ensure_container(
+                MINIO_CONTAINER,
+                run_args,
+                MINIO_IMAGE,
+                dry_run=True,
+                command=command,
+            )
+
+        docker = shutil.which("docker")
+        if docker is None:
+            raise LaunchError("未找到 docker 命令，无法启动依赖容器。")
+
+        info = inspect_container(MINIO_CONTAINER)
+        if info is not None and not publishes_all_host_ports(
+            info, expected, effective=False
+        ):
+            conflict = self._minio_port_conflict(expected, None)
+            if conflict:
+                raise LaunchError(conflict)
+            warn(
+                f"MinIO 容器端口映射与 .env 不一致，重建 "
+                f"{MINIO_CONTAINER}（数据卷 {MINIO_VOLUME} 保留）…"
+            )
+            self._remove_minio_container(docker)
+
+        def start() -> bool:
+            return ensure_container(
+                MINIO_CONTAINER,
+                run_args,
+                MINIO_IMAGE,
+                dry_run=False,
+                command=command,
+            )
+
+        if not start():
+            conflict = self._minio_port_conflict(
+                expected, inspect_container(MINIO_CONTAINER)
+            )
+            if conflict:
+                raise LaunchError(conflict)
+            return False
+
+        info = inspect_container(MINIO_CONTAINER)
+        if info is not None and publishes_all_host_ports(
+            info, expected, effective=True
+        ):
+            return True
+
+        conflict = self._minio_port_conflict(expected, info)
+        if conflict:
+            raise LaunchError(conflict)
+        warn(
+            f"MinIO 容器已运行但未发布期望端口，重建 "
+            f"{MINIO_CONTAINER}（数据卷 {MINIO_VOLUME} 保留）…"
+        )
+        self._remove_minio_container(docker)
+        if not start():
+            return False
+        info = inspect_container(MINIO_CONTAINER)
+        if info is not None and publishes_all_host_ports(
+            info, expected, effective=True
+        ):
+            return True
+        raise LaunchError(
+            f"MinIO 容器 {MINIO_CONTAINER} 已启动，但仍未发布期望端口"
+            f"（API {config.minio_port}→{MINIO_API_CONTAINER_PORT}，"
+            f"控制台 {console}）。请运行 docker inspect {MINIO_CONTAINER} "
+            f"和 docker logs {MINIO_CONTAINER} 排查。"
+        )
 
     def _ensure_storage(self) -> None:
         config = self.config
