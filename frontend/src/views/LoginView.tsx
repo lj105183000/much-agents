@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { ApiError, getApiBase } from '../api/client'
 import { useAuth } from '../auth/useAuth'
 import { SettingsDialog } from '../components/SettingsDialog'
+import { SourceLink } from '../components/SourceLink'
 import { Icon } from '../components/icons'
 import { Button, Card, Field, inputClass } from '../components/ui'
 import { saveApiBase } from '../lib/apiBase'
@@ -116,14 +117,17 @@ export function LoginView() {
         </Card>
 
         <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-slate-500">
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="inline-flex items-center gap-1.5 text-slate-400 transition hover:text-slate-200"
-          >
-            <Icon name="settings" className="h-3.5 w-3.5" />
-            API 连接设置
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="inline-flex items-center gap-1.5 text-slate-400 transition hover:text-slate-200"
+            >
+              <Icon name="settings" className="h-3.5 w-3.5" />
+              API 连接设置
+            </button>
+            <SourceLink />
+          </div>
           <span className="break-all">{apiBase || '同源 /api'}</span>
         </div>
 
