@@ -23,6 +23,7 @@ from src.bidding.errors import (
 from src.bidding.profile import BidderProfile
 from src.bidding.runner import run_bid_writing
 from src.parsing.artifacts import atomic_write_json, ensure_dir
+from src.storage.base import Storage
 
 from .companies import CompanyError, CompanyService
 from .config import ApiSettings
@@ -55,12 +56,14 @@ class BidService:
         store: JobStoreProtocol,
         dispatch: Callable[[Job], None],
         company_service: CompanyService | None = None,
+        storage: Storage | None = None,
     ) -> None:
         self.api_settings = api_settings
         self.bid_settings = bid_settings
         self.store = store
         self.dispatch = dispatch
         self.company_service = company_service
+        self.storage = storage
 
     async def submit(
         self,
@@ -147,6 +150,7 @@ def execute_bid_job(
     bid_settings: BidSettings,
     run_func: BidRunFunc = run_bid_writing,
     api_settings: ApiSettings | None = None,
+    storage: Storage | None = None,
 ) -> None:
     job = store.mark_running(job_id)
     if job is None:
@@ -167,6 +171,7 @@ def execute_bid_job(
                     store=store,
                     bid_settings=bid_settings,
                     api_settings=api_settings or ApiSettings.from_env(),
+                    storage=storage,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - never leave a job running

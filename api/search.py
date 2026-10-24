@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from src.bidding.config import BidSettings
 from src.bidding.context import ChunkRecord
@@ -20,6 +20,9 @@ from src.bidding.retrieval import (
     strip_embed_prefix,
 )
 from src.parsing.config import Settings
+from src.storage.base import Storage
+from src.storage.errors import StorageObjectNotFound
+from src.storage.keys import parsed_prefix
 
 from .artifacts import is_safe_id
 from .documents import list_documents
@@ -110,65 +113,72 @@ def _semantic_score(distance: float | None) -> float | None:
     return round(max(0.0, min(1.0, 1.0 - distance)), 4)
 
 
+def _load_chunk_lines(
+    lines: Iterable[str],
+    doc_id: str,
+) -> tuple[list[ChunkRecord], int]:
+    chunks: list[ChunkRecord] = []
+    skipped = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        if not isinstance(row, dict):
+            skipped += 1
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            skipped += 1
+            continue
+        metadata = row.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata = dict(metadata)
+        metadata_doc = str(metadata.get("doc_id") or "")
+        if metadata_doc and metadata_doc != doc_id:
+            skipped += 1
+            continue
+        metadata["doc_id"] = metadata_doc or doc_id
+        chunk_id = str(row.get("id") or metadata.get("chunk_id") or "")
+        if not chunk_id:
+            skipped += 1
+            continue
+        try:
+            page_start = int(metadata.get("page_start") or 0)
+            page_end = int(metadata.get("page_end") or 0)
+        except (TypeError, ValueError):
+            page_start = page_end = 0
+        metadata["page_start"] = page_start
+        metadata["page_end"] = page_end
+        chunks.append(
+            ChunkRecord(
+                chunk_id=chunk_id,
+                text=text,
+                embed_text=str(row.get("embed_text") or text),
+                metadata=metadata,
+            )
+        )
+    return chunks, skipped
+
+
 def _load_chunks(
     path: Path,
     doc_id: str,
 ) -> tuple[list[ChunkRecord], int]:
     if not path.is_file():
         return [], 0
-    chunks: list[ChunkRecord] = []
-    skipped = 0
     try:
         handle = path.open("r", encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         logger.warning("could not open chunks file %s: %s", path, exc)
         return [], 1
     with handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except (TypeError, ValueError):
-                skipped += 1
-                continue
-            if not isinstance(row, dict):
-                skipped += 1
-                continue
-            text = str(row.get("text") or "").strip()
-            if not text:
-                skipped += 1
-                continue
-            metadata = row.get("metadata") or {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-            metadata = dict(metadata)
-            metadata_doc = str(metadata.get("doc_id") or "")
-            if metadata_doc and metadata_doc != doc_id:
-                skipped += 1
-                continue
-            metadata["doc_id"] = metadata_doc or doc_id
-            chunk_id = str(row.get("id") or metadata.get("chunk_id") or "")
-            if not chunk_id:
-                skipped += 1
-                continue
-            try:
-                page_start = int(metadata.get("page_start") or 0)
-                page_end = int(metadata.get("page_end") or 0)
-            except (TypeError, ValueError):
-                page_start = page_end = 0
-            metadata["page_start"] = page_start
-            metadata["page_end"] = page_end
-            chunks.append(
-                ChunkRecord(
-                    chunk_id=chunk_id,
-                    text=text,
-                    embed_text=str(row.get("embed_text") or text),
-                    metadata=metadata,
-                )
-            )
-    return chunks, skipped
+        return _load_chunk_lines(handle, doc_id)
 
 
 class SearchService:
@@ -179,11 +189,19 @@ class SearchService:
         bid_settings: BidSettings,
         semantic_retriever: CandidateRetriever | None = None,
         catalog_func: Callable[..., list[DocumentSummary]] = list_documents,
+        storage: Storage | None = None,
     ) -> None:
         self.parse_settings = parse_settings
         self.bid_settings = bid_settings
         self._semantic_retriever = semantic_retriever
         self._catalog_func = catalog_func
+        self._storage = storage
+
+    @property
+    def _remote_storage(self) -> Storage | None:
+        if self._storage is None or self._storage.backend == "local":
+            return None
+        return self._storage
 
     def _semantic_reason(self) -> str | None:
         if self._semantic_retriever is not None:
@@ -200,11 +218,15 @@ class SearchService:
         return self._semantic_retriever
 
     def _catalog_names(self) -> tuple[dict[str, str], str | None]:
+        storage = self._remote_storage
+        kwargs: dict[str, Any] = {"limit": 1000}
+        if storage is not None:
+            kwargs["storage"] = storage
         try:
             documents = self._catalog_func(
                 self.parse_settings,
                 self.bid_settings,
-                limit=1000,
+                **kwargs,
             )
         except Exception as exc:  # noqa: BLE001 - search still works without labels
             logger.warning("could not load document catalog: %s", exc)
@@ -244,10 +266,77 @@ class SearchService:
             raise SearchError(404, "document is unavailable")
         return candidate
 
+    def _remote_searchable_docs(self) -> list[str]:
+        storage = self._remote_storage
+        if storage is None:
+            return []
+        docs: set[str] = set()
+        for info in storage.list("parsed"):
+            parts = info.key.split("/")
+            if len(parts) != 3 or parts[0] != "parsed":
+                continue
+            doc_id, name = parts[1], parts[2]
+            if name != "chunks.jsonl" or info.size <= 0 or not is_safe_id(doc_id):
+                continue
+            docs.add(doc_id)
+        return sorted(docs)
+
+    def _remote_doc(self, doc_id: str) -> str:
+        storage = self._remote_storage
+        if storage is None:
+            raise SearchError(404, "document is unavailable")
+        if not is_safe_id(doc_id):
+            raise SearchError(422, "invalid doc_id")
+        key = f"{parsed_prefix(doc_id)}/chunks.jsonl"
+        info = storage.stat(key)
+        if info is None or info.size <= 0:
+            raise SearchError(404, "document is unavailable")
+        return doc_id
+
+    def _load_remote_chunks(
+        self,
+        doc_id: str | None,
+    ) -> tuple[list[ChunkRecord], set[str], list[str]]:
+        storage = self._remote_storage
+        assert storage is not None
+        warnings: list[str] = []
+        chunks: list[ChunkRecord] = []
+        searchable: set[str] = set()
+        doc_ids = (
+            [self._remote_doc(doc_id)]
+            if doc_id
+            else self._remote_searchable_docs()
+        )
+        if not doc_ids:
+            return [], set(), ["没有可检索的已解析文档"]
+        skipped = 0
+        for current in doc_ids:
+            key = f"{parsed_prefix(current)}/chunks.jsonl"
+            try:
+                doc_chunks, doc_skipped = _load_chunk_lines(
+                    storage.iter_lines(key),
+                    current,
+                )
+            except StorageObjectNotFound:
+                doc_chunks, doc_skipped = [], 1
+            skipped += doc_skipped
+            if doc_chunks:
+                searchable.add(current)
+                chunks.extend(doc_chunks)
+        if skipped:
+            warnings.append(f"已跳过 {skipped} 行异常分块")
+        if doc_id and not chunks:
+            raise SearchError(404, "document has no searchable chunks")
+        if not chunks:
+            warnings.append("没有可检索的分块")
+        return chunks, searchable, warnings
+
     def _load_keyword_chunks(
         self,
         doc_id: str | None,
     ) -> tuple[list[ChunkRecord], set[str], list[str]]:
+        if self._remote_storage is not None:
+            return self._load_remote_chunks(doc_id)
         warnings: list[str] = []
         chunks: list[ChunkRecord] = []
         searchable: set[str] = set()
@@ -328,7 +417,10 @@ class SearchService:
         doc_id = (request.doc_id or "").strip() or None
 
         if doc_id:
-            self._safe_doc_dir(doc_id)
+            if self._remote_storage is not None:
+                self._remote_doc(doc_id)
+            else:
+                self._safe_doc_dir(doc_id)
         chunks, searchable, warnings = self._load_keyword_chunks(doc_id)
         names, catalog_warning = self._catalog_names()
         if catalog_warning:

@@ -18,6 +18,8 @@ class HealthResponse(BaseModel):
     task_backend: Literal["celery", "local"] = "celery"
     redis_ok: bool | None = None
     database_ok: bool | None = None
+    storage_backend: Literal["local", "minio"] = "local"
+    storage_ok: bool = True
 
 
 class JobCreatedResponse(BaseModel):

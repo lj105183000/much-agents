@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Callable
@@ -16,6 +17,12 @@ from src.bidding.runner import run_bid_writing
 from src.parsing.config import Settings
 from src.parsing.models import ParseResult
 from src.parsing.pipeline import parse_document
+from src.storage import Storage, StorageLayout, build_storage
+from src.storage.errors import (
+    StorageObjectNotFound,
+    StoragePathError,
+    StorageUnavailable,
+)
 
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
@@ -49,6 +56,7 @@ def create_app(
     search_service: SearchService | None = None,
     company_service: CompanyService | None = None,
     bid_run_service: BidRunService | None = None,
+    storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     parse_func_injected = parse_func is not None
@@ -66,6 +74,14 @@ def create_app(
     )
     parse_settings = parse_settings or Settings.from_env()
     bid_settings = bid_settings or BidSettings.from_env()
+    storage = storage or build_storage(
+        api_settings.storage,
+        StorageLayout(
+            upload_dir=api_settings.upload_dir,
+            parsed_dir=parse_settings.parsed_dir,
+            bids_dir=bid_settings.bids_dir,
+        ),
+    )
     database = Database(api_settings.database_url)
     parse_func = parse_func or parse_document
     bid_func = bid_func or run_bid_writing
@@ -97,6 +113,7 @@ def create_app(
                     store=store,
                     parse_settings=parse_settings,
                     parse_func=parse_func,
+                    storage=storage,
                 )
 
             dispatcher = LocalDispatcher(runner=parse_runner, executor=execute_parse)
@@ -111,6 +128,7 @@ def create_app(
                     bid_settings=bid_settings,
                     run_func=bid_func,
                     api_settings=api_settings,
+                    storage=storage,
                 )
 
             bid_dispatcher = LocalDispatcher(
@@ -138,6 +156,7 @@ def create_app(
         api_settings=api_settings,
         store=store,
         dispatch=dispatcher.dispatch,
+        storage=storage,
     )
     company_service = company_service or CompanyService(
         api_settings.database_url,
@@ -158,6 +177,7 @@ def create_app(
         dispatch=bid_dispatcher.dispatch,
         max_attempts=api_settings.bid_run_max_attempts,
         stale_seconds=api_settings.bid_run_stale_seconds,
+        storage=storage,
     )
     bid_service = BidService(
         api_settings=api_settings,
@@ -165,15 +185,21 @@ def create_app(
         store=store,
         dispatch=bid_dispatcher.dispatch,
         company_service=company_service,
+        storage=storage,
     )
     search_service = search_service or SearchService(
         parse_settings=parse_settings,
         bid_settings=bid_settings,
+        storage=storage,
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            await asyncio.to_thread(storage.ensure_ready)
+        except Exception as exc:  # noqa: BLE001 - the API can start degraded
+            logger.warning("object storage is not ready: %s", exc)
         await database.init(auto_migrate=api_settings.db_auto_migrate)
         await company_service.init()
         yield
@@ -207,6 +233,7 @@ def create_app(
     app.state.database = database
     app.state.search_service = search_service
     app.state.company_service = company_service
+    app.state.storage = storage
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(api_settings.cors_origins),
@@ -243,6 +270,27 @@ def create_app(
         return JSONResponse(
             status_code=503, content={"detail": "job store is unavailable"}
         )
+
+    @app.exception_handler(StorageUnavailable)
+    async def handle_storage_unavailable(
+        _request: Request, exc: StorageUnavailable
+    ) -> JSONResponse:
+        logger.warning("object storage unavailable: %s", exc)
+        return JSONResponse(
+            status_code=503, content={"detail": "object storage is unavailable"}
+        )
+
+    @app.exception_handler(StorageObjectNotFound)
+    async def handle_storage_object_missing(
+        _request: Request, _exc: StorageObjectNotFound
+    ) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "object is unavailable"})
+
+    @app.exception_handler(StoragePathError)
+    async def handle_storage_path_error(
+        _request: Request, _exc: StoragePathError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "object is unavailable"})
 
     app.include_router(build_router())
     return app

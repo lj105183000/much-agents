@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Sequence
 from uuid import uuid4
 
 import redis
@@ -23,6 +24,256 @@ from src.bidding.models import Evidence
 from src.bidding.profile import BidderProfile
 from src.parsing.config import Settings
 from src.parsing.models import ParseResult
+from src.storage.errors import (
+    StorageObjectNotFound,
+    StoragePathError,
+    StorageUnavailable,
+)
+from src.storage.models import ObjectInfo, SyncStats, content_type_for_name
+
+
+class MemoryStorage:
+    """In-memory object store used by API tests."""
+
+    backend = "minio"
+
+    def __init__(self, *, now: datetime | None = None) -> None:
+        self.now = now or datetime(2024, 1, 1, tzinfo=timezone.utc)
+        self.objects: dict[str, tuple[bytes, datetime, str]] = {}
+        self.ensure_ready_calls = 0
+
+    def ensure_ready(self) -> None:
+        self.ensure_ready_calls += 1
+
+    def ping(self) -> bool:
+        return True
+
+    def _info(self, key: str) -> ObjectInfo:
+        data, modified, content_type = self.objects[key]
+        return ObjectInfo(
+            key=key,
+            size=len(data),
+            etag=hashlib.sha256(data).hexdigest()[:16],
+            last_modified=modified,
+            content_type=content_type,
+            metadata={},
+            mtime_ns=int(modified.timestamp() * 1_000_000_000),
+        )
+
+    def put_file(
+        self,
+        key: str,
+        source: Path,
+        *,
+        content_type: str | None = None,
+    ) -> None:
+        self.objects[key] = (
+            Path(source).read_bytes(),
+            self.now,
+            content_type or content_type_for_name(key),
+        )
+
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        content_type: str | None = None,
+    ) -> None:
+        self.objects[key] = (
+            bytes(data),
+            self.now,
+            content_type or content_type_for_name(key),
+        )
+
+    def get_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
+        if key not in self.objects:
+            raise StorageObjectNotFound(key)
+        data = self.objects[key][0]
+        if max_bytes is not None and len(data) > max_bytes:
+            raise StoragePathError(f"object is larger than {max_bytes} bytes: {key}")
+        return data
+
+    def download_file(self, key: str, target: Path) -> ObjectInfo:
+        data = self.get_bytes(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return self._info(key)
+
+    def stat(self, key: str) -> ObjectInfo | None:
+        return self._info(key) if key in self.objects else None
+
+    def exists(self, key: str) -> bool:
+        return key in self.objects
+
+    def list(self, prefix: str) -> list[ObjectInfo]:
+        clean = (prefix or "").strip("/")
+        keys = [
+            key
+            for key in self.objects
+            if not clean or key == clean or key.startswith(f"{clean}/")
+        ]
+        return [self._info(key) for key in sorted(keys)]
+
+    def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+
+    def delete_prefix(self, prefix: str) -> int:
+        clean = (prefix or "").strip("/")
+        keys = [
+            key
+            for key in self.objects
+            if key == clean or key.startswith(f"{clean}/")
+        ]
+        for key in keys:
+            del self.objects[key]
+        return len(keys)
+
+    def open_stream(
+        self,
+        key: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> Iterator[bytes]:
+        data = self.get_bytes(key)
+        end = None if length is None else offset + length
+        chunk = data[offset:end]
+        for start in range(0, len(chunk), 64 * 1024):
+            yield chunk[start : start + 64 * 1024]
+
+    def iter_lines(self, key: str, *, encoding: str = "utf-8") -> Iterator[str]:
+        data = self.get_bytes(key)
+        yield from data.decode(encoding, errors="replace").splitlines()
+
+    def ensure_files(
+        self,
+        prefix: str,
+        local_root: Path,
+        relative_paths: Sequence[str],
+        *,
+        required: bool = False,
+    ) -> set[str]:
+        base = (prefix or "").strip("/")
+        missing: set[str] = set()
+        for raw in relative_paths:
+            relative = str(raw).replace("\\", "/").strip("/")
+            key = f"{base}/{relative}" if base else relative
+            if key not in self.objects:
+                if not (local_root / relative).is_file():
+                    missing.add(relative)
+                continue
+            self.download_file(key, local_root / relative)
+        if required and missing:
+            raise StorageObjectNotFound(
+                "missing objects: " + ", ".join(sorted(missing))
+            )
+        return missing
+
+    def sync_up(
+        self,
+        local_root: Path,
+        prefix: str,
+        *,
+        exclude: set[str] | None = None,
+        delete_missing: bool = False,
+    ) -> SyncStats:
+        stats = SyncStats()
+        if not local_root.is_dir():
+            return stats
+        base = (prefix or "").strip("/")
+        excluded = set(exclude or ())
+        uploaded: set[str] = set()
+        for path in sorted(local_root.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative_path = path.relative_to(local_root)
+            relative = relative_path.as_posix()
+            if any(part.startswith(".") for part in relative_path.parts):
+                continue
+            if path.name.endswith(".tmp"):
+                continue
+            if relative in excluded or path.name in excluded:
+                continue
+            key = f"{base}/{relative}" if base else relative
+            uploaded.add(key)
+            data = path.read_bytes()
+            existing = self.objects.get(key)
+            if existing is not None and existing[0] == data:
+                stats.skipped += 1
+                continue
+            self.objects[key] = (data, self.now, content_type_for_name(key))
+            stats.uploaded += 1
+            stats.bytes_uploaded += len(data)
+        if delete_missing:
+            for key in [
+                key
+                for key in self.objects
+                if key == base or key.startswith(f"{base}/")
+            ]:
+                if key in uploaded:
+                    continue
+                del self.objects[key]
+                stats.deleted += 1
+        return stats
+
+    def sync_down(
+        self,
+        prefix: str,
+        local_root: Path,
+        *,
+        prune: bool = False,
+    ) -> SyncStats:
+        stats = SyncStats()
+        base = (prefix or "").strip("/")
+        infos = self.list(base)
+        for info in infos:
+            relative = info.key[len(base) + 1 :] if base else info.key
+            self.download_file(info.key, local_root / relative)
+            stats.downloaded += 1
+            stats.bytes_downloaded += info.size
+        if prune and local_root.is_dir():
+            remote = {info.key for info in infos}
+            for path in sorted(local_root.rglob("*")):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                relative = path.relative_to(local_root).as_posix()
+                key = f"{base}/{relative}" if base else relative
+                if key in remote:
+                    continue
+                path.unlink()
+                stats.deleted += 1
+        return stats
+
+
+class FailingStorage:
+    """Object store that is unreachable for every operation."""
+
+    backend = "minio"
+
+    def ensure_ready(self) -> None:
+        raise StorageUnavailable("object storage is down")
+
+    def ping(self) -> bool:
+        return False
+
+    def _fail(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise StorageUnavailable("object storage is down")
+
+    put_file = _fail
+    put_bytes = _fail
+    get_bytes = _fail
+    download_file = _fail
+    stat = _fail
+    exists = _fail
+    list = _fail
+    delete = _fail
+    delete_prefix = _fail
+    open_stream = _fail
+    iter_lines = _fail
+    ensure_files = _fail
+    sync_up = _fail
+    sync_down = _fail
 
 
 class FakeClock:

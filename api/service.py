@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import shutil
@@ -27,6 +28,10 @@ from src.parsing.errors import (
     ParsingError,
 )
 from src.parsing.models import ParseOptions, ParseResult
+from src.storage.base import Storage
+from src.storage.errors import StorageError
+from src.storage.hydration import is_remote, sync_document
+from src.storage.keys import inbox_key
 
 from .config import ApiSettings
 from .jobs import Job, JobStoreError, JobStoreProtocol
@@ -149,12 +154,26 @@ def _mark_failed(
         logger.exception("could not mark job %s failed", job_id)
 
 
+def _hydrate_parse_source(
+    job: Job,
+    parse_settings: Settings,
+    storage: Storage,
+) -> Path:
+    """Materialise the uploaded PDF from object storage into the local cache."""
+    source = inbox_key(job.job_id)
+    local_dir = parse_settings.upload_dir / "inbox" / job.job_id
+    prefix = source.rsplit("/", 1)[0]
+    storage.ensure_files(prefix, local_dir, ("source.pdf",), required=True)
+    return local_dir / "source.pdf"
+
+
 def execute_parse_job(
     job_id: str,
     *,
     store: JobStoreProtocol,
     parse_settings: Settings,
     parse_func: ParseFunc,
+    storage: Storage | None = None,
 ) -> None:
     """Run one parse job. Shared by the local dispatcher and the Celery task."""
     job = store.mark_running(job_id)
@@ -162,7 +181,22 @@ def execute_parse_job(
         logger.info("job %s is missing, already claimed, or terminal", job_id)
         return
 
-    if job.source_path is None or not Path(job.source_path).is_file():
+    source_path = Path(job.source_path) if job.source_path else None
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            source_path = _hydrate_parse_source(job, parse_settings, storage)
+        except StorageError as exc:
+            logger.warning("could not hydrate parse source for %s: %s", job_id, exc)
+            _mark_failed(
+                store,
+                job_id,
+                error="uploaded source file is unavailable in object storage",
+                exit_code=EXIT_INPUT,
+            )
+            return
+
+    if source_path is None or not source_path.is_file():
         _mark_failed(
             store,
             job_id,
@@ -192,7 +226,7 @@ def execute_parse_job(
 
     try:
         result = parse_func(
-            job.source_path,
+            source_path,
             options=options,
             settings=parse_settings,
             progress=progress,
@@ -213,6 +247,37 @@ def execute_parse_job(
 
     try:
         summary = result.to_summary()
+        if result.ok and is_remote(storage):
+            assert storage is not None
+            try:
+                stats = sync_document(storage, parse_settings.parsed_dir, job.doc_id)
+            except StorageError as exc:
+                _mark_failed(
+                    store,
+                    job_id,
+                    error=f"could not sync parsed artifacts: {exc}",
+                    exit_code=EXIT_INTERNAL,
+                    summary=summary,
+                )
+                return
+            if not stats.ok:
+                _mark_failed(
+                    store,
+                    job_id,
+                    error=(
+                        "could not sync parsed artifacts: "
+                        + "; ".join(stats.errors[:3])
+                    ),
+                    exit_code=EXIT_INTERNAL,
+                    summary=summary,
+                )
+                return
+            try:
+                storage.delete(inbox_key(job.job_id))
+            except StorageError:
+                logger.warning(
+                    "could not remove inbox object for job %s", job_id, exc_info=True
+                )
         if result.ok:
             store.mark_succeeded(job_id, summary)
         else:
@@ -236,10 +301,12 @@ class ParseService:
         api_settings: ApiSettings,
         store: JobStoreProtocol,
         dispatch: Callable[[Job], None],
+        storage: Storage | None = None,
     ) -> None:
         self.api_settings = api_settings
         self.store = store
         self.dispatch = dispatch
+        self.storage = storage
 
     async def submit(
         self,
@@ -261,6 +328,18 @@ class ParseService:
             _size, digest = await save_upload(
                 upload, destination, self.api_settings.max_upload_bytes
             )
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        inbox_key(job_id),
+                        destination,
+                    )
+                except StorageError as exc:
+                    raise UploadError(
+                        503, "object storage is unavailable"
+                    ) from exc
             stem = safe_stem(filename)[:60].strip(" .-") or "doc"
             doc_id = f"{stem}-{digest[:12]}"
             try:

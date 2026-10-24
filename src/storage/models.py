@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Mapping
 
@@ -49,8 +49,10 @@ class ObjectInfo:
         if self.last_modified is not None:
             return self.last_modified
         if self.mtime_ns:
-            return datetime.fromtimestamp(self.mtime_ns / 1_000_000_000, tz=None)
-        return datetime.min
+            return datetime.fromtimestamp(
+                self.mtime_ns / 1_000_000_000, tz=timezone.utc
+            )
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(slots=True)

@@ -8,6 +8,7 @@ import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
@@ -46,6 +47,10 @@ from src.mcp_client.manager import (
     threadsafe_external_renderer,
 )
 from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
+from src.storage.base import Storage
+from src.storage.errors import StorageError
+from src.storage.hydration import is_remote
+from src.storage.keys import run_prefix
 
 from .bid_run_mapping import (
     outline_data_from_records,
@@ -169,6 +174,14 @@ class BidRunError(Exception):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+
+
+@dataclass(frozen=True, slots=True)
+class ExportTarget:
+    """Local export path plus the matching object-storage key."""
+
+    path: Path
+    key: str
 
 
 def _now() -> datetime:
@@ -321,6 +334,7 @@ class BidRunService:
         max_attempts: int = 2,
         stale_seconds: int = 900,
         llm_factory: Callable[[], Any] | None = None,
+        storage: Storage | None = None,
     ) -> None:
         self.bid_settings = bid_settings
         self.repo = repo
@@ -330,6 +344,7 @@ class BidRunService:
         self.max_attempts = max(1, int(max_attempts))
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
+        self.storage = storage
 
     def _repo(self) -> BidRunRepository:
         if self.repo is None:
@@ -1690,7 +1705,7 @@ class BidRunService:
         self._clear_reports(run, include_figures=False)
         return self._figures_response(run, manifest)
 
-    async def export(self, run_id: str, *, force: bool = False) -> Path:
+    async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:
         repo = self._repo()
         run = await repo.get_run(run_id)
         if run is None:
@@ -1702,19 +1717,47 @@ class BidRunService:
                 409,
                 "export is blocked by the gate; use force=true to override",
             )
+        run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        prefix = run_prefix(run.doc_id, run.run_id)
         if force and run.gate_status == "block":
             gate = dict(run.gate)
             gate["forced"] = True
             await repo.update_run(run_id, gate=gate)
-            run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
             try:
                 atomic_write_json(run_dir / "gate.json", gate)
             except OSError:
                 logger.warning("could not persist forced gate", exc_info=True)
-        target = self.bid_settings.bids_dir / run.doc_id / run.run_id / "bid.docx"
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/gate.json",
+                        run_dir / "gate.json",
+                    )
+                except StorageError:
+                    logger.warning("could not sync forced gate", exc_info=True)
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    self.storage.ensure_files,
+                    prefix,
+                    run_dir,
+                    ("bid.docx",),
+                    required=False,
+                )
+            except StorageError as exc:
+                raise BidRunError(503, "object storage is unavailable") from exc
+        target = run_dir / "bid.docx"
         if not target.is_file():
             raise BidRunError(409, "bid.docx is not available; assemble the run first")
-        return target
+        return ExportTarget(path=target, key=f"{prefix}/bid.docx")
 
 
-__all__ = ["ACTIVE_RUN_STATUSES", "BidRunError", "BidRunService"]
+__all__ = [
+    "ACTIVE_RUN_STATUSES",
+    "BidRunError",
+    "BidRunService",
+    "ExportTarget",
+]

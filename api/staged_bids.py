@@ -20,6 +20,7 @@ from src.mcp_client.manager import (
     McpClientManager,
     threadsafe_external_renderer,
 )
+from src.storage.base import Storage
 
 from .bid_run_mapping import outline_from_records
 from .bid_run_repo import (
@@ -157,6 +158,7 @@ async def execute_staged_bid_job(
     store: JobStoreProtocol,
     bid_settings: BidSettings,
     api_settings: ApiSettings,
+    storage: Storage | None = None,
 ) -> None:
     payload = job.payload or {}
     run_id = str(payload.get("run_id") or "")
@@ -325,6 +327,7 @@ async def execute_staged_bid_job(
             assembler = BidRunService(
                 bid_settings=bid_settings,
                 repo=repo,
+                storage=storage,
             )
             external_renderer = None
             if (

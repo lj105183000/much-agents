@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal
 
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from src.parsing.artifacts import read_json
 
 from .artifacts import (
     ArtifactError,
     artifact_content_type,
+    bid_run_artifact_prefix,
     bid_run_artifact_root,
+    document_artifact_prefix,
     document_artifact_root,
+    job_artifact_prefix,
     job_artifact_root,
     list_artifacts,
     resolve_artifact,
+    resolve_storage_artifact,
+    storage_artifact_infos,
 )
 from .bid_runs import BidRunService
 from .bids import BidService
@@ -61,8 +67,16 @@ from .schemas import (
 )
 from .search import SearchError, SearchService
 from .service import ParseService
+from .streaming import stored_artifact_response
 
 logger = logging.getLogger(__name__)
+
+
+def _remote_storage(request: Request):
+    storage = getattr(request.app.state, "storage", None)
+    if storage is None or storage.backend == "local":
+        return None
+    return storage
 
 
 def get_service(request: Request) -> ParseService:
@@ -152,6 +166,17 @@ def build_router() -> APIRouter:
             database_ok = await database.ping()
             if not database_ok:
                 status_value = "degraded"
+        storage = getattr(request.app.state, "storage", None)
+        storage_backend = storage.backend if storage is not None else "local"
+        storage_ok = True
+        if storage is not None:
+            try:
+                storage_ok = await asyncio.to_thread(storage.ping)
+            except Exception:  # noqa: BLE001 - health must always answer
+                logger.warning("health: object storage ping failed", exc_info=True)
+                storage_ok = False
+            if not storage_ok:
+                status_value = "degraded"
         return HealthResponse(
             status=status_value,
             service="much-agents-api",
@@ -160,6 +185,8 @@ def build_router() -> APIRouter:
             task_backend=backend,
             redis_ok=redis_ok,
             database_ok=database_ok,
+            storage_backend=storage_backend,
+            storage_ok=storage_ok,
         )
 
     @router.post(
@@ -385,11 +412,18 @@ def build_router() -> APIRouter:
     @router.post("/bid-runs/{run_id}/export")
     async def export_bid_run(
         run_id: str,
+        request: Request,
         force: bool = Query(False),
         service: BidRunService = Depends(get_bid_run_service),
-    ) -> FileResponse:
+    ) -> Response:
         target = await service.export(run_id, force=force)
-        return _artifact_response(target)
+        storage = _remote_storage(request)
+        if storage is None:
+            return _artifact_response(target.path)
+        info = await asyncio.to_thread(storage.stat, target.key)
+        if info is None:
+            raise HTTPException(status_code=404, detail="artifact is unavailable")
+        return stored_artifact_response(request, storage, info)
 
     @router.get(
         "/bid-runs/{run_id}/sections/{section_id}",
@@ -520,6 +554,7 @@ def build_router() -> APIRouter:
         documents = list_documents(
             request.app.state.parse_settings,
             request.app.state.bid_settings,
+            storage=getattr(request.app.state, "storage", None),
         )
         return DocumentListResponse(documents=documents)
 
@@ -544,34 +579,60 @@ def build_router() -> APIRouter:
         doc_id: str,
         request: Request,
     ) -> ArtifactListResponse:
+        storage = _remote_storage(request)
         try:
-            root, patterns, prefix = document_artifact_root(
-                doc_id, request.app.state.parse_settings
-            )
+            if storage is None:
+                root, patterns, prefix = document_artifact_root(
+                    doc_id, request.app.state.parse_settings
+                )
+                if not root.is_dir():
+                    raise HTTPException(
+                        status_code=404, detail="document is unavailable"
+                    )
+                artifacts = list_artifacts(root, patterns, prefix)
+            else:
+                prefix, patterns, url_prefix = document_artifact_prefix(doc_id)
+                objects = storage.list(prefix)
+                if not objects:
+                    raise HTTPException(
+                        status_code=404, detail="document is unavailable"
+                    )
+                artifacts = storage_artifact_infos(
+                    objects, prefix, patterns, url_prefix
+                )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
-        if not root.is_dir():
-            raise HTTPException(status_code=404, detail="document is unavailable")
         return ArtifactListResponse(
             doc_id=doc_id,
             kind="parse",
-            artifacts=list_artifacts(root, patterns, prefix),
+            artifacts=artifacts,
         )
 
-    @router.get("/documents/{doc_id}/artifacts/{artifact_path:path}")
+    @router.api_route(
+        "/documents/{doc_id}/artifacts/{artifact_path:path}",
+        methods=["GET", "HEAD"],
+    )
     def download_document_artifact(
         doc_id: str,
         artifact_path: str,
         request: Request,
-    ) -> FileResponse:
+    ) -> Response:
+        storage = _remote_storage(request)
         try:
-            root, patterns, _prefix = document_artifact_root(
-                doc_id, request.app.state.parse_settings
+            if storage is None:
+                root, patterns, _prefix = document_artifact_root(
+                    doc_id, request.app.state.parse_settings
+                )
+                return _artifact_response(
+                    resolve_artifact(root, patterns, artifact_path)
+                )
+            prefix, patterns, _prefix_url = document_artifact_prefix(doc_id)
+            info = resolve_storage_artifact(
+                storage, prefix, patterns, artifact_path
             )
-            target = resolve_artifact(root, patterns, artifact_path)
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
-        return _artifact_response(target)
+        return stored_artifact_response(request, storage, info)
 
     @router.get(
         "/documents/{doc_id}/bids/{run_id}/artifacts",
@@ -582,38 +643,66 @@ def build_router() -> APIRouter:
         run_id: str,
         request: Request,
     ) -> ArtifactListResponse:
+        storage = _remote_storage(request)
         try:
-            root, patterns, prefix = bid_run_artifact_root(
-                doc_id, run_id, request.app.state.bid_settings
-            )
+            if storage is None:
+                root, patterns, prefix = bid_run_artifact_root(
+                    doc_id, run_id, request.app.state.bid_settings
+                )
+                if not root.is_dir():
+                    raise HTTPException(
+                        status_code=404, detail="bid run is unavailable"
+                    )
+                artifacts = list_artifacts(root, patterns, prefix)
+            else:
+                prefix, patterns, url_prefix = bid_run_artifact_prefix(
+                    doc_id, run_id
+                )
+                objects = storage.list(prefix)
+                if not objects:
+                    raise HTTPException(
+                        status_code=404, detail="bid run is unavailable"
+                    )
+                artifacts = storage_artifact_infos(
+                    objects, prefix, patterns, url_prefix
+                )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
-        if not root.is_dir():
-            raise HTTPException(status_code=404, detail="bid run is unavailable")
         return ArtifactListResponse(
             doc_id=doc_id,
             run_id=run_id,
             kind="bid",
-            artifacts=list_artifacts(root, patterns, prefix),
+            artifacts=artifacts,
         )
 
-    @router.get(
-        "/documents/{doc_id}/bids/{run_id}/artifacts/{artifact_path:path}"
+    @router.api_route(
+        "/documents/{doc_id}/bids/{run_id}/artifacts/{artifact_path:path}",
+        methods=["GET", "HEAD"],
     )
     def download_bid_run_artifact(
         doc_id: str,
         run_id: str,
         artifact_path: str,
         request: Request,
-    ) -> FileResponse:
+    ) -> Response:
+        storage = _remote_storage(request)
         try:
-            root, patterns, _prefix = bid_run_artifact_root(
-                doc_id, run_id, request.app.state.bid_settings
+            if storage is None:
+                root, patterns, _prefix = bid_run_artifact_root(
+                    doc_id, run_id, request.app.state.bid_settings
+                )
+                return _artifact_response(
+                    resolve_artifact(root, patterns, artifact_path)
+                )
+            prefix, patterns, _prefix_url = bid_run_artifact_prefix(
+                doc_id, run_id
             )
-            target = resolve_artifact(root, patterns, artifact_path)
+            info = resolve_storage_artifact(
+                storage, prefix, patterns, artifact_path
+            )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
-        return _artifact_response(target)
+        return stored_artifact_response(request, storage, info)
 
     @router.get(
         "/jobs/{job_id}/artifacts",
@@ -626,40 +715,59 @@ def build_router() -> APIRouter:
         job = request.app.state.job_store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        storage = _remote_storage(request)
         try:
-            root, patterns, prefix = job_artifact_root(
-                job,
-                request.app.state.parse_settings,
-                request.app.state.bid_settings,
-            )
+            if storage is None:
+                root, patterns, prefix = job_artifact_root(
+                    job,
+                    request.app.state.parse_settings,
+                    request.app.state.bid_settings,
+                )
+                artifacts = list_artifacts(root, patterns, prefix)
+            else:
+                prefix, patterns, url_prefix = job_artifact_prefix(job)
+                artifacts = storage_artifact_infos(
+                    storage.list(prefix), prefix, patterns, url_prefix
+                )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
         return ArtifactListResponse(
             job_id=job.job_id,
             doc_id=job.doc_id,
             kind=job.kind,
-            artifacts=list_artifacts(root, patterns, prefix),
+            artifacts=artifacts,
         )
 
-    @router.get("/jobs/{job_id}/artifacts/{artifact_path:path}")
+    @router.api_route(
+        "/jobs/{job_id}/artifacts/{artifact_path:path}",
+        methods=["GET", "HEAD"],
+    )
     def download_job_artifact(
         job_id: str,
         artifact_path: str,
         request: Request,
-    ) -> FileResponse:
+    ) -> Response:
         job = request.app.state.job_store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        storage = _remote_storage(request)
         try:
-            root, patterns, _prefix = job_artifact_root(
-                job,
-                request.app.state.parse_settings,
-                request.app.state.bid_settings,
+            if storage is None:
+                root, patterns, _prefix = job_artifact_root(
+                    job,
+                    request.app.state.parse_settings,
+                    request.app.state.bid_settings,
+                )
+                return _artifact_response(
+                    resolve_artifact(root, patterns, artifact_path)
+                )
+            prefix, patterns, _prefix_url = job_artifact_prefix(job)
+            info = resolve_storage_artifact(
+                storage, prefix, patterns, artifact_path
             )
-            target = resolve_artifact(root, patterns, artifact_path)
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
-        return _artifact_response(target)
+        return stored_artifact_response(request, storage, info)
 
     @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
     def get_job(job_id: str, service: ParseService = Depends(get_service)) -> JobStatusResponse:

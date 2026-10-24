@@ -13,6 +13,7 @@ from .celery_app import celery_app
 from .config import ApiSettings
 from .redis_jobs import RedisJobStore
 from .service import execute_parse_job
+from .storage_runtime import build_runtime_storage
 from .task_names import BID_TASK_NAME, PARSE_TASK_NAME
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,15 @@ logger = logging.getLogger(__name__)
 def parse_document_task(job_id: str) -> None:
     api_settings = ApiSettings.from_env()
     parse_settings = Settings.from_env()
+    bid_settings = BidSettings.from_env()
     store = RedisJobStore.from_settings(api_settings)
+    storage = build_runtime_storage(api_settings, parse_settings, bid_settings)
     execute_parse_job(
         job_id,
         store=store,
         parse_settings=parse_settings,
         parse_func=parse_document,
+        storage=storage,
     )
 
 
@@ -35,10 +39,13 @@ def parse_document_task(job_id: str) -> None:
 def write_bid_task(job_id: str) -> None:
     api_settings = ApiSettings.from_env()
     bid_settings = BidSettings.from_env()
+    parse_settings = Settings.from_env()
     store = RedisJobStore.from_settings(api_settings)
+    storage = build_runtime_storage(api_settings, parse_settings, bid_settings)
     execute_bid_job(
         job_id,
         store=store,
         bid_settings=bid_settings,
         api_settings=api_settings,
+        storage=storage,
     )
