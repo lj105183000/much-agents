@@ -128,7 +128,7 @@ def test_bid_api_dispatch_failure_returns_503(tmp_path: Path) -> None:
 
 def test_bid_celery_task_wiring(monkeypatch) -> None:
     import api.tasks as tasks
-    from api.task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE
+    from api.task_names import BID_QUEUE, BID_TASK_NAME
 
     calls: list[tuple] = []
     fake_store = object()
@@ -140,7 +140,7 @@ def test_bid_celery_task_wiring(monkeypatch) -> None:
     tasks.write_bid_task.run("bid-job-1")
     assert BID_TASK_NAME == "bidding.write_bid"
     assert tasks.write_bid_task.name == BID_TASK_NAME
-    assert BID_QUEUE == PARSE_QUEUE == "parse"
+    assert BID_QUEUE == "bid"
     assert calls
     job_id, kwargs = calls[0]
     assert job_id == "bid-job-1"

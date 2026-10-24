@@ -30,7 +30,13 @@ from .audit import (
     AuditUnavailable,
     install_request_context,
 )
-from .auth import AuthError, AuthPolicy, AuthRepository, AuthService
+from .auth import (
+    AuthError,
+    AuthPolicy,
+    AuthRepository,
+    AuthService,
+    LoginAttemptLimiter,
+)
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
 from .bids import BidService, execute_bid_job
@@ -70,6 +76,7 @@ def create_app(
     storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
+    api_settings.ensure_production_safe()
     parse_func_injected = parse_func is not None
     bid_func_injected = bid_func is not None
     backend = (
@@ -213,6 +220,7 @@ def create_app(
                     max_failures=api_settings.auth_login_max_failures,
                     lockout_minutes=api_settings.auth_lockout_minutes,
                 ),
+                hash_concurrency=api_settings.auth_hash_concurrency,
             )
         else:
             logger.warning(
@@ -239,7 +247,9 @@ def create_app(
         try:
             await asyncio.to_thread(storage.ensure_ready)
         except Exception as exc:  # noqa: BLE001 - the API can start degraded
-            logger.warning("object storage is not ready: %s", exc)
+            logger.warning(
+                "object storage is not ready: %s", type(exc).__name__
+            )
         await database.init(auto_migrate=api_settings.db_auto_migrate)
         await company_service.init()
         yield
@@ -248,11 +258,15 @@ def create_app(
         for job_runner in local_runners:
             job_runner.shutdown(wait=False)
 
+    docs_enabled = api_settings.docs_enabled and not api_settings.is_production
     app = FastAPI(
         title="Much Agents API",
         version="0.1.0",
         description="Upload a tender PDF, poll parsing jobs, and write bid documents.",
         lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     api_settings.inbox_dir.mkdir(parents=True, exist_ok=True)
     app.state.api_settings = api_settings
@@ -274,15 +288,22 @@ def create_app(
     app.state.search_service = search_service
     app.state.company_service = company_service
     app.state.auth_service = resolved_auth_service
+    app.state.login_limiter = LoginAttemptLimiter(
+        max_failures=api_settings.auth_login_ip_max_failures,
+        window_seconds=api_settings.auth_login_ip_window_seconds,
+    )
     app.state.project_service = project_service
     app.state.audit_service = audit_service
     app.state.storage = storage
+    app.state.ready_cache = (0.0, None)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(api_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Project-Id", "X-Request-ID"],
+        expose_headers=["Content-Disposition", "ETag", "X-Request-ID"],
+        max_age=600,
     )
     install_request_context(app, audit_service)
 
@@ -316,9 +337,13 @@ def create_app(
 
     @app.exception_handler(SQLAlchemyError)
     async def handle_database_error(
-        _request: Request, exc: SQLAlchemyError
+        request: Request, exc: SQLAlchemyError
     ) -> JSONResponse:
-        logger.warning("database operation failed: %s", exc)
+        logger.warning(
+            "database operation failed: %s request_id=%s",
+            type(exc).__name__,
+            getattr(request.state, "request_id", None),
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "database is unavailable"},
@@ -326,18 +351,26 @@ def create_app(
 
     @app.exception_handler(JobStoreError)
     async def handle_job_store_error(
-        _request: Request, exc: JobStoreError
+        request: Request, exc: JobStoreError
     ) -> JSONResponse:
-        logger.warning("job store unavailable: %s", exc)
+        logger.warning(
+            "job store unavailable: %s request_id=%s",
+            type(exc).__name__,
+            getattr(request.state, "request_id", None),
+        )
         return JSONResponse(
             status_code=503, content={"detail": "job store is unavailable"}
         )
 
     @app.exception_handler(StorageUnavailable)
     async def handle_storage_unavailable(
-        _request: Request, exc: StorageUnavailable
+        request: Request, exc: StorageUnavailable
     ) -> JSONResponse:
-        logger.warning("object storage unavailable: %s", exc)
+        logger.warning(
+            "object storage unavailable: %s request_id=%s",
+            type(exc).__name__,
+            getattr(request.state, "request_id", None),
+        )
         return JSONResponse(
             status_code=503, content={"detail": "object storage is unavailable"}
         )

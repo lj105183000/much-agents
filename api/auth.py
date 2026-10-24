@@ -8,15 +8,17 @@ import hmac
 import logging
 import re
 import secrets
+import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator, Callable, Literal
+from typing import Callable, Literal
 from uuid import uuid4
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from .database import UserRow, UserSessionRow
@@ -29,6 +31,8 @@ SERVICE_ROLE = "service"
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
+ADMIN_UPDATE_LOCK_ID = 0x4D554155  # "MUAU": serializes last-admin checks
+SESSION_PURGE_DAYS = 7
 _WEAK_PASSWORDS = frozenset(
     {
         "123456789012",
@@ -97,6 +101,70 @@ class AuthPolicy:
     session_ttl_hours: int = 12
     max_failures: int = 5
     lockout_minutes: int = 15
+
+
+class LoginAttemptLimiter:
+    """In-process per-IP failed-login window.
+
+    This complements per-account lockout and Nginx's ``limit_req``. It is not
+    shared between API replicas; production runs a single API process.
+    """
+
+    def __init__(self, *, max_failures: int = 20, window_seconds: int = 300) -> None:
+        self.max_failures = max(1, max_failures)
+        self.window_seconds = max(1, window_seconds)
+        self._entries: dict[str, deque[float]] = {}
+        self._last_prune = 0.0
+
+    def _prune(self, key: str, now: float) -> deque[float]:
+        bucket = self._entries.get(key)
+        if bucket is None:
+            bucket = deque()
+            self._entries[key] = bucket
+        cutoff = now - self.window_seconds
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        return bucket
+
+    def _prune_stale(self, now: float) -> None:
+        if now - self._last_prune < self.window_seconds:
+            return
+        self._last_prune = now
+        cutoff = now - self.window_seconds
+        for key, bucket in list(self._entries.items()):
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            if not bucket:
+                self._entries.pop(key, None)
+
+    def allow(self, ip: str | None) -> bool:
+        if not ip:
+            return True
+        now = time.monotonic()
+        self._prune_stale(now)
+        return len(self._prune(ip, now)) < self.max_failures
+
+    def record_failure(self, ip: str | None) -> None:
+        if not ip:
+            return
+        now = time.monotonic()
+        self._prune_stale(now)
+        self._prune(ip, now).append(now)
+
+    def reset(self, ip: str | None) -> None:
+        if ip:
+            self._entries.pop(ip, None)
+
+
+def client_ip(request: Request, trusted_proxies: tuple[str, ...] = ()) -> str | None:
+    """Return the client address, honoring X-Forwarded-For only from proxies."""
+    peer = request.client.host if request.client else None
+    if peer and ("*" in trusted_proxies or peer in trusted_proxies):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        candidate = forwarded.split(",", 1)[0].strip()
+        if candidate and len(candidate) <= 64:
+            return candidate
+    return peer[:64] if peer else None
 
 
 LOCAL_USER = UserContext(
@@ -257,7 +325,13 @@ class AuthRepository:
             raise AuthError(409, "用户名已存在") from exc
         return _user_record(row)
 
-    async def update_user(self, user_id: str, **fields: object) -> UserRecord | None:
+    async def update_user(
+        self,
+        user_id: str,
+        *,
+        enforce_last_admin: bool = False,
+        **fields: object,
+    ) -> UserRecord | None:
         allowed = {"display_name", "role", "is_active"}
         values = {key: value for key, value in fields.items() if key in allowed}
         if not values:
@@ -266,6 +340,41 @@ class AuthRepository:
         statement = update(UserRow).where(UserRow.id == user_id).values(**values)
         async with self._session_factory() as session:
             async with session.begin():
+                if enforce_last_admin:
+                    # Lock admin mutations and re-check inside the same
+                    # transaction so two concurrent demotions cannot both
+                    # observe two active admins.
+                    await session.execute(
+                        text("SELECT pg_advisory_xact_lock(:key)"),
+                        {"key": ADMIN_UPDATE_LOCK_ID},
+                    )
+                    current = await session.get(
+                        UserRow, user_id, with_for_update=True
+                    )
+                    if current is None:
+                        return None
+                    removes_admin = (
+                        current.role == "admin"
+                        and bool(current.is_active)
+                        and (
+                            values.get("role", current.role) != "admin"
+                            or values.get("is_active", True) is False
+                        )
+                    )
+                    if removes_admin:
+                        count = int(
+                            (
+                                await session.execute(
+                                    select(func.count(UserRow.id)).where(
+                                        UserRow.role == "admin",
+                                        UserRow.is_active.is_(True),
+                                    )
+                                )
+                            ).scalar_one()
+                            or 0
+                        )
+                        if count <= 1:
+                            raise AuthError(409, "不能停用或降级最后一个管理员")
                 result = await session.execute(statement)
                 if result.rowcount == 0:
                     return None
@@ -423,6 +532,24 @@ class AuthRepository:
                 result = await session.execute(statement)
                 return int(result.rowcount or 0)
 
+    async def purge_sessions(self, *, older_than_days: int = SESSION_PURGE_DAYS) -> int:
+        """Delete expired or long-revoked sessions.
+
+        Only rows older than the retention window are removed so recent
+        authentication failures remain debuggable.
+        """
+        cutoff = _now() - timedelta(days=max(1, older_than_days))
+        statement = delete(UserSessionRow).where(
+            or_(
+                UserSessionRow.expires_at < cutoff,
+                UserSessionRow.revoked_at < cutoff,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return int(result.rowcount or 0)
+
 
 def _user_context(user: UserRecord, session_id: str | None = None) -> UserContext:
     return UserContext(
@@ -437,9 +564,24 @@ def _user_context(user: UserRecord, session_id: str | None = None) -> UserContex
 class AuthService:
     """Business rules for local accounts and sessions."""
 
-    def __init__(self, repo: AuthRepository, policy: AuthPolicy | None = None) -> None:
+    def __init__(
+        self,
+        repo: AuthRepository,
+        policy: AuthPolicy | None = None,
+        *,
+        hash_concurrency: int = 2,
+    ) -> None:
         self.repo = repo
         self.policy = policy or AuthPolicy()
+        self._hash_semaphore = asyncio.Semaphore(max(1, hash_concurrency))
+
+    async def _hash_password(self, password: str) -> str:
+        async with self._hash_semaphore:
+            return await hash_password(password)
+
+    async def _verify_password(self, password_hash: str, password: str) -> bool:
+        async with self._hash_semaphore:
+            return await verify_password(password_hash, password)
 
     async def create_user(
         self,
@@ -456,7 +598,7 @@ class AuthService:
         name = (display_name or "").strip() or normalized
         if len(name) > 128:
             raise AuthError(400, "显示名称过长")
-        password_digest = await hash_password(password)
+        password_digest = await self._hash_password(password)
         return await self.repo.create_user(
             username=normalized,
             display_name=name,
@@ -492,12 +634,12 @@ class AuthService:
             fields["role"] = role
         if is_active is not None:
             fields["is_active"] = bool(is_active)
-        removes_admin = current.role == "admin" and current.is_active and (
-            (role is not None and role != "admin") or is_active is False
+        role_or_state_change = role is not None or is_active is not None
+        updated = await self.repo.update_user(
+            user_id,
+            enforce_last_admin=role_or_state_change,
+            **fields,
         )
-        if removes_admin and await self.repo.count_active_admins() <= 1:
-            raise AuthError(409, "不能停用或降级最后一个管理员")
-        updated = await self.repo.update_user(user_id, **fields)
         if updated is None:
             raise AuthError(404, "用户不存在")
         if is_active is False or (role is not None and role != current.role):
@@ -509,7 +651,7 @@ class AuthService:
         if user is None:
             raise AuthError(404, "用户不存在")
         validate_password(new_password, username=user.username)
-        digest = await hash_password(new_password)
+        digest = await self._hash_password(new_password)
         if not await self.repo.update_password(user_id, digest):
             raise AuthError(404, "用户不存在")
         await self.repo.revoke_user_sessions(user_id)
@@ -523,10 +665,12 @@ class AuthService:
         user = await self.repo.get_user(user_id)
         if user is None or not user.is_active:
             raise AuthError(401, "账号不可用")
-        if not await verify_password(user.password_hash, current_password):
+        if not await self._verify_password(
+            user.password_hash, current_password
+        ):
             raise AuthError(400, "当前密码不正确")
         validate_password(new_password, username=user.username)
-        digest = await hash_password(new_password)
+        digest = await self._hash_password(new_password)
         if not await self.repo.update_password(user_id, digest):
             raise AuthError(404, "用户不存在")
         await self.repo.revoke_user_sessions(user_id)
@@ -539,7 +683,7 @@ class AuthService:
         if user is None:
             # Verify against a dummy hash so unknown usernames take about as
             # long as wrong passwords.
-            await verify_password(_dummy_hash_value(), password)
+            await self._verify_password(_dummy_hash_value(), password)
             raise AuthError(401, "用户名或密码错误")
         locked_until = _aware(user.locked_until)
         now = _now()
@@ -548,7 +692,7 @@ class AuthService:
             raise AuthError(429, f"账号已锁定，请在 {remaining} 秒后重试")
         if not user.is_active:
             raise AuthError(401, "用户名或密码错误")
-        if not await verify_password(user.password_hash, password):
+        if not await self._verify_password(user.password_hash, password):
             await self.repo.record_login_failure(
                 user.id,
                 max_failures=self.policy.max_failures,
@@ -575,6 +719,10 @@ class AuthService:
             ip=(ip or "")[:64] or None,
             user_agent=(user_agent or "")[:255] or None,
         )
+        try:
+            await self.repo.purge_sessions(older_than_days=SESSION_PURGE_DAYS)
+        except Exception:  # noqa: BLE001 - cleanup must not block login
+            logger.warning("could not purge expired sessions", exc_info=True)
         return token, expires_at
 
     async def resolve_session(self, token: str) -> UserContext | None:
@@ -684,6 +832,7 @@ __all__ = [
     "AuthRepository",
     "AuthService",
     "LOCAL_USER",
+    "LoginAttemptLimiter",
     "MIN_PASSWORD_LENGTH",
     "ROLES",
     "SERVICE_ROLE",
@@ -692,6 +841,7 @@ __all__ = [
     "UserContext",
     "UserRecord",
     "can_manage",
+    "client_ip",
     "get_auth_service",
     "hash_password",
     "hash_session_token",

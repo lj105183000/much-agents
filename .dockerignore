@@ -1,0 +1,31 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Local data and caches
+.chroma_db/
+chroma_db/
+upload/
+backups/
+.run/
+.pytest_cache/
+.ruff_cache/
+.venv/
+**/__pycache__/
+*.py[cod]
+*.log
+*.tsbuildinfo
+frontend/node_modules/
+frontend/dist/
+frontend/release/
+.git/
+.github/
+tests/
+docs/
+.mcp.json
+mcp_servers.json
+deploy/env.production
+deploy/nginx/certs/*.pem
+deploy/nginx/certs/*.key
+deploy/nginx/certs/*.crt

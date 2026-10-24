@@ -24,12 +24,18 @@ def create_celery_app(settings: ApiSettings) -> Celery:
         result_serializer="json",
         timezone="UTC",
         enable_utc=True,
-        task_acks_late=False,
+        # Both job types are idempotent: parse jobs claim the job atomically
+        # and bid runs use a DB lease, so redelivery after a worker crash is
+        # safe. Late acknowledgement prevents losing a job on SIGKILL.
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
         task_publish_retry=False,
         broker_connection_retry_on_startup=True,
         broker_connection_timeout=5,
         worker_prefetch_multiplier=1,
         worker_pool=settings.celery_worker_pool,
+        task_soft_time_limit=settings.celery_soft_time_limit_seconds,
+        task_time_limit=settings.celery_time_limit_seconds,
         broker_transport_options={
             "visibility_timeout": 6 * 3600,
             "socket_connect_timeout": 5,

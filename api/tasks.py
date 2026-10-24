@@ -19,7 +19,7 @@ from .task_names import BID_TASK_NAME, PARSE_TASK_NAME
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name=PARSE_TASK_NAME, ignore_result=True, acks_late=False)
+@celery_app.task(name=PARSE_TASK_NAME, ignore_result=True)
 def parse_document_task(job_id: str) -> None:
     api_settings = ApiSettings.from_env()
     parse_settings = Settings.from_env()
@@ -35,7 +35,7 @@ def parse_document_task(job_id: str) -> None:
     )
 
 
-@celery_app.task(name=BID_TASK_NAME, ignore_result=True, acks_late=False)
+@celery_app.task(name=BID_TASK_NAME, ignore_result=True)
 def write_bid_task(job_id: str) -> None:
     api_settings = ApiSettings.from_env()
     bid_settings = BidSettings.from_env()

@@ -74,6 +74,9 @@ def test_create_celery_app_config(tmp_path: Path) -> None:
     assert app.conf.task_default_queue == PARSE_QUEUE
     assert app.conf.task_ignore_result is True
     assert app.conf.task_publish_retry is False
+    assert app.conf.task_acks_late is True
+    assert app.conf.task_reject_on_worker_lost is True
+    assert app.conf.worker_prefetch_multiplier == 1
     assert app.conf.worker_pool == "solo"
     assert app.conf.broker_transport_options["visibility_timeout"] == 6 * 3600
 

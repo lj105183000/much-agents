@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -42,9 +43,11 @@ from .audit import AuditService, get_audit_service
 from .auth import (
     AuthError,
     AuthService,
+    LoginAttemptLimiter,
     UserContext,
     UserRecord,
     can_manage,
+    client_ip,
     get_auth_service,
     require_admin,
     require_manage,
@@ -351,6 +354,56 @@ def build_router() -> APIRouter:
     project_router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
     router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
 
+    @public_router.get("/live")
+    async def live() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @public_router.get("/ready")
+    async def ready(request: Request) -> JSONResponse:
+        settings = request.app.state.api_settings
+        cache_seconds = max(1, settings.readiness_cache_seconds)
+        now = time.monotonic()
+        expires_at, cached = getattr(request.app.state, "ready_cache", (0.0, None))
+        if cached is not None and now < expires_at:
+            status_code, payload = cached
+            return JSONResponse(status_code=status_code, content=payload)
+
+        checks: dict[str, bool] = {}
+        backend = request.app.state.task_backend
+        if backend == "celery":
+            try:
+                checks["redis"] = bool(
+                    await asyncio.to_thread(request.app.state.job_store.ping)
+                )
+            except Exception:  # noqa: BLE001 - readiness reports status
+                checks["redis"] = False
+        database = getattr(request.app.state, "database", None)
+        if database is not None and database.enabled:
+            try:
+                checks["database"] = bool(await database.ping())
+            except Exception:  # noqa: BLE001 - readiness reports status
+                checks["database"] = False
+        storage = getattr(request.app.state, "storage", None)
+        if storage is not None:
+            try:
+                checks["storage"] = bool(
+                    await asyncio.to_thread(storage.ping)
+                )
+            except Exception:  # noqa: BLE001 - readiness reports status
+                checks["storage"] = False
+
+        ready_value = all(checks.values())
+        payload = {
+            "status": "ok" if ready_value else "degraded",
+            "checks": checks,
+        }
+        status_code = 200 if ready_value else 503
+        request.app.state.ready_cache = (
+            now + cache_seconds,
+            (status_code, payload),
+        )
+        return JSONResponse(status_code=status_code, content=payload)
+
     @public_router.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:
         store = request.app.state.job_store
@@ -407,10 +460,28 @@ def build_router() -> APIRouter:
                 detail="authentication is disabled",
             )
         service = _require_auth_service(request)
-        ip = request.client.host if request.client else None
+        ip = client_ip(request, settings.trusted_proxies)
+        limiter: LoginAttemptLimiter | None = getattr(
+            request.app.state, "login_limiter", None
+        )
+        if limiter is not None and not limiter.allow(ip):
+            await _audit(
+                request,
+                "auth.login",
+                outcome="denied",
+                actor_username=payload.username,
+                resource_type="user",
+                detail={"reason": "too many failed attempts from this address"},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="登录尝试过于频繁，请稍后再试",
+            )
         try:
             user = await service.authenticate(payload.username, payload.password)
         except AuthError as exc:
+            if limiter is not None:
+                limiter.record_failure(ip)
             logger.info(
                 "login failed for %r from %s: %s",
                 payload.username,
@@ -426,6 +497,8 @@ def build_router() -> APIRouter:
                 detail={"reason": exc.detail},
             )
             raise
+        if limiter is not None:
+            limiter.reset(ip)
         token, expires_at = await service.create_session(
             user,
             ip=ip,

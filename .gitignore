@@ -19,6 +19,13 @@ venv/
 .env
 .env.*
 !.env.example
+deploy/env.production
+
+# Backups and TLS material (never commit private keys)
+backups/
+deploy/nginx/certs/*.pem
+deploy/nginx/certs/*.key
+deploy/nginx/certs/*.crt
 
 # Local MCP configuration (may contain local paths or tokens)
 .mcp.json

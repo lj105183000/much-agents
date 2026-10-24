@@ -93,6 +93,7 @@ class LaunchConfig:
     minio_root_user: str
     minio_root_password: str
     minio_bucket: str
+    environment: str = "development"
 
 
 # ---------------------------------------------------------------------------
@@ -1026,6 +1027,11 @@ class Launcher:
             ok(f"MinIO 已就绪（{host}:{config.minio_port}）")
             return
         if self.args.skip_docker:
+            if config.environment == "production":
+                raise LaunchError(
+                    "生产环境不允许降级为 STORAGE_BACKEND=local；"
+                    "请启动 MinIO 或去掉 --skip-docker。"
+                )
             warn("MinIO 未就绪，自动改用 STORAGE_BACKEND=local。")
             config.storage_backend = "local"
             self.storage_status = (
@@ -1072,6 +1078,11 @@ class Launcher:
                 "Redis",
             ):
                 if self.args.skip_docker:
+                    if config.environment == "production":
+                        raise LaunchError(
+                            "生产环境不允许降级为 TASK_BACKEND=local；"
+                            "请启动 Redis 或改用生产 Compose。"
+                        )
                     warn("Redis 未就绪，自动改用 TASK_BACKEND=local 并跳过 worker。")
                     config.task_backend = "local"
                 else:
@@ -1185,7 +1196,7 @@ class Launcher:
             "api.celery_app:celery_app",
             "worker",
             "-Q",
-            "parse",
+            "parse,bid",
             "--pool",
             config.celery_pool,
             "--loglevel=INFO",
@@ -1309,7 +1320,7 @@ class Launcher:
             "-p",
             f"127.0.0.1:{PROD_FRONTEND_PORT}:80",
             "-v",
-            f"{mount(nginx_conf)}:/etc/nginx/nginx.conf:ro",
+            f"{mount(nginx_conf)}:/etc/nginx/conf.d/default.conf:ro",
             "-v",
             f"{mount(dist)}:/usr/share/nginx/html:ro",
         ]
@@ -1505,6 +1516,7 @@ def build_config(env: dict[str, str], args: argparse.Namespace) -> LaunchConfig:
         minio_root_user=minio_root_user,
         minio_root_password=minio_root_password,
         minio_bucket=setting(env, "MINIO_BUCKET", DEFAULT_MINIO_BUCKET),
+        environment=setting(env, "ENVIRONMENT", "development").strip().lower(),
     )
 
 

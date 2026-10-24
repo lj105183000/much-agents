@@ -1576,7 +1576,11 @@ class FakeAuthRepository:
         return user
 
     async def update_user(
-        self, user_id: str, **fields: object
+        self,
+        user_id: str,
+        *,
+        enforce_last_admin: bool = False,
+        **fields: object,
     ) -> UserRecord | None:
         current = self.users.get(user_id)
         if current is None:
@@ -1585,6 +1589,15 @@ class FakeAuthRepository:
         values = {
             key: value for key, value in fields.items() if key in allowed
         }
+        if enforce_last_admin and current.role == "admin" and current.is_active:
+            removes_admin = (
+                values.get("role", current.role) != "admin"
+                or values.get("is_active", True) is False
+            )
+            if removes_admin and await self.count_active_admins() <= 1:
+                from api.auth import AuthError
+
+                raise AuthError(409, "不能停用或降级最后一个管理员")
         updated = replace(current, updated_at=self._now(), **values)
         self.users[user_id] = updated
         return updated
@@ -1706,6 +1719,20 @@ class FakeAuthRepository:
                 )
                 count += 1
         return count
+
+    async def purge_sessions(self, *, older_than_days: int = 7) -> int:
+        cutoff = self._now() - timedelta(days=max(1, older_than_days))
+        removed = 0
+        for token_hash, record in list(self.sessions.items()):
+            expired = record.expires_at < cutoff
+            revoked = (
+                record.revoked_at is not None and record.revoked_at < cutoff
+            )
+            if expired or revoked:
+                self.sessions.pop(token_hash, None)
+                self._session_tokens.pop(record.id, None)
+                removed += 1
+        return removed
 
 
 def make_pdf_bytes(pages: int = 1) -> bytes:

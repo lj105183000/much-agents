@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: much_agents
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: much_agents
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U much_agents -d much_agents"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://much_agents:ci_password@127.0.0.1:5432/much_agents
+      DB_AUTO_MIGRATE: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run alembic upgrade head
+      - run: uv run alembic downgrade -1
+      - run: uv run alembic upgrade head
+      - run: uv run alembic current
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare production env and TLS placeholders
+        run: |
+          cp deploy/env.production.example deploy/env.production
+          ./deploy/nginx/generate-self-signed.sh localhost
+      - name: Validate compose file
+        run: docker compose -f docker-compose.prod.yml config > /dev/null
+      - name: Build API image
+        run: docker build --target api -t much-agents-api:ci .
+      - name: Build web image
+        run: docker build --target web -t much-agents-web:ci .
+      - name: Validate Nginx configuration
+        run: |
+          docker run --rm --add-host api:127.0.0.1 \
+            -v "$PWD/deploy/nginx/certs:/etc/nginx/certs:ro" \
+            much-agents-web:ci nginx -t
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - name: Python dependency audit
+        run: |
+          uv export --frozen --no-dev --no-hashes --format requirements-txt \
+            > "$RUNNER_TEMP/requirements.txt"
+          uvx --from pip-audit pip-audit -r "$RUNNER_TEMP/requirements.txt"
