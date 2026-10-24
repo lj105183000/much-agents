@@ -9,7 +9,7 @@
 
 两条能力都遵循同一安全边界：
 
-- `profile.json` 永不进入 artifact allowlist、MCP 工具输出或 Redis/Celery payload。
+- `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL；MinIO 模式只存私有 key `private/profiles/<doc_id>/<run_id>.json`。
 - 配图与 MCP 都只使用显式传入的最小字段；外部证据默认不可信，外部绘图默认关闭。
 - 配图失败、MCP 不可用或超时都只降级为警告，不阻断章节生成或组装。
 - LLM 不能自由发现或调用任意 MCP 工具；工具与参数模板只能由运维在配置文件中声明。
@@ -125,7 +125,7 @@ GET /api/documents/{doc_id}/bids/{run_id}/artifacts/figures/fig-01-org_chart-<ha
 GET /api/documents/{doc_id}/bids/{run_id}/artifacts/figures/manifest.json
 ```
 
-`profile.json` 仍不会出现在 artifact 列表或下载结果中。
+`profile.json` 仍不会出现在 artifact 列表、下载结果或 MinIO 的 `bids/` 前缀中（只存私有 key）。
 
 ### 1.7 前端
 
@@ -434,7 +434,7 @@ uv run python -m src.mcp_client --config ./mcp_servers.local.json list
 
 - 发送给外部工具的内容只有查询、文档 ID、项目/公司名称、章节标题/ID 和配图规格。
 - 不发送完整 profile、证件号、银行账号、联系方式、公司资料 JSON。
-- `profile.json` 不进入 MCP 请求、MCP 工具输出、Redis/Celery payload 或 artifact allowlist。
+- `profile.json` 不进入 MCP 请求、MCP 工具输出、Redis/Celery payload、artifact allowlist 或任何下载 URL；MinIO 模式只存私有 key。
 - 外部证据和外部图片都不能绕过本地 redaction、合规检查与门禁。
 
 ---
