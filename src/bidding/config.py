@@ -70,6 +70,14 @@ class BidSettings:
     llm_concurrency: int = 2
     use_chroma: bool = True
     profile_max_mb: int = 5
+    figures_enabled: bool = True
+    figures_max: int = 4
+    figures_use_llm: bool = True
+    figure_font: str = ""
+    figure_width_px: int = 1800
+    figure_image_width_cm: float = 15.5
+    figure_page_estimate: float = 0.5
+    figures_external: bool = False
 
     @property
     def parsed_dir(self) -> Path:
@@ -105,6 +113,18 @@ class BidSettings:
             llm_concurrency=_int(env, "BID_LLM_CONCURRENCY", 2, minimum=1),
             use_chroma=_bool(env, "BID_USE_CHROMA", True),
             profile_max_mb=_int(env, "BID_PROFILE_MAX_MB", 5, minimum=1),
+            figures_enabled=_bool(env, "BID_FIGURES_ENABLED", True),
+            figures_max=_int(env, "BID_FIGURES_MAX", 4, minimum=0),
+            figures_use_llm=_bool(env, "BID_FIGURES_USE_LLM", True),
+            figure_font=_str(env, "BID_FIGURES_FONT", ""),
+            figure_width_px=_int(env, "BID_FIGURES_WIDTH_PX", 1800, minimum=800),
+            figure_image_width_cm=_float(
+                env, "BID_FIGURES_IMAGE_WIDTH_CM", 15.5, minimum=5.0
+            ),
+            figure_page_estimate=_float(
+                env, "BID_FIGURES_PAGE_ESTIMATE", 0.5, minimum=0.0
+            ),
+            figures_external=_bool(env, "BID_FIGURES_EXTERNAL", False),
         )
 
 
