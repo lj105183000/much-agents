@@ -2,7 +2,7 @@
 
 > 日期：2026-10-24
 > 分支：`feat/multi-agent-bid-writing`
-> 验收基线：`812f78c`（本报告单独提交）
+> 验收基线：`e8c8c38`（本报告单独提交）
 > 结论：**本地 P0 上线闭环通过**。生产 Compose 可从空卷启动，认证/RBAC/项目隔离/审计/对象存储边界、重启持久化、备份恢复均按预期工作；验收期间发现并修复了 6 个部署缺陷和 1 处验收脚本问题。这不是最终 M1 签字，原因见「残留风险」。
 
 ## 1. 范围与边界
@@ -151,12 +151,12 @@ docker-compose -f docker-compose.prod.yml up -d
 
 | 问题 | 影响 | 修复 |
 |---|---|---|
-| `x-app-service` 未加载 `deploy/env.production` | migrate/API/worker 缺少 DATABASE_URL、MinIO、MCP 配置，生产 fail-fast 直接拒绝启动 | `d2cfad2`：锚点增加 `env_file` |
-| Chroma 健康检查调用 Python | 当前 `chromadb/chroma:latest` 是 Rust 镜像，无 Python/curl/wget，健康检查永远失败，API/worker 无法启动 | `fa86d44`：改用 `bash /dev/tcp` 请求 `/api/v2/heartbeat` |
-| nginx 只在启动时解析 `api` | API 容器重建/恢复后 upstream IP 过期，返回 502，直到重启 nginx | `f473a76`：使用 Docker DNS + 变量 `proxy_pass`，10 s 重新解析 |
-| 恢复脚本最终计数在宿主机展开 `POSTGRES_USER` | 恢复已成功并重启后脚本以 `unbound variable` 退出 1，容易被误判为恢复失败 | `812f78c`：在容器内展开变量；计数改为非致命；ERR trap 区分已重启状态 |
-| Web/nginx 构建未传镜像源参数 | legacy builder 为目标 `web` 重建 api-base 时回退 pypi.org，受限网络构建失败 | `0559e2c`：nginx build args 增加 APT/PIP 镜像参数 |
-| Git Bash Docker 绑定挂载路径 | `/c/...` 不被 Docker Desktop 接受，备份/恢复挂载失败 | `fcd8000`：`cygpath -m` 转换 |
+| `x-app-service` 未加载 `deploy/env.production` | migrate/API/worker 缺少 DATABASE_URL、MinIO、MCP 配置，生产 fail-fast 直接拒绝启动 | `13fde5e`：锚点增加 `env_file` |
+| Chroma 健康检查调用 Python | 当前 `chromadb/chroma:latest` 是 Rust 镜像，无 Python/curl/wget，健康检查永远失败，API/worker 无法启动 | `2c076f9`：改用 `bash /dev/tcp` 请求 `/api/v2/heartbeat` |
+| nginx 只在启动时解析 `api` | API 容器重建/恢复后 upstream IP 过期，返回 502，直到重启 nginx | `60b4a52`：使用 Docker DNS + 变量 `proxy_pass`，10 s 重新解析 |
+| 恢复脚本最终计数在宿主机展开 `POSTGRES_USER` | 恢复已成功并重启后脚本以 `unbound variable` 退出 1，容易被误判为恢复失败 | `e8c8c38`：在容器内展开变量；计数改为非致命；ERR trap 区分已重启状态 |
+| Web/nginx 构建未传镜像源参数 | legacy builder 为目标 `web` 重建 api-base 时回退 pypi.org，受限网络构建失败 | `fdc000d`：nginx build args 增加 APT/PIP 镜像参数 |
+| Git Bash Docker 绑定挂载路径 | `/c/...` 不被 Docker Desktop 接受，备份/恢复挂载失败 | `95827e6`：`cygpath -m` 转换 |
 | 验收脚本先降级 writer 再建 run | 把正确的 403 误报为失败 | 本地脚本调整顺序后重跑（不提交） |
 
 ## 8. 残留风险与上线前必做
