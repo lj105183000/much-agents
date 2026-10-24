@@ -26,6 +26,9 @@ export type IconName =
   | 'moon'
   | 'users'
   | 'logout'
+  | 'layers'
+  | 'shield'
+  | 'key'
 
 interface IconProps {
   name: IconName
@@ -196,6 +199,30 @@ function iconPath(name: IconName): ReactNode {
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
           <path d="m16 17 5-5-5-5" />
           <path d="M21 12H9" />
+        </>
+      )
+    case 'layers':
+      return (
+        <>
+          <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+          <path d="m3 12 9 5 9-5" />
+          <path d="m3 16 9 5 9-5" />
+        </>
+      )
+    case 'shield':
+      return (
+        <>
+          <path d="M12 3 5 6v5c0 4.4 2.9 8.2 7 10 4.1-1.8 7-5.6 7-10V6l-7-3Z" />
+          <path d="m9 12 2 2 4-4" />
+        </>
+      )
+    case 'key':
+      return (
+        <>
+          <circle cx="8" cy="15" r="4" />
+          <path d="m11 12 9-9" />
+          <path d="m17 6 2 2" />
+          <path d="m14 9 2 2" />
         </>
       )
     default:

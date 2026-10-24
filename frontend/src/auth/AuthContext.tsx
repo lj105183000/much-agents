@@ -8,6 +8,8 @@ import {
 import { authApi } from '../api/auth'
 import { ApiError, getApiBase, setAuthToken, setUnauthorizedHandler } from '../api/client'
 import type { AuthUser } from '../api/types'
+import { clearHistory } from '../lib/history'
+import { clearProjectSelection } from '../project/storage'
 import { AuthContext, type AuthContextValue, type AuthStatus } from './context'
 import { clearSession, loadSession, saveSession } from './storage'
 
@@ -83,8 +85,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // A revoked or expired session is already logged out locally.
     }
+    if (user) {
+      // Shared workstations must not keep the previous user's task history or
+      // project selection. Theme and API base are workspace settings, not data.
+      clearHistory(user.id)
+      clearProjectSelection(user.id)
+    }
     clearLocalSession()
-  }, [clearLocalSession])
+  }, [clearLocalSession, user])
 
   const refresh = useCallback(() => {
     setStatus('loading')

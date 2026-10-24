@@ -1,9 +1,12 @@
-import type { AuthUser, ViewKey } from '../api/types'
+import type { AuthUser, ProjectSummary, ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import type { Theme } from '../hooks/useTheme'
 import { cn } from '../lib/cn'
 import { NAV_ITEMS } from '../lib/navigation'
-import { ROLE_LABELS } from '../lib/roles'
+import {
+  PROJECT_ROLE_LABELS,
+  ROLE_LABELS,
+} from '../lib/roles'
 import { Icon } from './icons'
 
 interface HeaderProps {
@@ -15,6 +18,11 @@ interface HeaderProps {
   theme: Theme
   onToggleTheme: () => void
   onOpenSettings: () => void
+  onOpenPassword: () => void
+  projects: ProjectSummary[]
+  currentProjectId: string | null
+  projectsLoading: boolean
+  onSelectProject: (projectId: string) => void
   user: AuthUser
   authEnabled: boolean
   onLogout: () => void
@@ -36,6 +44,11 @@ export function Header({
   theme,
   onToggleTheme,
   onOpenSettings,
+  onOpenPassword,
+  projects,
+  currentProjectId,
+  projectsLoading,
+  onSelectProject,
   user,
   authEnabled,
   onLogout,
@@ -43,6 +56,8 @@ export function Header({
   const navItems = NAV_ITEMS.filter(
     (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
   )
+  const currentProject =
+    projects.find((project) => project.id === currentProjectId) ?? null
 
   return (
     <header className="border-b border-slate-800/70 bg-slate-950/50 px-4 py-4 backdrop-blur md:px-7">
@@ -63,6 +78,36 @@ export function Header({
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <label
+            className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-1.5 pl-3 pr-1.5"
+            title={
+              currentProject
+                ? `当前项目：${currentProject.name}${
+                    currentProject.role
+                      ? ` · ${PROJECT_ROLE_LABELS[currentProject.role]}`
+                      : ''
+                  }`
+                : '当前没有可用项目'
+            }
+          >
+            <Icon name="layers" className="h-4 w-4 shrink-0 text-cyan-300/80" />
+            <select
+              aria-label="当前项目"
+              value={currentProjectId ?? ''}
+              onChange={(event) => onSelectProject(event.target.value)}
+              disabled={projectsLoading || projects.length === 0}
+              className="max-w-[11rem] cursor-pointer appearance-none bg-transparent text-[11px] font-medium text-slate-200 focus:outline-none disabled:cursor-not-allowed disabled:text-slate-500"
+            >
+              {projects.length === 0 ? (
+                <option value="">{projectsLoading ? '加载项目…' : '无可用项目'}</option>
+              ) : null}
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-1.5 pl-3 pr-1.5">
             <div className="text-right">
               <p className="max-w-[10rem] truncate text-[11px] font-medium text-slate-200">
@@ -73,15 +118,26 @@ export function Header({
               </p>
             </div>
             {authEnabled ? (
-              <button
-                type="button"
-                onClick={onLogout}
-                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
-                aria-label="退出登录"
-                title="退出登录"
-              >
-                <Icon name="logout" className="h-4 w-4" />
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onOpenPassword}
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+                  aria-label="修改密码"
+                  title="修改密码"
+                >
+                  <Icon name="key" className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+                  aria-label="退出登录"
+                  title="退出登录"
+                >
+                  <Icon name="logout" className="h-4 w-4" />
+                </button>
+              </>
             ) : (
               <span className="rounded-lg border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-500">
                 本地

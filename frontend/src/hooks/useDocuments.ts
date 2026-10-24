@@ -12,6 +12,7 @@ export interface DocumentsState {
 export function useDocuments(
   apiBase: string,
   refreshKey = 0,
+  projectId: string | null = null,
 ): DocumentsState {
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -25,6 +26,14 @@ export function useDocuments(
 
   useEffect(() => {
     let cancelled = false
+    if (!projectId) {
+      // Business endpoints require a project header; do not issue a request
+      // that is guaranteed to fail while the project list is loading.
+      return () => {
+        cancelled = true
+      }
+    }
+    setLoading(true)
     api
       .listDocuments()
       .then((response) => {
@@ -44,7 +53,11 @@ export function useDocuments(
     return () => {
       cancelled = true
     }
-  }, [apiBase, refreshKey, version])
+  }, [apiBase, refreshKey, version, projectId])
 
+  if (!projectId) {
+    // Derive the empty state instead of writing it back from the effect.
+    return { documents: [], loading: false, error: null, refresh }
+  }
   return { documents, loading, error, refresh }
 }

@@ -8,6 +8,8 @@ export type ViewKey =
   | 'search'
   | 'library'
   | 'history'
+  | 'projects'
+  | 'audit'
   | 'users'
 
 export type UserRole =
@@ -602,4 +604,83 @@ export interface BidFiguresResponse {
 
 export interface BidFigureRegenerateRequest {
   force?: boolean
+}
+
+export type ProjectRole = 'manager' | 'writer' | 'reviewer' | 'viewer'
+
+export interface ProjectSummary {
+  id: string
+  name: string
+  slug: string
+  description: string
+  role: ProjectRole | null
+  member_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectListResponse {
+  projects: ProjectSummary[]
+}
+
+export interface ProjectCreateInput {
+  name: string
+  slug: string
+  description: string
+}
+
+export interface ProjectUpdateInput {
+  name?: string
+  description?: string
+}
+
+export interface ProjectMemberSummary {
+  project_id: string
+  user_id: string
+  username: string
+  display_name: string
+  role: ProjectRole
+  created_at: string
+}
+
+export interface ProjectMemberListResponse {
+  members: ProjectMemberSummary[]
+}
+
+export interface AuditEventSummary {
+  id: number
+  ts: string
+  request_id: string
+  actor_id: string | null
+  actor_username: string | null
+  project_id: string | null
+  action: string
+  resource_type: string
+  resource_id: string
+  outcome: string
+  ip: string | null
+  user_agent: string | null
+  detail: Record<string, unknown>
+  hash: string
+}
+
+export interface AuditListResponse {
+  events: AuditEventSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface AuditVerifyResponse {
+  valid: boolean
+  checked: number
+  first_bad_id: number | null
+}
+
+export interface AuditFilters {
+  projectId?: string
+  actor?: string
+  action?: string
+  from?: string
+  to?: string
 }

@@ -31,7 +31,7 @@ export function CompaniesView({
   onNavigate,
 }: CompaniesViewProps) {
   const { companies, loading, error, refresh } = useCompanies(apiBase)
-  const { canManage, isAdmin } = usePermissions()
+  const { canManageCompanies: canManage, isAdmin } = usePermissions()
   const [query, setQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)

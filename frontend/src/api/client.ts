@@ -45,6 +45,22 @@ const ARTIFACT_TIMEOUT_MS = 120_000
 let authToken: string | null = null
 let tokenGeneration = 0
 let unauthorizedHandler: (() => void) | null = null
+let currentProjectId: string | null = null
+
+const PROJECT_HEADER = 'X-Project-Id'
+// Project context is only meaningful for business endpoints. Auth, project
+// administration, users, audit, health, and the global company library must
+// work even when the caller has no project (or the saved project was deleted).
+const PROJECT_EXEMPT_PREFIXES = [
+  '/api/auth',
+  '/api/projects',
+  '/api/users',
+  '/api/audit',
+  '/api/companies',
+  '/api/health',
+  '/api/live',
+  '/api/ready',
+]
 
 export function setAuthToken(token: string | null): void {
   authToken = token
@@ -55,13 +71,40 @@ export function getAuthToken(): string | null {
   return authToken
 }
 
+export function setProjectId(projectId: string | null): void {
+  currentProjectId = projectId || null
+}
+
+export function getProjectId(): string | null {
+  return currentProjectId
+}
+
+function requestPathname(path: string): string {
+  const relative = path
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '')
+    .replace(/^\/\/[^/]+/, '')
+  const pathname = relative.split(/[?#]/, 1)[0] || '/'
+  return pathname.startsWith('/') ? pathname : `/${pathname}`
+}
+
+export function shouldSendProjectHeader(path: string): boolean {
+  const pathname = requestPathname(path)
+  if (!pathname.startsWith('/api/')) return false
+  return !PROJECT_EXEMPT_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )
+}
+
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler
 }
 
-function withAuth(init?: RequestInit): RequestInit {
+function withAuth(path: string, init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers)
   if (authToken) headers.set('Authorization', `Bearer ${authToken}`)
+  if (currentProjectId && shouldSendProjectHeader(path)) {
+    headers.set(PROJECT_HEADER, currentProjectId)
+  }
   return { ...init, headers }
 }
 
@@ -106,13 +149,13 @@ function withTimeout(
 }
 
 async function fetchWithTimeout(
-  url: string,
+  path: string,
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<Response> {
   const timed = withTimeout(init, timeoutMs)
   try {
-    return await fetch(url, withAuth(timed.init))
+    return await fetch(apiUrl(path), withAuth(path, timed.init))
   } catch {
     if (timed.timedOut()) {
       throw new ApiError(0, `请求超时（${Math.round(timeoutMs / 1000)} 秒）`)
@@ -219,11 +262,7 @@ function formatDetail(detail: unknown): string {
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   assertTrustedAbsoluteTarget(path)
   const generation = tokenGeneration
-  const response = await fetchWithTimeout(
-    apiUrl(path),
-    init,
-    DEFAULT_TIMEOUT_MS,
-  )
+  const response = await fetchWithTimeout(path, init, DEFAULT_TIMEOUT_MS)
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path, generation)
     let detail: unknown = response.statusText
@@ -246,7 +285,7 @@ export async function requestBlob(
 ): Promise<Blob> {
   assertTrustedAbsoluteTarget(path)
   const generation = tokenGeneration
-  const response = await fetchWithTimeout(apiUrl(path), init, timeoutMs)
+  const response = await fetchWithTimeout(path, init, timeoutMs)
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path, generation)
     let detail: unknown = response.statusText

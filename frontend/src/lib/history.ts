@@ -90,6 +90,15 @@ export function loadHistory(scope: string): HistoryEntry[] {
   }
 }
 
+export function clearHistory(scope: string): void {
+  try {
+    window.localStorage.removeItem(storageKey(scope))
+    if (scope === 'local') window.localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // Ignore restricted storage contexts.
+  }
+}
+
 export function saveHistory(entries: HistoryEntry[], scope: string): void {
   const trimmed = entries.slice(0, MAX_ENTRIES)
   const key = storageKey(scope)

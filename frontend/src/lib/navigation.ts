@@ -47,6 +47,19 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'history',
   },
   {
+    key: 'projects',
+    label: '项目管理',
+    description: '切换项目、成员与访问范围',
+    icon: 'layers',
+  },
+  {
+    key: 'audit',
+    label: '审计日志',
+    description: '不可篡改的操作记录与链校验',
+    icon: 'shield',
+    adminOnly: true,
+  },
+  {
     key: 'users',
     label: '用户管理',
     description: '账号、角色与停用',
@@ -82,6 +95,14 @@ export const VIEW_META: Record<
   history: {
     title: '任务历史',
     subtitle: '追踪本机提交的解析与投标任务',
+  },
+  projects: {
+    title: '项目管理',
+    subtitle: '项目决定文档、任务与产物的可见范围；切换项目会刷新工作台数据',
+  },
+  audit: {
+    title: '审计日志',
+    subtitle: '查看不可篡改的操作记录、校验哈希链并导出 CSV（仅管理员）',
   },
   users: {
     title: '用户管理',
