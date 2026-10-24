@@ -73,6 +73,7 @@ class McpServerSettings:
     http_host: str = DEFAULT_HTTP_HOST
     http_port: int = DEFAULT_HTTP_PORT
     http_token: str = ""
+    api_token: str = ""
 
     @classmethod
     def from_env(cls) -> "McpServerSettings":
@@ -97,6 +98,7 @@ class McpServerSettings:
             http_host=host,
             http_port=port,
             http_token=os.getenv("MCP_HTTP_TOKEN", "").strip(),
+            api_token=os.getenv("MCP_API_TOKEN", "").strip(),
         )
 
 
@@ -154,13 +156,21 @@ class ApiProxy:
         *,
         timeout: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        api_token: str = "",
     ) -> None:
         _validate_api_base_url(base_url)
         self.base_url = base_url.rstrip("/")
+        self._api_token = api_token.strip()
+        headers = (
+            {"Authorization": f"Bearer {self._api_token}"}
+            if self._api_token
+            else None
+        )
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
             transport=transport,
+            headers=headers,
         )
 
     async def aclose(self) -> None:
@@ -344,7 +354,10 @@ def create_server(
     transport_security: TransportSecuritySettings | None = None,
 ) -> FastMCP:
     settings = settings or McpServerSettings.from_env()
-    api_proxy = proxy or ApiProxy(settings.api_base_url)
+    api_proxy = proxy or ApiProxy(
+        settings.api_base_url,
+        api_token=settings.api_token,
+    )
     server = FastMCP(
         "much-agents",
         instructions=(
@@ -697,6 +710,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         settings = McpServerSettings.from_env()
     except ValueError as exc:
         parser.error(str(exc))
+
+    auth_enabled = os.getenv("AUTH_ENABLED", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if auth_enabled and not settings.api_token:
+        logger.warning(
+            "MCP_API_TOKEN is not set; the API will reject MCP proxy calls "
+            "with 401 while AUTH_ENABLED=true"
+        )
 
     transport: Literal["stdio", "streamable-http"] = (
         "stdio" if args.transport == "stdio" else "streamable-http"

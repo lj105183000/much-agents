@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import redis
 
+from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
     BidRunRecord,
     OutlineSectionRecord,
@@ -429,6 +430,7 @@ def make_api_settings(tmp_path: Path, **extra: str) -> ApiSettings:
             "CORS_ORIGINS": "*",
             "TASK_BACKEND": "local",
             "STORAGE_BACKEND": "local",
+            "AUTH_ENABLED": "false",
             **extra,
         }
     )
@@ -1037,6 +1039,192 @@ class FakeCompanyService:
 
     async def delete(self, company_id: str) -> bool:
         return self.records.pop(company_id, None) is not None
+
+
+class FakeAuthRepository:
+    """In-memory AuthRepository used by API and service tests."""
+
+    def __init__(self) -> None:
+        self.users: dict[str, UserRecord] = {}
+        self.sessions: dict[str, SessionRecord] = {}
+        self._session_tokens: dict[str, str] = {}
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    async def get_user_by_username(self, username: str) -> UserRecord | None:
+        return next(
+            (user for user in self.users.values() if user.username == username),
+            None,
+        )
+
+    async def get_user(self, user_id: str) -> UserRecord | None:
+        return self.users.get(user_id)
+
+    async def list_users(self, limit: int = 200) -> list[UserRecord]:
+        return sorted(self.users.values(), key=lambda user: user.username)[:limit]
+
+    async def create_user(
+        self,
+        *,
+        username: str,
+        display_name: str,
+        password_hash: str,
+        role: str,
+    ) -> UserRecord:
+        if await self.get_user_by_username(username) is not None:
+            from api.auth import AuthError
+
+            raise AuthError(409, "用户名已存在")
+        now = self._now()
+        user = UserRecord(
+            id=uuid4().hex,
+            username=username,
+            display_name=display_name,
+            password_hash=password_hash,
+            role=role,
+            is_active=True,
+            failed_login_count=0,
+            locked_until=None,
+            last_login_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.users[user.id] = user
+        return user
+
+    async def update_user(
+        self, user_id: str, **fields: object
+    ) -> UserRecord | None:
+        current = self.users.get(user_id)
+        if current is None:
+            return None
+        allowed = {"display_name", "role", "is_active"}
+        values = {
+            key: value for key, value in fields.items() if key in allowed
+        }
+        updated = replace(current, updated_at=self._now(), **values)
+        self.users[user_id] = updated
+        return updated
+
+    async def update_password(self, user_id: str, password_hash: str) -> bool:
+        current = self.users.get(user_id)
+        if current is None:
+            return False
+        self.users[user_id] = replace(
+            current,
+            password_hash=password_hash,
+            failed_login_count=0,
+            locked_until=None,
+            updated_at=self._now(),
+        )
+        return True
+
+    async def record_login_failure(
+        self,
+        user_id: str,
+        *,
+        max_failures: int,
+        lockout_minutes: int,
+    ) -> UserRecord | None:
+        current = self.users.get(user_id)
+        if current is None:
+            return None
+        count = current.failed_login_count + 1
+        locked_until = (
+            self._now() + timedelta(minutes=lockout_minutes)
+            if count >= max_failures
+            else current.locked_until
+        )
+        updated = replace(
+            current,
+            failed_login_count=count,
+            locked_until=locked_until,
+            updated_at=self._now(),
+        )
+        self.users[user_id] = updated
+        return updated
+
+    async def reset_login_failure(self, user_id: str) -> None:
+        current = self.users.get(user_id)
+        if current is None:
+            return
+        self.users[user_id] = replace(
+            current,
+            failed_login_count=0,
+            locked_until=None,
+            last_login_at=self._now(),
+            updated_at=self._now(),
+        )
+
+    async def count_active_admins(self) -> int:
+        return sum(
+            1
+            for user in self.users.values()
+            if user.role == "admin" and user.is_active
+        )
+
+    async def create_session(
+        self,
+        *,
+        user_id: str,
+        token_hash: str,
+        expires_at: datetime,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> SessionRecord:
+        user = self.users[user_id]
+        record = SessionRecord(
+            id=uuid4().hex,
+            user_id=user_id,
+            expires_at=expires_at,
+            revoked_at=None,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
+            is_active=user.is_active,
+        )
+        self.sessions[token_hash] = record
+        self._session_tokens[record.id] = token_hash
+        return record
+
+    async def get_session_by_token_hash(
+        self, token_hash: str
+    ) -> SessionRecord | None:
+        record = self.sessions.get(token_hash)
+        if record is None or record.revoked_at is not None:
+            return None
+        if record.expires_at <= self._now():
+            return None
+        user = self.users.get(record.user_id)
+        if user is None or not user.is_active:
+            return None
+        return replace(
+            record,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
+            is_active=user.is_active,
+        )
+
+    async def revoke_session(self, session_id: str) -> bool:
+        token_hash = self._session_tokens.get(session_id)
+        record = self.sessions.get(token_hash) if token_hash else None
+        if record is None or record.revoked_at is not None:
+            return False
+        self.sessions[token_hash] = replace(record, revoked_at=self._now())
+        return True
+
+    async def revoke_user_sessions(self, user_id: str) -> int:
+        count = 0
+        for token_hash, record in list(self.sessions.items()):
+            if record.user_id == user_id and record.revoked_at is None:
+                self.sessions[token_hash] = replace(
+                    record, revoked_at=self._now()
+                )
+                count += 1
+        return count
 
 
 def make_parse_result(

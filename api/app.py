@@ -24,6 +24,7 @@ from src.storage.errors import (
     StorageUnavailable,
 )
 
+from .auth import AuthError, AuthPolicy, AuthRepository, AuthService
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
 from .bids import BidService, execute_bid_job
@@ -56,6 +57,7 @@ def create_app(
     search_service: SearchService | None = None,
     company_service: CompanyService | None = None,
     bid_run_service: BidRunService | None = None,
+    auth_service: AuthService | None = None,
     storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
@@ -179,6 +181,22 @@ def create_app(
         stale_seconds=api_settings.bid_run_stale_seconds,
         storage=storage,
     )
+    resolved_auth_service = auth_service
+    if resolved_auth_service is None and api_settings.auth_enabled:
+        if database.session_factory is not None:
+            resolved_auth_service = AuthService(
+                AuthRepository(database.session_factory),
+                AuthPolicy(
+                    session_ttl_hours=api_settings.auth_session_ttl_hours,
+                    max_failures=api_settings.auth_login_max_failures,
+                    lockout_minutes=api_settings.auth_lockout_minutes,
+                ),
+            )
+        else:
+            logger.warning(
+                "AUTH_ENABLED is true but no database is configured; "
+                "protected API endpoints will return 503"
+            )
     bid_service = BidService(
         api_settings=api_settings,
         bid_settings=bid_settings,
@@ -233,6 +251,7 @@ def create_app(
     app.state.database = database
     app.state.search_service = search_service
     app.state.company_service = company_service
+    app.state.auth_service = resolved_auth_service
     app.state.storage = storage
     app.add_middleware(
         CORSMiddleware,
@@ -244,6 +263,10 @@ def create_app(
 
     @app.exception_handler(UploadError)
     async def handle_upload_error(_request: Request, exc: UploadError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(AuthError)
+    async def handle_auth_error(_request: Request, exc: AuthError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.exception_handler(BidRunError)

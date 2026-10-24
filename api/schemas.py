@@ -463,3 +463,66 @@ class CompanyDetail(CompanySummary):
 
 class CompanyListResponse(BaseModel):
     companies: list[CompanySummary] = Field(default_factory=list)
+
+
+UserRole = Literal["admin", "bid_manager", "writer", "reviewer", "viewer"]
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AuthUser(BaseModel):
+    id: str
+    username: str
+    display_name: str
+    role: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    expires_at: datetime
+    user: AuthUser
+
+
+class AuthMeResponse(BaseModel):
+    user: AuthUser
+    auth_enabled: bool = True
+
+
+class UserSummary(BaseModel):
+    id: str
+    username: str
+    display_name: str
+    role: str
+    is_active: bool
+    last_login_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserListResponse(BaseModel):
+    users: list[UserSummary] = Field(default_factory=list)
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=128)
+    role: UserRole = "viewer"
+
+
+class UserUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=128)
+    role: UserRole | None = None
+    is_active: bool | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)

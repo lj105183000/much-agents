@@ -26,6 +26,7 @@ def make_api_settings(tmp_path: Path, **extra: str) -> ApiSettings:
             "CORS_ORIGINS": "*",
             "TASK_BACKEND": "local",
             "STORAGE_BACKEND": "local",
+            "AUTH_ENABLED": "false",
             **extra,
         }
     )

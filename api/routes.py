@@ -27,6 +27,19 @@ from .artifacts import (
     resolve_storage_artifact,
     storage_artifact_infos,
 )
+from .auth import (
+    AuthError,
+    AuthService,
+    UserContext,
+    UserRecord,
+    can_manage,
+    get_auth_service,
+    require_admin,
+    require_manage,
+    require_review,
+    require_user,
+    require_write,
+)
 from .bid_runs import BidRunService
 from .bids import BidService
 from .companies import CompanyError, CompanyRecord, CompanyService
@@ -34,6 +47,8 @@ from .documents import list_documents
 from .jobs import JobStoreError
 from .schemas import (
     ArtifactListResponse,
+    AuthMeResponse,
+    AuthUser,
     BidComplianceResponse,
     BidConsistencyResponse,
     BidCreatedResponse,
@@ -58,12 +73,20 @@ from .schemas import (
     CompanyListResponse,
     CompanySummary,
     CompanyUpsertRequest,
+    ChangePasswordRequest,
     DocumentListResponse,
     HealthResponse,
     JobCreatedResponse,
     JobStatusResponse,
+    LoginRequest,
+    LoginResponse,
+    PasswordResetRequest,
     SearchRequest,
     SearchResponse,
+    UserCreateRequest,
+    UserListResponse,
+    UserSummary,
+    UserUpdateRequest,
 )
 from .search import SearchError, SearchService
 from .service import ParseService
@@ -99,31 +122,71 @@ def get_company_service(request: Request) -> CompanyService:
     return request.app.state.company_service
 
 
-def _company_summary(record: CompanyRecord) -> CompanySummary:
+def _require_auth_service(request: Request) -> AuthService:
+    service = get_auth_service(request)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="authentication is unavailable",
+        )
+    return service
+
+
+def _company_summary(
+    record: CompanyRecord,
+    *,
+    include_private: bool = True,
+) -> CompanySummary:
     return CompanySummary(
         id=record.id,
         company_name=record.company_name,
         credit_code=record.credit_code,
         address=record.address,
-        phone=record.phone,
-        bank_name=record.bank_name,
-        bank_account=record.bank_account,
+        phone=record.phone if include_private else None,
+        bank_name=record.bank_name if include_private else None,
+        bank_account=record.bank_account if include_private else None,
         updated_at=record.updated_at,
     )
 
 
-def _company_detail(record: CompanyRecord) -> CompanyDetail:
+def _company_detail(
+    record: CompanyRecord,
+    *,
+    include_private: bool = True,
+) -> CompanyDetail:
     return CompanyDetail(
         id=record.id,
         company_name=record.company_name,
         credit_code=record.credit_code,
         address=record.address,
-        phone=record.phone,
-        bank_name=record.bank_name,
-        bank_account=record.bank_account,
+        phone=record.phone if include_private else None,
+        bank_name=record.bank_name if include_private else None,
+        bank_account=record.bank_account if include_private else None,
         updated_at=record.updated_at,
         created_at=record.created_at,
-        profile=record.profile,
+        profile=record.profile if include_private else {},
+    )
+
+
+def _auth_user(user: UserContext) -> AuthUser:
+    return AuthUser(
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        role=user.role,
+    )
+
+
+def _user_summary(record: UserRecord) -> UserSummary:
+    return UserSummary(
+        id=record.id,
+        username=record.username,
+        display_name=record.display_name,
+        role=record.role,
+        is_active=record.is_active,
+        last_login_at=record.last_login_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -140,9 +203,12 @@ def _artifact_error(exc: ArtifactError) -> HTTPException:
 
 
 def build_router() -> APIRouter:
-    router = APIRouter(prefix="/api")
+    public_router = APIRouter(prefix="/api")
+    auth_router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
+    admin_router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
+    router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
 
-    @router.get("/health", response_model=HealthResponse)
+    @public_router.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:
         store = request.app.state.job_store
         backend = request.app.state.task_backend
@@ -189,10 +255,147 @@ def build_router() -> APIRouter:
             storage_ok=storage_ok,
         )
 
+    @public_router.post("/auth/login", response_model=LoginResponse)
+    async def login(payload: LoginRequest, request: Request) -> LoginResponse:
+        settings = request.app.state.api_settings
+        if not getattr(settings, "auth_enabled", False):
+            raise HTTPException(
+                status_code=400,
+                detail="authentication is disabled",
+            )
+        service = _require_auth_service(request)
+        ip = request.client.host if request.client else None
+        try:
+            user = await service.authenticate(payload.username, payload.password)
+        except AuthError as exc:
+            logger.info(
+                "login failed for %r from %s: %s",
+                payload.username,
+                ip,
+                exc.detail,
+            )
+            raise
+        token, expires_at = await service.create_session(
+            user,
+            ip=ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+        logger.info("login succeeded for %r from %s", user.username, ip)
+        return LoginResponse(
+            token=token,
+            expires_at=expires_at,
+            user=_auth_user(
+                UserContext(
+                    id=user.id,
+                    username=user.username,
+                    display_name=user.display_name,
+                    role=user.role,
+                )
+            ),
+        )
+
+    @auth_router.get("/auth/me", response_model=AuthMeResponse)
+    async def auth_me(
+        request: Request,
+        user: UserContext = Depends(require_user),
+    ) -> AuthMeResponse:
+        settings = request.app.state.api_settings
+        return AuthMeResponse(
+            user=_auth_user(user),
+            auth_enabled=bool(getattr(settings, "auth_enabled", False)),
+        )
+
+    @auth_router.post(
+        "/auth/logout",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def logout(
+        request: Request,
+        user: UserContext = Depends(require_user),
+    ) -> None:
+        if user.session_id:
+            service = get_auth_service(request)
+            if service is not None:
+                await service.revoke_session(user.session_id)
+
+    @auth_router.post(
+        "/auth/password",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def change_password(
+        payload: ChangePasswordRequest,
+        request: Request,
+        user: UserContext = Depends(require_user),
+    ) -> None:
+        settings = request.app.state.api_settings
+        if not getattr(settings, "auth_enabled", False):
+            raise HTTPException(
+                status_code=400,
+                detail="authentication is disabled",
+            )
+        if user.is_service:
+            raise HTTPException(status_code=403, detail="permission denied")
+        service = _require_auth_service(request)
+        await service.change_password(
+            user.id,
+            payload.current_password,
+            payload.new_password,
+        )
+
+    @admin_router.get("/users", response_model=UserListResponse)
+    async def list_users(
+        service: AuthService = Depends(_require_auth_service),
+    ) -> UserListResponse:
+        records = await service.list_users()
+        return UserListResponse(users=[_user_summary(record) for record in records])
+
+    @admin_router.post(
+        "/users",
+        status_code=status.HTTP_201_CREATED,
+        response_model=UserSummary,
+    )
+    async def create_user(
+        payload: UserCreateRequest,
+        service: AuthService = Depends(_require_auth_service),
+    ) -> UserSummary:
+        record = await service.create_user(
+            payload.username,
+            payload.password,
+            display_name=payload.display_name,
+            role=payload.role,
+        )
+        return _user_summary(record)
+
+    @admin_router.patch("/users/{user_id}", response_model=UserSummary)
+    async def update_user(
+        user_id: str,
+        payload: UserUpdateRequest,
+        service: AuthService = Depends(_require_auth_service),
+    ) -> UserSummary:
+        record = await service.update_user(
+            user_id,
+            display_name=payload.display_name,
+            role=payload.role,
+            is_active=payload.is_active,
+        )
+        return _user_summary(record)
+
+    @admin_router.post(
+        "/users/{user_id}/password",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def reset_user_password(
+        user_id: str,
+        payload: PasswordResetRequest,
+        service: AuthService = Depends(_require_auth_service),
+    ) -> None:
+        await service.reset_password(user_id, payload.new_password)
+
     @router.post(
         "/parse",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=JobCreatedResponse,
+        dependencies=[Depends(require_write)],
     )
     async def create_parse_job(
         file: UploadFile = File(..., description="Tender document PDF"),
@@ -219,6 +422,7 @@ def build_router() -> APIRouter:
         "/bids",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=BidCreatedResponse,
+        dependencies=[Depends(require_write)],
     )
     async def create_bid_job(
         request: BidRequest,
@@ -242,6 +446,7 @@ def build_router() -> APIRouter:
         "/bid-runs",
         status_code=status.HTTP_201_CREATED,
         response_model=BidRunCreatedResponse,
+        dependencies=[Depends(require_write)],
     )
     async def create_bid_run(
         payload: BidRequest,
@@ -275,6 +480,7 @@ def build_router() -> APIRouter:
     @router.patch(
         "/bid-runs/{run_id}/outline",
         response_model=BidOutlinePatchResponse,
+        dependencies=[Depends(require_write)],
     )
     async def patch_bid_run_outline(
         run_id: str,
@@ -287,6 +493,7 @@ def build_router() -> APIRouter:
         "/bid-runs/{run_id}/generate",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=BidGenerateResponse,
+        dependencies=[Depends(require_write)],
     )
     async def generate_bid_run(
         run_id: str,
@@ -299,6 +506,7 @@ def build_router() -> APIRouter:
         "/bid-runs/{run_id}/resume",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=BidGenerateResponse,
+        dependencies=[Depends(require_write)],
     )
     async def resume_bid_run(
         run_id: str,
@@ -309,6 +517,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/cancel",
         response_model=BidRunDetail,
+        dependencies=[Depends(require_write)],
     )
     async def cancel_bid_run(
         run_id: str,
@@ -319,6 +528,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/assemble",
         response_model=BidGateResponse,
+        dependencies=[Depends(require_write)],
     )
     async def assemble_bid_run(
         run_id: str,
@@ -349,6 +559,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/figures/regenerate",
         response_model=BidFiguresResponse,
+        dependencies=[Depends(require_write)],
     )
     async def regenerate_bid_run_figures(
         run_id: str,
@@ -370,6 +581,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/compliance/check",
         response_model=BidComplianceResponse,
+        dependencies=[Depends(require_review)],
     )
     async def check_bid_run_compliance(
         run_id: str,
@@ -390,6 +602,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/compliance/fix-plan",
         response_model=BidFixPlanResponse,
+        dependencies=[Depends(require_review)],
     )
     async def plan_bid_run_fixes(
         run_id: str,
@@ -401,6 +614,7 @@ def build_router() -> APIRouter:
     @router.post(
         "/bid-runs/{run_id}/compliance/fixes/apply",
         response_model=BidSectionDetail,
+        dependencies=[Depends(require_write)],
     )
     async def apply_bid_run_fix(
         run_id: str,
@@ -414,8 +628,20 @@ def build_router() -> APIRouter:
         run_id: str,
         request: Request,
         force: bool = Query(False),
+        user: UserContext = Depends(require_user),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> Response:
+        if force:
+            if user.is_service or user.role != "admin":
+                raise HTTPException(
+                    status_code=403,
+                    detail="only an administrator can force export",
+                )
+        elif not (user.is_service or can_manage(user)):
+            raise HTTPException(
+                status_code=403,
+                detail="export requires bid manager permission",
+            )
         target = await service.export(run_id, force=force)
         storage = _remote_storage(request)
         if storage is None:
@@ -439,6 +665,7 @@ def build_router() -> APIRouter:
     @router.patch(
         "/bid-runs/{run_id}/sections/{section_id}",
         response_model=BidSectionDetail,
+        dependencies=[Depends(require_write)],
     )
     async def edit_bid_run_section(
         run_id: str,
@@ -452,6 +679,7 @@ def build_router() -> APIRouter:
         "/bid-runs/{run_id}/sections/{section_id}/regenerate",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=BidGenerateResponse,
+        dependencies=[Depends(require_write)],
     )
     async def regenerate_bid_run_section(
         run_id: str,
@@ -485,20 +713,26 @@ def build_router() -> APIRouter:
     @router.get("/companies", response_model=CompanyListResponse)
     async def list_companies(
         limit: int = Query(100, ge=1, le=500),
+        user: UserContext = Depends(require_user),
         service: CompanyService = Depends(get_company_service),
     ) -> CompanyListResponse:
         try:
             records = await service.list(limit)
         except CompanyError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        include_private = can_manage(user)
         return CompanyListResponse(
-            companies=[_company_summary(record) for record in records]
+            companies=[
+                _company_summary(record, include_private=include_private)
+                for record in records
+            ]
         )
 
     @router.post(
         "/companies",
         status_code=status.HTTP_201_CREATED,
         response_model=CompanyDetail,
+        dependencies=[Depends(require_manage)],
     )
     async def create_company(
         payload: CompanyUpsertRequest,
@@ -513,6 +747,7 @@ def build_router() -> APIRouter:
     @router.get("/companies/{company_id}", response_model=CompanyDetail)
     async def get_company(
         company_id: str,
+        user: UserContext = Depends(require_user),
         service: CompanyService = Depends(get_company_service),
     ) -> CompanyDetail:
         try:
@@ -521,9 +756,16 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         if record is None:
             raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
-        return _company_detail(record)
+        return _company_detail(
+            record,
+            include_private=can_manage(user),
+        )
 
-    @router.put("/companies/{company_id}", response_model=CompanyDetail)
+    @router.put(
+        "/companies/{company_id}",
+        response_model=CompanyDetail,
+        dependencies=[Depends(require_manage)],
+    )
     async def update_company(
         company_id: str,
         payload: CompanyUpsertRequest,
@@ -537,7 +779,11 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
         return _company_detail(record)
 
-    @router.delete("/companies/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete(
+        "/companies/{company_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(require_admin)],
+    )
     async def delete_company(
         company_id: str,
         service: CompanyService = Depends(get_company_service),
@@ -778,4 +1024,9 @@ def build_router() -> APIRouter:
             view["result"].setdefault("kind", view.get("kind") or "parse")
         return JobStatusResponse.model_validate(view)
 
-    return router
+    root = APIRouter()
+    root.include_router(public_router)
+    root.include_router(auth_router)
+    root.include_router(admin_router)
+    root.include_router(router)
+    return root

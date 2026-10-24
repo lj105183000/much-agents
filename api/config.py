@@ -70,6 +70,11 @@ class ApiSettings:
     job_ttl_seconds: int = 24 * 3600
     bid_run_max_attempts: int = 2
     bid_run_stale_seconds: int = 900
+    auth_enabled: bool = True
+    auth_session_ttl_hours: int = 12
+    auth_login_max_failures: int = 5
+    auth_lockout_minutes: int = 15
+    mcp_api_token: str = ""
 
     @property
     def inbox_dir(self) -> Path:
@@ -121,4 +126,9 @@ class ApiSettings:
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
             bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
             bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
+            auth_enabled=_bool(env, "AUTH_ENABLED", True),
+            auth_session_ttl_hours=_int(env, "AUTH_SESSION_TTL_HOURS", 12),
+            auth_login_max_failures=_int(env, "AUTH_LOGIN_MAX_FAILURES", 5),
+            auth_lockout_minutes=_int(env, "AUTH_LOCKOUT_MINUTES", 15),
+            mcp_api_token=_str(env, "MCP_API_TOKEN", ""),
         )
