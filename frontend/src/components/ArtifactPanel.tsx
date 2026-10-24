@@ -5,7 +5,9 @@ import {
   artifactUrl,
   downloadArtifact,
   fetchArtifactText,
+  getApiBase,
 } from '../api/client'
+import { isTrustedApiUrl } from '../api/trustedUrl'
 import type { ArtifactInfo, ArtifactSource } from '../api/types'
 import { formatBytes, formatDate } from '../lib/format'
 import { cn } from '../lib/cn'
@@ -45,8 +47,13 @@ function resolveArtifactImage(
   artifact: ArtifactInfo,
   src: string,
 ): string | null {
-  if (/^https?:\/\//i.test(src)) return src
+  if (/^https?:\/\//i.test(src)) {
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : ''
+    return isTrustedApiUrl(src, getApiBase(), origin) ? src : null
+  }
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return null
+  if (src.startsWith('//')) return null
   try {
     const base = new URL(artifactUrl(artifact))
     const resolved = new URL(src, base)

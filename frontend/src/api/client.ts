@@ -1,3 +1,4 @@
+import { isTrustedApiUrl } from './trustedUrl'
 import type {
   ArtifactInfo,
   ArtifactListResponse,
@@ -38,11 +39,16 @@ const API_BASE_KEY = 'much-agents:api-base:v1'
 const ENV_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || ''
 
+const DEFAULT_TIMEOUT_MS = 30_000
+const ARTIFACT_TIMEOUT_MS = 120_000
+
 let authToken: string | null = null
+let tokenGeneration = 0
 let unauthorizedHandler: (() => void) | null = null
 
 export function setAuthToken(token: string | null): void {
   authToken = token
+  tokenGeneration += 1
 }
 
 export function getAuthToken(): string | null {
@@ -59,10 +65,65 @@ function withAuth(init?: RequestInit): RequestInit {
   return { ...init, headers }
 }
 
-function notifyUnauthorized(path: string): void {
+function notifyUnauthorized(path: string, generation: number): void {
   if (!authToken || path.startsWith('/api/auth/login')) return
+  // A slow response from an older token must not sign out a newer session.
+  if (generation !== tokenGeneration) return
   authToken = null
   unauthorizedHandler?.()
+}
+
+function pageOrigin(): string {
+  return typeof window !== 'undefined' ? window.location.origin : ''
+}
+
+function assertTrustedAbsoluteTarget(path: string): void {
+  const isAbsolute = /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('//')
+  if (!isAbsolute) return
+  if (!isTrustedApiUrl(path, getApiBase(), pageOrigin())) {
+    throw new ApiError(0, '已阻止向非受信任的 API 地址发送认证请求')
+  }
+}
+
+function withTimeout(
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): { init: RequestInit; clear: () => void; timedOut: () => boolean } {
+  if (init?.signal) {
+    return { init, clear: () => undefined, timedOut: () => false }
+  }
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  return {
+    init: { ...init, signal: controller.signal },
+    clear: () => clearTimeout(timer),
+    timedOut: () => timedOut,
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  const timed = withTimeout(init, timeoutMs)
+  try {
+    return await fetch(url, withAuth(timed.init))
+  } catch {
+    if (timed.timedOut()) {
+      throw new ApiError(0, `请求超时（${Math.round(timeoutMs / 1000)} 秒）`)
+    }
+    throw new ApiError(
+      0,
+      `无法连接后端 API：${getApiBase() || pageOrigin() || '同源'}。请确认 uvicorn 已启动。`,
+    )
+  } finally {
+    timed.clear()
+  }
 }
 
 export class ApiError extends Error {
@@ -156,17 +217,15 @@ function formatDetail(detail: unknown): string {
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(apiUrl(path), withAuth(init))
-  } catch {
-    throw new ApiError(
-      0,
-      `无法连接后端 API：${getApiBase() || window.location.origin}。请确认 uvicorn 已启动。`,
-    )
-  }
+  assertTrustedAbsoluteTarget(path)
+  const generation = tokenGeneration
+  const response = await fetchWithTimeout(
+    apiUrl(path),
+    init,
+    DEFAULT_TIMEOUT_MS,
+  )
   if (!response.ok) {
-    if (response.status === 401) notifyUnauthorized(path)
+    if (response.status === 401) notifyUnauthorized(path, generation)
     let detail: unknown = response.statusText
     try {
       const body = (await response.json()) as Record<string, unknown>
@@ -183,18 +242,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export async function requestBlob(
   path: string,
   init?: RequestInit,
+  timeoutMs = ARTIFACT_TIMEOUT_MS,
 ): Promise<Blob> {
-  let response: Response
-  try {
-    response = await fetch(apiUrl(path), withAuth(init))
-  } catch {
-    throw new ApiError(
-      0,
-      `无法连接后端 API：${getApiBase() || window.location.origin}。请确认 uvicorn 已启动。`,
-    )
-  }
+  assertTrustedAbsoluteTarget(path)
+  const generation = tokenGeneration
+  const response = await fetchWithTimeout(apiUrl(path), init, timeoutMs)
   if (!response.ok) {
-    if (response.status === 401) notifyUnauthorized(path)
+    if (response.status === 401) notifyUnauthorized(path, generation)
     let detail: unknown = response.statusText
     try {
       const body = (await response.json()) as Record<string, unknown>
@@ -209,6 +263,11 @@ export async function requestBlob(
 
 /** Fetches an artifact with the bearer token; never embed the token in a URL. */
 export function fetchArtifactBlob(url: string): Promise<Blob> {
+  if (!isTrustedApiUrl(url, getApiBase(), pageOrigin())) {
+    return Promise.reject(
+      new ApiError(0, '已阻止向非受信任的地址发送认证请求'),
+    )
+  }
   return requestBlob(url)
 }
 
