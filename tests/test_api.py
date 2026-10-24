@@ -25,6 +25,7 @@ def make_api_settings(tmp_path: Path, **extra: str) -> ApiSettings:
             "API_JOB_WORKERS": "1",
             "CORS_ORIGINS": "*",
             "TASK_BACKEND": "local",
+            "STORAGE_BACKEND": "local",
             **extra,
         }
     )
@@ -34,6 +35,8 @@ def make_parse_settings(tmp_path: Path) -> Settings:
     return Settings.from_env(
         env={
             "PARSED_DIR": str(tmp_path / "parsed"),
+            "UPLOAD_DIR": str(tmp_path / "upload"),
+            "STORAGE_BACKEND": "local",
             "MINERU_API_KEY": "",
             "DEEPSEEK_API_KEY": "",
             "ZHIPU_API_KEY": "",

@@ -10,6 +10,7 @@ from typing import Mapping
 from dotenv import load_dotenv
 
 from src.parsing.config import Settings, find_project_root
+from src.storage.settings import StorageSettings
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
@@ -82,6 +83,14 @@ class BidSettings:
     @property
     def parsed_dir(self) -> Path:
         return self.base.parsed_dir
+
+    @property
+    def upload_dir(self) -> Path:
+        return self.base.upload_dir
+
+    @property
+    def storage(self) -> StorageSettings:
+        return self.base.storage
 
     @classmethod
     def from_env(

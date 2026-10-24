@@ -12,6 +12,26 @@ def test_defaults_are_safe() -> None:
     assert settings.mineru_max_pages_per_file == 200
     assert settings.chroma_collection == "bidding_documents"
     assert settings.mineru_api_key is None
+    assert settings.storage.backend == "minio"
+    assert settings.upload_dir.is_absolute()
+
+
+def test_storage_env_overrides() -> None:
+    settings = Settings.from_env(
+        env={
+            "STORAGE_BACKEND": "local",
+            "UPLOAD_DIR": "./data/upload",
+            "MINIO_ENDPOINT": "https://minio.example.com:9443/",
+            "MINIO_ROOT_USER": "root-user",
+            "MINIO_ROOT_PASSWORD": "root-pass",
+        }
+    )
+    assert settings.storage.backend == "local"
+    assert settings.upload_dir == settings.project_root / "data" / "upload"
+    assert settings.storage.endpoint == "minio.example.com:9443"
+    assert settings.storage.secure is True
+    assert settings.storage.access_key == "root-user"
+    assert settings.storage.secret_key == "root-pass"
 
 
 def test_env_overrides(tmp_path: Path) -> None:

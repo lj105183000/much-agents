@@ -9,6 +9,8 @@ from typing import Mapping
 
 from dotenv import load_dotenv
 
+from src.storage.settings import StorageSettings
+
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -72,6 +74,8 @@ def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
 class Settings:
     project_root: Path
     parsed_dir: Path
+    upload_dir: Path
+    storage: StorageSettings
 
     mineru_api_key: str | None
     mineru_base_url: str
@@ -126,6 +130,9 @@ class Settings:
         parsed_dir = Path(_str(env, "PARSED_DIR", str(root / "upload" / "parsed")))
         if not parsed_dir.is_absolute():
             parsed_dir = root / parsed_dir
+        upload_dir = Path(_str(env, "UPLOAD_DIR", str(root / "upload")))
+        if not upload_dir.is_absolute():
+            upload_dir = root / upload_dir
 
         api_key = _str(env, "MINERU_API_KEY", "")
         deepseek_key = _str(env, "DEEPSEEK_API_KEY", "")
@@ -134,6 +141,8 @@ class Settings:
         return cls(
             project_root=root,
             parsed_dir=parsed_dir,
+            upload_dir=upload_dir,
+            storage=StorageSettings.from_env(env),
             mineru_api_key=api_key or None,
             mineru_base_url=_str(env, "MINERU_BASE_URL", "https://mineru.net/api/v4").rstrip("/"),
             mineru_model_version=_str(env, "MINERU_MODEL_VERSION", "vlm"),

@@ -10,6 +10,7 @@ from typing import Literal, Mapping
 from dotenv import load_dotenv
 
 from src.parsing.config import find_project_root
+from src.storage.settings import StorageSettings
 
 
 def _str(env: Mapping[str, str], key: str, default: str) -> str:
@@ -54,6 +55,7 @@ def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
 class ApiSettings:
     project_root: Path
     upload_dir: Path
+    storage: StorageSettings
     host: str = "0.0.0.0"
     port: int = 8001
     max_upload_mb: int = 200
@@ -104,6 +106,7 @@ class ApiSettings:
         return cls(
             project_root=root,
             upload_dir=upload_dir,
+            storage=StorageSettings.from_env(env),
             host=_str(env, "API_HOST", "0.0.0.0"),
             port=_int(env, "API_PORT", 8001),
             max_upload_mb=_int(env, "MAX_UPLOAD_MB", 200),
