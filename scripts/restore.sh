@@ -29,6 +29,7 @@ ALLOW_MISSING_CHECKSUMS="${ALLOW_MISSING_CHECKSUMS:-0}"
 ALLOW_EMPTY_MINIO="${ALLOW_EMPTY_MINIO:-0}"
 CHROMA_VOLUME="${CHROMA_VOLUME:-much-agents-prod_chroma-data}"
 STOPPED=0
+RESTARTED=0
 
 # Docker Desktop for Windows does not accept /c/... bind-mount paths.
 docker_path() {
@@ -43,7 +44,10 @@ restore_failed() {
   status=$?
   echo >&2
   echo "Restore failed (exit $status)." >&2
-  if [[ "$STOPPED" == "1" ]]; then
+  if [[ "$RESTARTED" == "1" ]]; then
+    echo "The restore itself completed and API/workers were restarted." >&2
+    echo "Only the final verification/reporting step failed; inspect the stack." >&2
+  elif [[ "$STOPPED" == "1" ]]; then
     echo "API/workers are stopped and MinIO may already have been restored." >&2
     echo "Do not start API/workers against a partially restored database." >&2
   else
@@ -151,20 +155,30 @@ fi
 
 echo "[5/5] Starting API and workers"
 "${COMPOSE[@]}" up -d api worker-parse worker-bid
+RESTARTED=1
 
 echo
 echo "Database row counts:"
-"${COMPOSE[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
-  "SELECT 'users' AS table_name, count(*) FROM users
-   UNION ALL SELECT 'projects', count(*) FROM projects
-   UNION ALL SELECT 'bid_runs', count(*) FROM bid_runs
-   UNION ALL SELECT 'audit_events', count(*) FROM audit_events;"
+# Expand credentials inside the container; the host shell does not export them.
+# These counts are informational and must not turn a finished restore into a
+# failure.
+if ! "${COMPOSE[@]}" exec -T postgres sh -c '
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
+    SELECT '"'"'users'"'"' AS table_name, count(*) FROM users
+    UNION ALL SELECT '"'"'projects'"'"', count(*) FROM projects
+    UNION ALL SELECT '"'"'bid_runs'"'"', count(*) FROM bid_runs
+    UNION ALL SELECT '"'"'audit_events'"'"', count(*) FROM audit_events;"
+'; then
+  echo "warning: could not read database row counts" >&2
+fi
 
 echo "MinIO object count:"
-"${COMPOSE[@]}" run --rm --no-deps --entrypoint sh createbuckets -c '
+if ! "${COMPOSE[@]}" run --rm --no-deps --entrypoint sh createbuckets -c '
   mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
   mc ls --recursive "local/$MINIO_BUCKET" | wc -l
-'
+'; then
+  echo "warning: could not read MinIO object count" >&2
+fi
 
 echo
 echo "Restore finished. Verify login, open a bid run, download an artifact,"
