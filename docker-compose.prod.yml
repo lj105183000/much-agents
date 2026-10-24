@@ -245,6 +245,10 @@ services:
       context: .
       target: web
       args:
+        # The legacy builder walks every earlier stage for this target, so
+        # mirror args must match the API build for cache hits and offline use.
+        APT_MIRROR: ${APT_MIRROR:-deb.debian.org}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     ports:
