@@ -9,6 +9,7 @@ import { useDocuments } from './hooks/useDocuments'
 import { useHealth } from './hooks/useHealth'
 import { useHistory, useHistoryPoller } from './hooks/useHistory'
 import { useTheme } from './hooks/useTheme'
+import { degradedHealthDetail } from './lib/health'
 import { VIEW_META } from './lib/navigation'
 import { BidView } from './views/BidView'
 import { CompaniesView } from './views/CompaniesView'
@@ -102,9 +103,7 @@ function App() {
                 <div>
                   <p className="font-medium">后端已连接，但状态降级</p>
                   <p className="text-amber-200/70">
-                    {health.health?.task_backend === 'celery'
-                      ? 'Redis 或 worker 可能不可用，任务可能停在排队中。'
-                      : '部分依赖服务不可用。'}
+                    {degradedHealthDetail(health.health)}
                   </p>
                 </div>
               </div>

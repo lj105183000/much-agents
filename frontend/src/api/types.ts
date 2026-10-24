@@ -19,6 +19,8 @@ export interface HealthResponse {
   task_backend: 'celery' | 'local'
   redis_ok: boolean | null
   database_ok?: boolean | null
+  storage_backend: 'local' | 'minio'
+  storage_ok: boolean
 }
 
 export interface JobCreatedResponse {

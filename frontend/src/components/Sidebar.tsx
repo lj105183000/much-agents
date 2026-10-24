@@ -1,6 +1,7 @@
 import type { ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import { cn } from '../lib/cn'
+import { healthDependencySummary } from '../lib/health'
 import { NAV_ITEMS } from '../lib/navigation'
 import { Icon } from './icons'
 
@@ -120,10 +121,15 @@ export function Sidebar({
             {apiBase || '同源 /api'}
           </p>
           {health.health ? (
-            <p className="mt-1 text-[10px] text-slate-500">
-              {health.health.task_backend === 'celery'
-                ? `Celery · Redis ${health.health.redis_ok ? '正常' : '异常'}`
-                : 'Local 内存模式'}
+            <p
+              className={cn(
+                'mt-1 text-[10px]',
+                health.state === 'degraded'
+                  ? 'text-amber-300/80'
+                  : 'text-slate-500',
+              )}
+            >
+              {healthDependencySummary(health.health)}
             </p>
           ) : health.error ? (
             <p className="mt-1 line-clamp-2 text-[10px] text-red-300/80">
