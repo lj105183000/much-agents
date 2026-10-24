@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -380,6 +381,33 @@ def test_minio_bucket_is_created_once(tmp_path: Path) -> None:
     storage.ensure_ready()
     assert fake.bucket_present
     assert fake.created_buckets == 1
+    assert storage.ping() is True
+
+
+def test_ensure_ready_builds_client_without_deadlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created: list[FakeMinio] = []
+
+    class LazyFakeMinio(FakeMinio):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(existing=True)
+            created.append(self)
+
+    monkeypatch.setattr("src.storage.minio.Minio", LazyFakeMinio)
+    storage = MinioStorage(make_settings(), make_layout(tmp_path))
+    result: list[bool] = []
+
+    def run() -> None:
+        storage.ensure_ready()
+        result.append(True)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "ensure_ready deadlocked acquiring its own lock"
+    assert result == [True]
+    assert len(created) == 1
     assert storage.ping() is True
 
 

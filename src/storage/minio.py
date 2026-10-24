@@ -88,7 +88,9 @@ class MinioStorage:
         self.layout = layout
         self._local = LocalStorage(layout)
         self._client_instance = client
-        self._lock = threading.Lock()
+        # ensure_ready holds this lock while calling _raw_client(), which also
+        # acquires it on first use, so the lock must be reentrant.
+        self._lock = threading.RLock()
         self._ready = False
 
     # -- lifecycle -----------------------------------------------------
