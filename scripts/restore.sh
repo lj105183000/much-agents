@@ -30,6 +30,15 @@ ALLOW_EMPTY_MINIO="${ALLOW_EMPTY_MINIO:-0}"
 CHROMA_VOLUME="${CHROMA_VOLUME:-much-agents-prod_chroma-data}"
 STOPPED=0
 
+# Docker Desktop for Windows does not accept /c/... bind-mount paths.
+docker_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 restore_failed() {
   status=$?
   echo >&2
@@ -56,6 +65,7 @@ fi
 # Docker bind mounts require an absolute path even if the user passed a
 # relative backup directory.
 SOURCE="$(cd "$SOURCE" && pwd)"
+SOURCE_DOCKER="$(docker_path "$SOURCE")"
 
 if [[ ! -f "$SOURCE/SHA256SUMS" ]]; then
   if [[ "$ALLOW_MISSING_CHECKSUMS" == "1" ]]; then
@@ -114,7 +124,7 @@ restore_minio() {
   echo "[2/5] Restoring MinIO objects"
   "${COMPOSE[@]}" run --rm --no-deps \
     --entrypoint sh \
-    -v "$SOURCE/minio:/backup:ro" \
+    -v "$SOURCE_DOCKER/minio:/backup:ro" \
     createbuckets -c '
       set -eu
       mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
@@ -132,7 +142,7 @@ if [[ "$RESTORE_CHROMA" == "1" && -f "$SOURCE/chroma/chroma.tgz" ]]; then
   echo "[4/5] Restoring Chroma volume (optional)"
   docker run --rm \
     -v "$CHROMA_VOLUME:/data" \
-    -v "$SOURCE/chroma:/backup:ro" \
+    -v "$SOURCE_DOCKER/chroma:/backup:ro" \
     alpine:3.20 \
     sh -c 'rm -rf /data/* && tar -xzf /backup/chroma.tgz -C /data'
 else

@@ -22,6 +22,16 @@ else
 fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEST="${1:-$ROOT/backups/$STAMP}"
+
+# Docker Desktop for Windows does not accept /c/... bind-mount paths.
+# cygpath -m produces C:/... while leaving Linux hosts untouched.
+docker_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 BACKUP_CHROMA="${BACKUP_CHROMA:-0}"
 CHROMA_VOLUME="${CHROMA_VOLUME:-much-agents-prod_chroma-data}"
@@ -38,6 +48,7 @@ mkdir -p "$DEST/minio"
 # Docker bind mounts require an absolute path even if the user passed a
 # relative destination.
 DEST="$(cd "$DEST" && pwd)"
+DEST_DOCKER="$(docker_path "$DEST")"
 echo "Backing up to $DEST"
 
 echo "[1/3] PostgreSQL dump"
@@ -52,7 +63,7 @@ fi
 echo "[2/3] MinIO objects"
 "${COMPOSE[@]}" run --rm --no-deps \
   --entrypoint sh \
-  -v "$DEST/minio:/backup" \
+  -v "$DEST_DOCKER/minio:/backup" \
   createbuckets -c '
     set -eu
     mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
@@ -76,7 +87,7 @@ if [[ "$BACKUP_CHROMA" == "1" ]]; then
   mkdir -p "$DEST/chroma"
   docker run --rm \
     -v "$CHROMA_VOLUME:/data:ro" \
-    -v "$DEST/chroma:/backup" \
+    -v "$DEST_DOCKER/chroma:/backup" \
     alpine:3.20 \
     sh -c 'tar -czf /backup/chroma.tgz -C /data .'
 else

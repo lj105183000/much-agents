@@ -207,6 +207,7 @@ BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天
 注意事项：
 
 - 备份期间建议暂停写入（至少暂停上传与生成），避免 Postgres 与 MinIO 跨系统不一致。
+- 脚本在 Git Bash/MSYS 下会用 `cygpath -m` 转换 Docker bind mount 路径，便于 Windows 本机演练；生产 Linux 主机行为不变。
 - 如果 MinIO 备份为空，脚本默认失败，避免生成一个恢复时会清空 bucket 的不可用备份。确实使用空 bucket 时才设置 `ALLOW_EMPTY_MINIO=1`。
 - `deploy/env.production` 与 TLS 私钥**不在备份内**，单独加密保存。
 - 保留策略只删除 `backups/` 下的旧目录；自定义目标目录需自行清理。
