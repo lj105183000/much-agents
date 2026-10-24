@@ -311,3 +311,52 @@ docker compose -f docker-compose.prod.yml config
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。
 - Electron 生产建议直接加载 HTTPS 页面；`file://` 仅作离线开发模式。
+
+## 13. 许可证与源码提供（AGPL-3.0）
+
+本项目以 **AGPL-3.0-or-later** 发布（见根目录 `LICENSE` / `NOTICE`）。生产部署属于“通过网络向用户提供服务”，需要遵守 AGPL §13：向使用者提供对应源代码。默认构建已在登录页和已登录页脚展示“源代码 · AGPL-3.0”链接，默认指向 <https://github.com/lj105183000/much-agents>。
+
+### 13.1 修改版部署
+
+修改过本项目代码的部署者，必须把 `VITE_SOURCE_URL` 指向**自己发布的对应源码**（建议指向不可变的 tag 或 commit），不能只链接上游原始仓库，也不能只放一个不包含修改的仓库地址。
+
+`VITE_SOURCE_URL` 是 **Vite 构建时变量**，不是运行时配置；修改后必须重新构建前端/`nginx` 镜像：
+
+```bash
+VITE_SOURCE_URL=https://github.com/<owner>/<repo>/tree/<commit> \
+  docker compose -f docker-compose.prod.yml build nginx
+docker compose -f docker-compose.prod.yml up -d nginx
+```
+
+也可以在当前 shell `export VITE_SOURCE_URL=...` 后执行构建。`deploy/env.production` 通过 `env_file` 注入容器，**不参与 Compose 构建参数插值**，因此不能只在其中设置该变量。
+
+### 13.2 内网/离线部署
+
+无法访问 GitHub 时，需要把对应源码归档放到内部用户可访问的服务器，并把 `VITE_SOURCE_URL` 指向该地址：
+
+```bash
+git archive --format=tar.gz -o much-agents-source.tar.gz HEAD
+# 将归档发布到内部 HTTPS 静态服务器，例如 https://source.intranet/much-agents/<commit>.tar.gz
+VITE_SOURCE_URL=https://source.intranet/much-agents/<commit>.tar.gz \
+  docker compose -f docker-compose.prod.yml build nginx
+```
+
+注意：
+
+- 源码地址必须对**实际使用者**可访问，不能只对运维可见。
+- 浏览器版支持 http/https；Electron 仅通过系统浏览器打开 `https://` 外链，内网源码镜像建议使用 HTTPS。
+- 若只对外提供 API 或 MCP HTTP 服务、不使用前端，仍需在客户端文档、服务说明或登录页中提供同样的源码地址；前端页脚不是唯一入口。
+
+### 13.3 镜像内的许可证文件
+
+- `api` / `worker` / `migrate` 镜像：`/app/LICENSE`、`/app/NOTICE`、`/app/THIRD_PARTY_NOTICES.md`。
+- `web`（Nginx）镜像：`/usr/share/nginx/html/LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`，对外可通过 `https://<host>/LICENSE` 等路径访问。
+- CI 的 `docker` job 会校验这些文件存在且非空；不要删除这些断言或文件。
+
+### 13.4 第三方组件
+
+- **PyMuPDF 2.0** 以 AGPL-3.0 或 Artifex 商业许可双许可发布。本项目按 AGPL-3.0 使用；闭源商业分发需向 Artifex 购买商业许可。
+- **MinIO Server / mc** 是独立运行的 AGPL-3.0 服务；**Redis** 的许可证随版本变化（7.2 为 BSD-3-Clause，7.4+ 为 RSALv2/SSPLv1），再分发镜像前应固定 digest 并复核；中文字体 `fonts-wqy-zenhei` 使用 GPL-2.0 with Font embedding exception 与 M+ FONTS License。
+- 完整清单、版权行与许可证全文见根目录 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
+
+以上内容不构成法律意见；商业闭源托管或分发前请咨询专业律师。

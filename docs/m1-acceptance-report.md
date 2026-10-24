@@ -16,12 +16,12 @@
 - 用合成中文 PDF 上传并解析；**未使用真实招标文件**。
 - 解析使用 `parser=pymupdf&extract=true&ingest=false`，抽取走正则降级，不调用 MinerU/DeepSeek/智谱。
 - 投标 run 只创建大纲，**未调用生成 LLM**，未验证组装、配图与 DOCX 正向导出；导出只验证了拒绝路径。
-- 报告脱敏后提交；**未推送 GitHub**（仓库无 remote）。
+- 报告脱敏后提交；验收时仓库为私有且无 remote，后续已于 2026-10-24 推送 GitHub；项目采用 AGPL-3.0-or-later，公开状态以 GitHub 为准。
 
 未做：
 
 - 干净 Linux VM、真实内网 DNS/CA、真实 HTTPS 域名与客户端信任链。
-- 远程 CI（`.github/workflows/ci.yml` 未在 GitHub 运行）；仅做本地等价检查。
+- 远程 CI（验收时 `.github/workflows/ci.yml` 未在 GitHub 运行，仅做本地等价检查）；后续已推送，CI 结果以 GitHub Actions 为准。
 - 模型网关/数据不出内网改造、P1–P4 功能、前端 E2E/压测/监控告警。
 - 真实生产密钥、真实公司资料或真实投标数据。
 
@@ -169,7 +169,7 @@ docker-compose -f docker-compose.prod.yml up -d
 6. **恢复是破坏性操作**：脚本不自动迁移、不自动创建恢复前备份；核心步骤失败时需人工排查后重跑或换更早备份。
 7. **`TRUSTED_PROXIES=*`**：本地演练保留 `*`，且不支持 CIDR；生产应限制为实际反代地址。
 8. **CLI 自动迁移**：`python -m api.users` / `api.projects` 即使 `DB_AUTO_MIGRATE=false` 也会初始化并尝试迁移；生产引导应在 `migrate` 成功后执行，且避免并发运行。
-9. **远程 CI 未运行**：仓库无 remote；`.github/workflows/ci.yml` 仅做了本地等价检查（ruff、pytest 412 通过、前端 lint/test/build、Compose 校验）。
+9. **远程 CI 未运行（验收时）**：仓库无 remote；`.github/workflows/ci.yml` 仅做了本地等价检查（ruff、pytest 412 通过、前端 lint/test/build、Compose 校验）。后续已推送 GitHub（2026-10-24），CI 结果以仓库 Actions 页面为准。
 10. **可观测性与压测**：无监控告警、Celery beat、前端 E2E/压力测试；上线前需补最小监控与一次真实数据演练。
 11. **静态服务 token**：`MCP_API_TOKEN` 轮换需同时重启 API 与 MCP；会话 token 仍存 localStorage，依赖 HTTPS/CSP/Electron 守卫。
 12. **验收数据**：本地生产卷保留合成测试用户/项目/文档/run 与审计事件；生产环境不要复用该卷。`deploy/env.production`、管理员密码、TLS 私钥和备份均未提交。
