@@ -15,6 +15,19 @@
 
 ## 启动
 
+最简单的启动方式是在项目根目录双击 `start.bat`（或运行 `start.bat prod` / `start.bat local`）。它会启动/复用 Docker 中的 PostgreSQL、Redis，执行迁移，再依次启动 Chroma、API、Celery worker 与前端，并自动打开浏览器：
+
+```bash
+# 项目根目录
+start.bat               # Vite 开发模式 http://127.0.0.1:5173
+start.bat prod          # 构建前端并由 Nginx 托管 http://127.0.0.1:8080
+start.bat local         # TASK_BACKEND=local，无需 Redis/worker
+start.bat --dry-run     # 只打印启动计划
+stop.bat                # 停止由 start.bat 拉起的进程（Docker 容器保持运行）
+```
+
+Docker Desktop 未运行时会尝试自动启动；缺少 API key 只警告。也可以按下面的步骤手动启动。
+
 先启动后端：
 
 ```bash

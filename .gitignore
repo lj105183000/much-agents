@@ -25,6 +25,9 @@ chroma_db/
 upload/
 *.log
 
+# One-click launcher state/logs
+.run/
+
 # Node / frontend / Electron（后续步骤使用）
 node_modules/
 dist/
