@@ -6,6 +6,7 @@ import { ChangePasswordDialog } from './components/ChangePasswordDialog'
 import { Header } from './components/Header'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
+import { SourceLink } from './components/SourceLink'
 import { Icon } from './components/icons'
 import { Button, Card, EmptyState, Spinner } from './components/ui'
 import { useDocuments } from './hooks/useDocuments'
@@ -282,6 +283,10 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
             )}
           </div>
         </main>
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-800/60 px-4 py-2.5 text-[11px] text-slate-500 md:px-7">
+          <span>Much Agents · AGPL-3.0-or-later</span>
+          <SourceLink />
+        </footer>
       </div>
 
       {settingsOpen ? (

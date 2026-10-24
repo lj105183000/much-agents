@@ -92,3 +92,9 @@ VITE_API_BASE_URL=http://127.0.0.1:8001
 - MCP 服务端与客户端是后端可选能力，前端不提供 MCP 配置界面；默认关闭，配置后由 API/Celery worker 使用。
 - 服务端投标 run 历史来自 `/api/bid-runs`；解析/旧版任务记录仍保存在当前浏览器/Electron profile。文档库仍来自后端磁盘扫描。
 - 前端没有 preload/IPC；本地文件只通过后端 artifact 接口访问。
+
+## License
+
+本项目以 **AGPL-3.0-or-later** 发布，完整条款见根目录 [`LICENSE`](../LICENSE)，版权与源码地址见 [`NOTICE`](../NOTICE)，第三方组件见 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
+
+前端在登录页与已登录页脚展示“源代码 · AGPL-3.0”链接，默认指向 <https://github.com/lj105183000/much-agents>。修改版部署必须设置 `VITE_SOURCE_URL` 指向自己发布的对应源码（构建时注入，见根目录 `docs/deployment.md` 第 13 节）。
