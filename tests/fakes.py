@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import redis
 
+from api.audit import AuditEvent, AuditRecord, event_hash
 from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
     BidRunRecord,
@@ -1250,7 +1251,15 @@ class FakeProjectRepository:
             self.add_project()
         user = self.users.get(user_id)
         if user is None:
-            raise ProjectError(404, "用户不存在")
+            # In PostgreSQL the user row already exists when this is called;
+            # mirror that by materializing a minimal brief in the fake.
+            user = UserBrief(
+                id=user_id,
+                username=user_id,
+                display_name=user_id,
+                role=global_role,
+            )
+            self.users[user_id] = user
         self.add_membership(
             DEFAULT_PROJECT_ID, user_id, project_role_for_global(global_role)
         )
@@ -1306,6 +1315,129 @@ class FakeProjectRepository:
             for run_id, run in self.bid_runs.runs.items()
             if run.project_id == project_id
         }
+
+
+class FakeAuditRepository:
+    """In-memory audit chain with the same filtering contract as the DB."""
+
+    def __init__(self) -> None:
+        self.records: list[AuditRecord] = []
+        self.fail_append = False
+
+    async def append(self, event: AuditEvent) -> AuditRecord:
+        if self.fail_append:
+            raise RuntimeError("audit storage is unavailable")
+        prev_hash = self.records[-1].hash if self.records else ""
+        record = AuditRecord(
+            id=len(self.records) + 1,
+            ts=event.ts,
+            request_id=event.request_id,
+            actor_id=event.actor_id,
+            actor_username=event.actor_username,
+            project_id=event.project_id,
+            action=event.action,
+            resource_type=event.resource_type,
+            resource_id=event.resource_id,
+            outcome=event.outcome,
+            ip=event.ip,
+            user_agent=event.user_agent,
+            detail=event.detail,
+            prev_hash=prev_hash,
+            hash=event_hash(prev_hash, event),
+        )
+        self.records.append(record)
+        return record
+
+    def _filtered(
+        self,
+        *,
+        project_id: str | None,
+        actor: str | None,
+        action: str | None,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> list[AuditRecord]:
+        def matches(record: AuditRecord) -> bool:
+            if project_id and record.project_id != project_id:
+                return False
+            if actor and actor not in (record.actor_id, record.actor_username):
+                return False
+            if action and record.action != action:
+                return False
+            if start is not None and record.ts < start:
+                return False
+            if end is not None and record.ts > end:
+                return False
+            return True
+
+        return [record for record in self.records if matches(record)]
+
+    async def list_events(
+        self,
+        *,
+        project_id: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditRecord]:
+        records = self._filtered(
+            project_id=project_id,
+            actor=actor,
+            action=action,
+            start=start,
+            end=end,
+        )
+        records.sort(key=lambda record: record.id, reverse=True)
+        return records[offset : offset + limit]
+
+    async def count_events(
+        self,
+        *,
+        project_id: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> int:
+        return len(
+            self._filtered(
+                project_id=project_id,
+                actor=actor,
+                action=action,
+                start=start,
+                end=end,
+            )
+        )
+
+    async def fetch_chain(
+        self,
+        *,
+        from_id: int | None = None,
+        to_id: int | None = None,
+    ) -> list[AuditRecord]:
+        records = [
+            record
+            for record in self.records
+            if (from_id is None or record.id >= from_id)
+            and (to_id is None or record.id <= to_id)
+        ]
+        return sorted(records, key=lambda record: record.id)
+
+    async def hash_before(self, event_id: int) -> str | None:
+        previous = [
+            record.hash for record in self.records if record.id < event_id
+        ]
+        return previous[-1] if previous else None
+
+    def tamper(self, event_id: int, **changes: Any) -> None:
+        for index, record in enumerate(self.records):
+            if record.id == event_id:
+                self.records[index] = replace(record, **changes)
+                return
+        raise AssertionError(f"unknown audit event: {event_id}")
 
 
 class FakeCompanyService:

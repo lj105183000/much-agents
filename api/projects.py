@@ -785,7 +785,10 @@ async def require_project_read(
     user: UserContext = Depends(require_user),
     service: ProjectService = Depends(get_project_service),
 ) -> ProjectContext:
-    return await service.resolve(request.headers.get(PROJECT_HEADER), user)
+    context = await service.resolve(request.headers.get(PROJECT_HEADER), user)
+    # Exposed for the audit middleware fallback; never used for authorization.
+    request.state.project_context = context
+    return context
 
 
 def _project_guard(

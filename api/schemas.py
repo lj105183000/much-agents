@@ -572,3 +572,33 @@ class ProjectMemberListResponse(BaseModel):
 
 class ProjectMemberUpsertRequest(BaseModel):
     role: ProjectRole
+
+
+class AuditEventSummary(BaseModel):
+    id: int
+    ts: datetime
+    request_id: str = ""
+    actor_id: str | None = None
+    actor_username: str | None = None
+    project_id: str | None = None
+    action: str
+    resource_type: str = ""
+    resource_id: str = ""
+    outcome: str = "success"
+    ip: str | None = None
+    user_agent: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+    hash: str = ""
+
+
+class AuditListResponse(BaseModel):
+    events: list[AuditEventSummary] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+
+
+class AuditVerifyResponse(BaseModel):
+    valid: bool
+    checked: int
+    first_bad_id: int | None = None

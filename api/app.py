@@ -24,6 +24,12 @@ from src.storage.errors import (
     StorageUnavailable,
 )
 
+from .audit import (
+    AuditRepository,
+    AuditService,
+    AuditUnavailable,
+    install_request_context,
+)
 from .auth import AuthError, AuthPolicy, AuthRepository, AuthService
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
@@ -60,6 +66,7 @@ def create_app(
     bid_run_service: BidRunService | None = None,
     auth_service: AuthService | None = None,
     project_service: ProjectService | None = None,
+    audit_service: AuditService | None = None,
     storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
@@ -168,6 +175,11 @@ def create_app(
         auth_enabled=api_settings.auth_enabled,
         bid_run_repo=bid_run_repo,
     )
+    audit_service = audit_service or AuditService(
+        AuditRepository(database.session_factory)
+        if database.session_factory is not None
+        else None
+    )
     parse_service = ParseService(
         api_settings=api_settings,
         store=store,
@@ -263,6 +275,7 @@ def create_app(
     app.state.company_service = company_service
     app.state.auth_service = resolved_auth_service
     app.state.project_service = project_service
+    app.state.audit_service = audit_service
     app.state.storage = storage
     app.add_middleware(
         CORSMiddleware,
@@ -271,6 +284,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    install_request_context(app, audit_service)
 
     @app.exception_handler(UploadError)
     async def handle_upload_error(_request: Request, exc: UploadError) -> JSONResponse:
@@ -279,6 +293,14 @@ def create_app(
     @app.exception_handler(AuthError)
     async def handle_auth_error(_request: Request, exc: AuthError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(AuditUnavailable)
+    async def handle_audit_unavailable(
+        _request: Request, _exc: AuditUnavailable
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503, content={"detail": "audit log is unavailable"}
+        )
 
     @app.exception_handler(ProjectError)
     async def handle_project_error(

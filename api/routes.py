@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
-
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from src.parsing.artifacts import read_json
@@ -27,6 +38,7 @@ from .artifacts import (
     resolve_storage_artifact,
     storage_artifact_infos,
 )
+from .audit import AuditService, get_audit_service
 from .auth import (
     AuthError,
     AuthService,
@@ -60,6 +72,9 @@ from .projects import (
 )
 from .schemas import (
     ArtifactListResponse,
+    AuditEventSummary,
+    AuditListResponse,
+    AuditVerifyResponse,
     AuthMeResponse,
     AuthUser,
     BidComplianceResponse,
@@ -234,6 +249,60 @@ def _member_summary(record: MemberRecord) -> ProjectMemberSummary:
     )
 
 
+async def _audit(
+    request: Request,
+    action: str,
+    *,
+    context: ProjectContext | None = None,
+    resource_type: str = "",
+    resource_id: str = "",
+    detail: dict[str, Any] | None = None,
+    outcome: str = "success",
+    actor: UserContext | None = None,
+    actor_username: str | None = None,
+    required: bool = False,
+) -> None:
+    await get_audit_service(request).record(
+        action=action,
+        outcome=outcome,
+        actor=actor,
+        actor_username=actor_username,
+        project_id=context.project_id if context is not None else None,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        detail=detail,
+        request=request,
+        required=required,
+    )
+
+
+def _audit_artifact_download(
+    background: BackgroundTasks,
+    request: Request,
+    context: ProjectContext,
+    *,
+    resource_type: str,
+    resource_id: str,
+    artifact: str,
+) -> None:
+    """Record artifact downloads without delaying the response.
+
+    GET requests are otherwise not covered by the audit middleware fallback.
+    HEAD probes stay unrecorded to avoid duplicating a following GET.
+    """
+    if request.method != "GET":
+        return
+    background.add_task(
+        get_audit_service(request).record,
+        action="artifact.download",
+        project_id=context.project_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        detail={"artifact": artifact[:500]},
+        request=request,
+    )
+
+
 async def _require_job_read(
     job_id: str,
     request: Request,
@@ -348,6 +417,14 @@ def build_router() -> APIRouter:
                 ip,
                 exc.detail,
             )
+            await _audit(
+                request,
+                "auth.login",
+                outcome="denied",
+                actor_username=payload.username,
+                resource_type="user",
+                detail={"reason": exc.detail},
+            )
             raise
         token, expires_at = await service.create_session(
             user,
@@ -355,6 +432,18 @@ def build_router() -> APIRouter:
             user_agent=request.headers.get("user-agent"),
         )
         logger.info("login succeeded for %r from %s", user.username, ip)
+        await _audit(
+            request,
+            "auth.login",
+            actor=UserContext(
+                id=user.id,
+                username=user.username,
+                display_name=user.display_name,
+                role=user.role,
+            ),
+            resource_type="user",
+            resource_id=user.id,
+        )
         return LoginResponse(
             token=token,
             expires_at=expires_at,
@@ -391,6 +480,13 @@ def build_router() -> APIRouter:
             service = get_auth_service(request)
             if service is not None:
                 await service.revoke_session(user.session_id)
+        await _audit(
+            request,
+            "auth.logout",
+            actor=user,
+            resource_type="user",
+            resource_id=user.id,
+        )
 
     @auth_router.post(
         "/auth/password",
@@ -415,6 +511,14 @@ def build_router() -> APIRouter:
             payload.current_password,
             payload.new_password,
         )
+        await _audit(
+            request,
+            "auth.password.change",
+            actor=user,
+            resource_type="user",
+            resource_id=user.id,
+            required=True,
+        )
 
     @project_router.get("/projects", response_model=ProjectListResponse)
     async def list_projects(
@@ -434,6 +538,7 @@ def build_router() -> APIRouter:
     )
     async def create_project(
         payload: ProjectCreateRequest,
+        request: Request,
         user: UserContext = Depends(require_admin),
         service: ProjectService = Depends(get_project_service),
     ) -> ProjectSummary:
@@ -444,6 +549,15 @@ def build_router() -> APIRouter:
             created_by=user.id,
         )
         await service.add_member(record.id, user_id=user.id, role="manager")
+        await _audit(
+            request,
+            "project.create",
+            actor=user,
+            resource_type="project",
+            resource_id=record.id,
+            detail={"slug": record.slug},
+            required=True,
+        )
         return _project_summary(await service.get_project(record.id))
 
     @project_router.patch(
@@ -454,12 +568,24 @@ def build_router() -> APIRouter:
     async def update_project(
         project_id: str,
         payload: ProjectUpdateRequest,
+        request: Request,
+        user: UserContext = Depends(require_admin),
         service: ProjectService = Depends(get_project_service),
     ) -> ProjectSummary:
         record = await service.update_project(
             project_id,
             name=payload.name,
             description=payload.description,
+        )
+        changed = sorted(payload.model_dump(exclude_none=True))
+        await _audit(
+            request,
+            "project.update",
+            actor=user,
+            resource_type="project",
+            resource_id=project_id,
+            detail={"changed_fields": changed},
+            required=True,
         )
         return _project_summary(record)
 
@@ -470,9 +596,19 @@ def build_router() -> APIRouter:
     )
     async def delete_project(
         project_id: str,
+        request: Request,
+        user: UserContext = Depends(require_admin),
         service: ProjectService = Depends(get_project_service),
     ) -> None:
         await service.delete_project(project_id)
+        await _audit(
+            request,
+            "project.delete",
+            actor=user,
+            resource_type="project",
+            resource_id=project_id,
+            required=True,
+        )
 
     @project_router.get(
         "/projects/{project_id}/members",
@@ -497,10 +633,21 @@ def build_router() -> APIRouter:
         project_id: str,
         user_id: str,
         payload: ProjectMemberUpsertRequest,
+        request: Request,
+        user: UserContext = Depends(require_admin),
         service: ProjectService = Depends(get_project_service),
     ) -> ProjectMemberSummary:
         record = await service.add_member(
             project_id, user_id=user_id, role=payload.role
+        )
+        await _audit(
+            request,
+            "project.member.upsert",
+            actor=user,
+            resource_type="project",
+            resource_id=project_id,
+            detail={"member_user_id": user_id, "role": payload.role},
+            required=True,
         )
         return _member_summary(record)
 
@@ -512,9 +659,20 @@ def build_router() -> APIRouter:
     async def delete_project_member(
         project_id: str,
         user_id: str,
+        request: Request,
+        user: UserContext = Depends(require_admin),
         service: ProjectService = Depends(get_project_service),
     ) -> None:
         await service.remove_member(project_id, user_id=user_id)
+        await _audit(
+            request,
+            "project.member.remove",
+            actor=user,
+            resource_type="project",
+            resource_id=project_id,
+            detail={"member_user_id": user_id},
+            required=True,
+        )
 
     @admin_router.get("/users", response_model=UserListResponse)
     async def list_users(
@@ -530,6 +688,7 @@ def build_router() -> APIRouter:
     )
     async def create_user(
         payload: UserCreateRequest,
+        request: Request,
         service: AuthService = Depends(_require_auth_service),
         projects: ProjectService = Depends(get_project_service),
     ) -> UserSummary:
@@ -540,12 +699,21 @@ def build_router() -> APIRouter:
             role=payload.role,
         )
         await projects.add_default_member(record.id, record.role)
+        await _audit(
+            request,
+            "user.create",
+            resource_type="user",
+            resource_id=record.id,
+            detail={"username": record.username, "role": record.role},
+            required=True,
+        )
         return _user_summary(record)
 
     @admin_router.patch("/users/{user_id}", response_model=UserSummary)
     async def update_user(
         user_id: str,
         payload: UserUpdateRequest,
+        request: Request,
         service: AuthService = Depends(_require_auth_service),
     ) -> UserSummary:
         record = await service.update_user(
@@ -553,6 +721,21 @@ def build_router() -> APIRouter:
             display_name=payload.display_name,
             role=payload.role,
             is_active=payload.is_active,
+        )
+        detail: dict[str, Any] = {
+            "changed_fields": sorted(payload.model_dump(exclude_none=True))
+        }
+        if payload.role is not None:
+            detail["role"] = payload.role
+        if payload.is_active is not None:
+            detail["is_active"] = payload.is_active
+        await _audit(
+            request,
+            "user.update",
+            resource_type="user",
+            resource_id=user_id,
+            detail=detail,
+            required=True,
         )
         return _user_summary(record)
 
@@ -563,9 +746,17 @@ def build_router() -> APIRouter:
     async def reset_user_password(
         user_id: str,
         payload: PasswordResetRequest,
+        request: Request,
         service: AuthService = Depends(_require_auth_service),
     ) -> None:
         await service.reset_password(user_id, payload.new_password)
+        await _audit(
+            request,
+            "user.password.reset",
+            resource_type="user",
+            resource_id=user_id,
+            required=True,
+        )
 
     @router.post(
         "/parse",
@@ -573,6 +764,7 @@ def build_router() -> APIRouter:
         response_model=JobCreatedResponse,
     )
     async def create_parse_job(
+        request: Request,
         file: UploadFile = File(..., description="Tender document PDF"),
         parser: Literal["auto", "mineru", "pymupdf"] = Query("auto"),
         extract: bool = Query(True),
@@ -587,6 +779,14 @@ def build_router() -> APIRouter:
             ingest=ingest,
             project_id=context.project_id,
             created_by=context.user.id,
+        )
+        await _audit(
+            request,
+            "document.upload",
+            context=context,
+            resource_type="document",
+            resource_id=job.doc_id,
+            detail={"job_id": job.job_id, "filename": job.filename},
         )
         return JobCreatedResponse(
             job_id=job.job_id,
@@ -603,6 +803,7 @@ def build_router() -> APIRouter:
     )
     async def create_bid_job(
         payload: BidRequest,
+        request: Request,
         context: ProjectContext = Depends(require_project_write),
         projects: ProjectService = Depends(get_project_service),
         service: BidService = Depends(get_bid_service),
@@ -620,6 +821,14 @@ def build_router() -> APIRouter:
             project_id=context.project_id,
             created_by=context.user.id,
         )
+        await _audit(
+            request,
+            "bid.legacy.create",
+            context=context,
+            resource_type="job",
+            resource_id=job.job_id,
+            detail={"doc_id": payload.doc_id},
+        )
         return BidCreatedResponse(
             job_id=job.job_id,
             status=job.status,
@@ -635,6 +844,7 @@ def build_router() -> APIRouter:
     )
     async def create_bid_run(
         payload: BidRequest,
+        request: Request,
         context: ProjectContext = Depends(require_project_write),
         projects: ProjectService = Depends(get_project_service),
         service: BidRunService = Depends(get_bid_run_service),
@@ -644,7 +854,16 @@ def build_router() -> APIRouter:
             payload.doc_id,
             allow_register=not context.enforced,
         )
-        return await service.create(payload, project_id=context.project_id)
+        created = await service.create(payload, project_id=context.project_id)
+        await _audit(
+            request,
+            "bid_run.create",
+            context=context,
+            resource_type="bid_run",
+            resource_id=created.run_id,
+            detail={"doc_id": payload.doc_id},
+        )
+        return created
 
     @router.get("/bid-runs", response_model=BidRunListResponse)
     async def list_bid_runs(
@@ -679,10 +898,24 @@ def build_router() -> APIRouter:
     async def patch_bid_run_outline(
         run_id: str,
         payload: BidOutlinePatchRequest,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidOutlinePatchResponse:
-        return await service.patch_outline(run_id, payload)
+        result = await service.patch_outline(run_id, payload)
+        await _audit(
+            request,
+            "bid_run.outline.patch",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "section_count": len(payload.sections),
+                "revision": result.revision,
+                "invalidated_sections": result.invalidated_sections,
+            },
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/generate",
@@ -691,11 +924,25 @@ def build_router() -> APIRouter:
     )
     async def generate_bid_run(
         run_id: str,
+        request: Request,
         payload: BidGenerateRequest | None = None,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGenerateResponse:
-        return await service.generate(run_id, payload)
+        result = await service.generate(run_id, payload)
+        await _audit(
+            request,
+            "bid_run.generate",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "job_id": result.job_id,
+                "section_count": len(payload.section_ids) if payload else 0,
+                "assemble": payload.assemble if payload else True,
+            },
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/resume",
@@ -704,10 +951,20 @@ def build_router() -> APIRouter:
     )
     async def resume_bid_run(
         run_id: str,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGenerateResponse:
-        return await service.resume(run_id)
+        result = await service.resume(run_id)
+        await _audit(
+            request,
+            "bid_run.resume",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"job_id": result.job_id},
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/cancel",
@@ -715,10 +972,19 @@ def build_router() -> APIRouter:
     )
     async def cancel_bid_run(
         run_id: str,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidRunDetail:
-        return await service.cancel(run_id)
+        result = await service.cancel(run_id)
+        await _audit(
+            request,
+            "bid_run.cancel",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/assemble",
@@ -726,10 +992,20 @@ def build_router() -> APIRouter:
     )
     async def assemble_bid_run(
         run_id: str,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGateResponse:
-        return await service.assemble(run_id)
+        result = await service.assemble(run_id)
+        await _audit(
+            request,
+            "bid_run.assemble",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"gate_status": result.status},
+        )
+        return result
 
     @router.get(
         "/bid-runs/{run_id}/gate",
@@ -759,11 +1035,20 @@ def build_router() -> APIRouter:
     )
     async def regenerate_bid_run_figures(
         run_id: str,
+        request: Request,
         payload: BidFigureRegenerateRequest | None = None,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidFiguresResponse:
-        return await service.regenerate_figures(run_id, payload)
+        result = await service.regenerate_figures(run_id, payload)
+        await _audit(
+            request,
+            "bid_run.figures.regenerate",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+        )
+        return result
 
     @router.get(
         "/bid-runs/{run_id}/compliance",
@@ -782,10 +1067,19 @@ def build_router() -> APIRouter:
     )
     async def check_bid_run_compliance(
         run_id: str,
+        request: Request,
         context: ProjectContext = Depends(require_run_review),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidComplianceResponse:
-        return await service.check_compliance(run_id)
+        result = await service.check_compliance(run_id)
+        await _audit(
+            request,
+            "bid_run.compliance.check",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+        )
+        return result
 
     @router.get(
         "/bid-runs/{run_id}/consistency",
@@ -804,11 +1098,21 @@ def build_router() -> APIRouter:
     )
     async def plan_bid_run_fixes(
         run_id: str,
+        request: Request,
         payload: BidFixPlanRequest | None = None,
         context: ProjectContext = Depends(require_run_review),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidFixPlanResponse:
-        return await service.fix_plan(run_id, payload or BidFixPlanRequest())
+        result = await service.fix_plan(run_id, payload or BidFixPlanRequest())
+        await _audit(
+            request,
+            "bid_run.fix_plan",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"check_ids": (payload.check_ids if payload else [])[:21]},
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/compliance/fixes/apply",
@@ -817,10 +1121,21 @@ def build_router() -> APIRouter:
     async def apply_bid_run_fix(
         run_id: str,
         payload: BidFixApplyRequest,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidSectionDetail:
-        return await service.apply_fix(run_id, payload)
+        result = await service.apply_fix(run_id, payload)
+        await _audit(
+            request,
+            "bid_run.fix.apply",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"section_id": payload.section_id},
+            required=True,
+        )
+        return result
 
     @router.post("/bid-runs/{run_id}/export")
     async def export_bid_run(
@@ -854,11 +1169,34 @@ def build_router() -> APIRouter:
                 raise HTTPException(status_code=403, detail="permission denied")
         target = await service.export(run_id, force=force)
         storage = _remote_storage(request)
+        info = None
+        if storage is not None:
+            info = await asyncio.to_thread(storage.stat, target.key)
+            if info is None:
+                raise HTTPException(status_code=404, detail="artifact is unavailable")
+        await _audit(
+            request,
+            "bid_run.export",
+            context=context,
+            actor=user,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"force": force},
+            required=True,
+        )
+        if force:
+            await _audit(
+                request,
+                "bid_run.export.force",
+                context=context,
+                actor=user,
+                resource_type="bid_run",
+                resource_id=run_id,
+                detail={"reason": (reason or "").strip()},
+                required=True,
+            )
         if storage is None:
             return _artifact_response(target.path)
-        info = await asyncio.to_thread(storage.stat, target.key)
-        if info is None:
-            raise HTTPException(status_code=404, detail="artifact is unavailable")
         return stored_artifact_response(request, storage, info)
 
     @router.get(
@@ -881,10 +1219,20 @@ def build_router() -> APIRouter:
         run_id: str,
         section_id: str,
         payload: BidSectionUpdateRequest,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidSectionDetail:
-        return await service.edit_section(run_id, section_id, payload)
+        result = await service.edit_section(run_id, section_id, payload)
+        await _audit(
+            request,
+            "bid_run.section.edit",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"section_id": section_id},
+        )
+        return result
 
     @router.post(
         "/bid-runs/{run_id}/sections/{section_id}/regenerate",
@@ -894,10 +1242,20 @@ def build_router() -> APIRouter:
     async def regenerate_bid_run_section(
         run_id: str,
         section_id: str,
+        request: Request,
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGenerateResponse:
-        return await service.regenerate_section(run_id, section_id)
+        result = await service.regenerate_section(run_id, section_id)
+        await _audit(
+            request,
+            "bid_run.section.regenerate",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"section_id": section_id, "job_id": result.job_id},
+        )
+        return result
 
     @router.get("/bid-runs/{run_id}", response_model=BidRunDetail)
     async def get_bid_run(
@@ -951,12 +1309,20 @@ def build_router() -> APIRouter:
     )
     async def create_company(
         payload: CompanyUpsertRequest,
+        request: Request,
         service: CompanyService = Depends(get_company_service),
     ) -> CompanyDetail:
         try:
             record = await service.create(payload.profile)
         except CompanyError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        await _audit(
+            request,
+            "company.create",
+            resource_type="company",
+            resource_id=record.id,
+            detail={"company_name": record.company_name},
+        )
         return _company_detail(record)
 
     @router.get("/companies/{company_id}", response_model=CompanyDetail)
@@ -984,6 +1350,7 @@ def build_router() -> APIRouter:
     async def update_company(
         company_id: str,
         payload: CompanyUpsertRequest,
+        request: Request,
         service: CompanyService = Depends(get_company_service),
     ) -> CompanyDetail:
         try:
@@ -992,6 +1359,13 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         if record is None:
             raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
+        await _audit(
+            request,
+            "company.update",
+            resource_type="company",
+            resource_id=company_id,
+            detail={"company_name": record.company_name},
+        )
         return _company_detail(record)
 
     @router.delete(
@@ -1001,6 +1375,7 @@ def build_router() -> APIRouter:
     )
     async def delete_company(
         company_id: str,
+        request: Request,
         service: CompanyService = Depends(get_company_service),
     ) -> None:
         try:
@@ -1009,6 +1384,13 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         if not deleted:
             raise HTTPException(status_code=404, detail=f"unknown company: {company_id}")
+        await _audit(
+            request,
+            "company.delete",
+            resource_type="company",
+            resource_id=company_id,
+            required=True,
+        )
 
     @router.get("/documents", response_model=DocumentListResponse)
     async def get_documents(
@@ -1099,6 +1481,7 @@ def build_router() -> APIRouter:
         doc_id: str,
         artifact_path: str,
         request: Request,
+        background: BackgroundTasks,
         context: ProjectContext = Depends(require_document_read),
     ) -> Response:
         storage = _remote_storage(request)
@@ -1107,15 +1490,30 @@ def build_router() -> APIRouter:
                 root, patterns, _prefix = document_artifact_root(
                     doc_id, request.app.state.parse_settings
                 )
-                return _artifact_response(
-                    resolve_artifact(root, patterns, artifact_path)
+                target = resolve_artifact(root, patterns, artifact_path)
+                _audit_artifact_download(
+                    background,
+                    request,
+                    context,
+                    resource_type="document",
+                    resource_id=doc_id,
+                    artifact=artifact_path,
                 )
+                return _artifact_response(target)
             prefix, patterns, _prefix_url = document_artifact_prefix(doc_id)
             info = resolve_storage_artifact(
                 storage, prefix, patterns, artifact_path
             )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
+        _audit_artifact_download(
+            background,
+            request,
+            context,
+            resource_type="document",
+            resource_id=doc_id,
+            artifact=artifact_path,
+        )
         return stored_artifact_response(request, storage, info)
 
     @router.get(
@@ -1169,6 +1567,7 @@ def build_router() -> APIRouter:
         run_id: str,
         artifact_path: str,
         request: Request,
+        background: BackgroundTasks,
         context: ProjectContext = Depends(require_run_document_read),
     ) -> Response:
         storage = _remote_storage(request)
@@ -1177,9 +1576,16 @@ def build_router() -> APIRouter:
                 root, patterns, _prefix = bid_run_artifact_root(
                     doc_id, run_id, request.app.state.bid_settings
                 )
-                return _artifact_response(
-                    resolve_artifact(root, patterns, artifact_path)
+                target = resolve_artifact(root, patterns, artifact_path)
+                _audit_artifact_download(
+                    background,
+                    request,
+                    context,
+                    resource_type="bid_run",
+                    resource_id=run_id,
+                    artifact=artifact_path,
                 )
+                return _artifact_response(target)
             prefix, patterns, _prefix_url = bid_run_artifact_prefix(
                 doc_id, run_id
             )
@@ -1188,6 +1594,14 @@ def build_router() -> APIRouter:
             )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
+        _audit_artifact_download(
+            background,
+            request,
+            context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            artifact=artifact_path,
+        )
         return stored_artifact_response(request, storage, info)
 
     @router.get(
@@ -1231,6 +1645,7 @@ def build_router() -> APIRouter:
         job_id: str,
         artifact_path: str,
         request: Request,
+        background: BackgroundTasks,
         context: ProjectContext = Depends(_require_job_read),
     ) -> Response:
         job = request.state.job
@@ -1242,15 +1657,30 @@ def build_router() -> APIRouter:
                     request.app.state.parse_settings,
                     request.app.state.bid_settings,
                 )
-                return _artifact_response(
-                    resolve_artifact(root, patterns, artifact_path)
+                target = resolve_artifact(root, patterns, artifact_path)
+                _audit_artifact_download(
+                    background,
+                    request,
+                    context,
+                    resource_type="job",
+                    resource_id=job_id,
+                    artifact=artifact_path,
                 )
+                return _artifact_response(target)
             prefix, patterns, _prefix_url = job_artifact_prefix(job)
             info = resolve_storage_artifact(
                 storage, prefix, patterns, artifact_path
             )
         except ArtifactError as exc:
             raise _artifact_error(exc) from exc
+        _audit_artifact_download(
+            background,
+            request,
+            context,
+            resource_type="job",
+            resource_id=job_id,
+            artifact=artifact_path,
+        )
         return stored_artifact_response(request, storage, info)
 
     @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -1263,6 +1693,104 @@ def build_router() -> APIRouter:
         if isinstance(view.get("result"), dict):
             view["result"].setdefault("kind", view.get("kind") or "parse")
         return JobStatusResponse.model_validate(view)
+
+    def _normalize_project_filter(project_id: str | None) -> str | None:
+        if not project_id:
+            return None
+        try:
+            return str(UUID(project_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="invalid project id"
+            ) from exc
+
+    @admin_router.get("/audit", response_model=AuditListResponse)
+    async def list_audit_events(
+        project_id: str | None = Query(default=None, max_length=36),
+        actor: str | None = Query(default=None, max_length=64),
+        action: str | None = Query(default=None, max_length=64),
+        from_ts: datetime | None = Query(default=None, alias="from"),
+        to_ts: datetime | None = Query(default=None, alias="to"),
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        service: AuditService = Depends(get_audit_service),
+    ) -> AuditListResponse:
+        records, total = await service.list_events(
+            project_id=_normalize_project_filter(project_id),
+            actor=actor,
+            action=action,
+            start=from_ts,
+            end=to_ts,
+            limit=limit,
+            offset=offset,
+        )
+        return AuditListResponse(
+            events=[
+                AuditEventSummary(
+                    id=record.id,
+                    ts=record.ts,
+                    request_id=record.request_id,
+                    actor_id=record.actor_id,
+                    actor_username=record.actor_username,
+                    project_id=record.project_id,
+                    action=record.action,
+                    resource_type=record.resource_type,
+                    resource_id=record.resource_id,
+                    outcome=record.outcome,
+                    ip=record.ip,
+                    user_agent=record.user_agent,
+                    detail=record.detail,
+                    hash=record.hash,
+                )
+                for record in records
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    @admin_router.get("/audit/verify", response_model=AuditVerifyResponse)
+    async def verify_audit_chain(
+        from_id: int | None = Query(default=None, ge=1),
+        to_id: int | None = Query(default=None, ge=1),
+        service: AuditService = Depends(get_audit_service),
+    ) -> AuditVerifyResponse:
+        if from_id is not None and to_id is not None and from_id > to_id:
+            raise HTTPException(
+                status_code=400, detail="from_id must not exceed to_id"
+            )
+        result = await service.verify_chain(from_id=from_id, to_id=to_id)
+        return AuditVerifyResponse(
+            valid=result.valid,
+            checked=result.checked,
+            first_bad_id=result.first_bad_id,
+        )
+
+    @admin_router.get("/audit/export.csv")
+    async def export_audit_csv(
+        project_id: str | None = Query(default=None, max_length=36),
+        actor: str | None = Query(default=None, max_length=64),
+        action: str | None = Query(default=None, max_length=64),
+        from_ts: datetime | None = Query(default=None, alias="from"),
+        to_ts: datetime | None = Query(default=None, alias="to"),
+        service: AuditService = Depends(get_audit_service),
+    ) -> Response:
+        content = await service.fetch_csv(
+            project_id=_normalize_project_filter(project_id),
+            actor=actor,
+            action=action,
+            start=from_ts,
+            end=to_ts,
+        )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        return Response(
+            content=content,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="audit-{stamp}.csv"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     root = APIRouter()
     root.include_router(public_router)

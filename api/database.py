@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     String,
@@ -362,6 +364,48 @@ class BidSectionStateRow(Base):
     )
 
 
+class AuditEventRow(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_project_ts", "project_id", "ts"),
+        Index("ix_audit_events_actor_ts", "actor_id", "ts"),
+        Index("ix_audit_events_action_ts", "action", "ts"),
+        Index("ix_audit_events_request_id", "request_id"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, Identity(), primary_key=True, autoincrement=True
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    request_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    actor_id: Mapped[str | None] = mapped_column(String(36))
+    actor_username: Mapped[str | None] = mapped_column(String(64))
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("''")
+    )
+    resource_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("''")
+    )
+    outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'success'")
+    )
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    prev_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 def make_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(
         database_url,
@@ -386,6 +430,7 @@ async def init_schema(engine: AsyncEngine) -> None:
 
 
 __all__ = [
+    "AuditEventRow",
     "Base",
     "BidOutlineSectionRow",
     "BidRunRow",
