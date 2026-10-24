@@ -7,9 +7,10 @@ import hashlib
 import json
 import logging
 import shutil
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -21,6 +22,8 @@ from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
+    ExternalRenderer,
+    append_manifest_warnings,
     build_figure_blocks,
     clear_figures,
     generate_figures,
@@ -36,6 +39,11 @@ from src.bidding.staged_output import (
     SectionOutput,
     assemble_staged_bid,
     write_staged_outputs,
+)
+from src.mcp_client.config import McpClientConfig
+from src.mcp_client.manager import (
+    McpClientManager,
+    threadsafe_external_renderer,
 )
 from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
 
@@ -110,6 +118,50 @@ def _public_warnings(warnings: list[str]) -> list[str]:
         for warning in warnings
         if not warning.startswith(_INTERNAL_WARNING_PREFIXES)
     ]
+
+
+@asynccontextmanager
+async def _external_figure_context(
+    settings: BidSettings,
+    provided: ExternalRenderer | None,
+) -> AsyncIterator[tuple[ExternalRenderer | None, list[str]]]:
+    """Yield an optional MCP renderer plus connection warnings.
+
+    A caller that already owns an MCP manager passes ``provided`` and remains
+    responsible for closing it. Otherwise a short-lived manager is opened only
+    when external drawing is enabled and configured.
+    """
+    if provided is not None:
+        yield provided, []
+        return
+    if not (settings.figures_enabled and settings.figures_external):
+        yield None, []
+        return
+    manager: McpClientManager | None = None
+    try:
+        try:
+            config = McpClientConfig.from_env(project_root=settings.base.project_root)
+            if not config.enabled or not config.has_tools("figure"):
+                yield None, []
+                return
+            manager = McpClientManager(config)
+            await manager.start()
+        except Exception as exc:  # noqa: BLE001 - external drawing is optional
+            if manager is not None:
+                try:
+                    await manager.aclose()
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not close partial MCP client", exc_info=True)
+            logger.warning("could not start MCP drawing client: %s", exc)
+            yield None, [f"MCP 外部绘图不可用：{type(exc).__name__}"]
+            return
+        yield threadsafe_external_renderer(manager), list(manager.warnings)
+    finally:
+        if manager is not None:
+            try:
+                await manager.aclose()
+            except Exception:  # noqa: BLE001
+                logger.warning("could not close MCP drawing client", exc_info=True)
 
 
 class BidRunError(Exception):
@@ -1344,6 +1396,7 @@ class BidRunService:
         run_id: str,
         *,
         allow_active: bool = False,
+        external_renderer: ExternalRenderer | None = None,
     ) -> BidGateResponse:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1401,17 +1454,25 @@ class BidRunService:
                     if self.bid_settings.figures_use_llm
                     else None
                 )
-                manifest = await asyncio.to_thread(
-                    generate_figures,
-                    context=context,
-                    profile=profile,
-                    outline=outline,
-                    section_markdowns=base.section_markdowns,
-                    outputs=outputs,
-                    run_dir=run_dir,
-                    settings=self.bid_settings,
-                    llm=figure_llm,
-                )
+                async with _external_figure_context(
+                    self.bid_settings, external_renderer
+                ) as (figure_renderer, mcp_warnings):
+                    manifest = await asyncio.to_thread(
+                        generate_figures,
+                        context=context,
+                        profile=profile,
+                        outline=outline,
+                        section_markdowns=base.section_markdowns,
+                        outputs=outputs,
+                        run_dir=run_dir,
+                        settings=self.bid_settings,
+                        llm=figure_llm,
+                        external_renderer=figure_renderer,
+                    )
+                if mcp_warnings:
+                    updated_manifest = append_manifest_warnings(run_dir, mcp_warnings)
+                    if updated_manifest is not None:
+                        manifest = updated_manifest
                 figure_blocks = build_figure_blocks(manifest)
                 figure_stats = dict(manifest.stats)
                 figure_warnings = list(manifest.warnings)
@@ -1591,18 +1652,26 @@ class BidRunService:
             figure_llm = (
                 self._llm_client() if self.bid_settings.figures_use_llm else None
             )
-            manifest = await asyncio.to_thread(
-                generate_figures,
-                context=context,
-                profile=profile,
-                outline=outline,
-                section_markdowns=base.section_markdowns,
-                outputs=outputs,
-                run_dir=run_dir,
-                settings=self.bid_settings,
-                llm=figure_llm,
-                force=force,
-            )
+            async with _external_figure_context(
+                self.bid_settings, None
+            ) as (figure_renderer, mcp_warnings):
+                manifest = await asyncio.to_thread(
+                    generate_figures,
+                    context=context,
+                    profile=profile,
+                    outline=outline,
+                    section_markdowns=base.section_markdowns,
+                    outputs=outputs,
+                    run_dir=run_dir,
+                    settings=self.bid_settings,
+                    llm=figure_llm,
+                    external_renderer=figure_renderer,
+                    force=force,
+                )
+            if mcp_warnings:
+                updated_manifest = append_manifest_warnings(run_dir, mcp_warnings)
+                if updated_manifest is not None:
+                    manifest = updated_manifest
         except Exception as exc:  # noqa: BLE001 - report a controlled API error
             logger.exception("could not regenerate figures for bid run %s", run_id)
             raise BidRunError(500, "figure regeneration failed") from exc

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -29,7 +30,10 @@ logger = logging.getLogger(__name__)
 MANIFEST_NAME = "manifest.json"
 FIGURE_VERSION = "figures-v1"
 _EXTERNAL_KINDS = frozenset({"site_plan", "process_flow"})
-ExternalRenderer = Callable[[dict[str, Any], Path], bool]
+_MCP_SOURCE_RE = re.compile(
+    r"^mcp:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+)
+ExternalRenderer = Callable[[dict[str, Any], Path], str | bool | None]
 
 
 def figures_dir(run_dir: str | Path) -> Path:
@@ -154,6 +158,21 @@ def _plan_is_usable(outputs: dict[str, SectionOutput] | None, section: OutlineSe
 def _write_manifest(run_dir: Path, manifest: FigureManifest) -> None:
     ensure_dir(figures_dir(run_dir))
     atomic_write_json(manifest_path(run_dir), manifest.model_dump(mode="json"))
+
+
+def append_manifest_warnings(
+    run_dir: str | Path,
+    warnings: list[str],
+) -> FigureManifest | None:
+    """Merge MCP/degradation warnings into an existing manifest."""
+    manifest = read_manifest(run_dir)
+    if manifest is None or not warnings:
+        return manifest
+    merged = list(dict.fromkeys([*manifest.warnings, *warnings]))
+    if merged != manifest.warnings:
+        manifest.warnings = merged
+        _write_manifest(Path(run_dir), manifest)
+    return manifest
 
 
 def _prune_orphans(run_dir: Path, manifest: FigureManifest) -> None:
@@ -301,19 +320,36 @@ def generate_figures(
         order = len(manifest.figures) + 1
         file = _new_file(order, rule.kind, source_hash)
         target = _safe_image_path(root, file)
-        external = False
+        external_source: str | None = None
         warnings = list(dict.fromkeys(plan.warnings))
+        external_spec = {
+            "kind": rule.kind,
+            "title": plan.title,
+            "data": plan.data,
+            "disclaimer": rule.disclaimer,
+            "section_id": section.id,
+            "section_title": section.title,
+            "project_name": context.facts.project_name,
+            "doc_id": context.doc_id,
+        }
         try:
             rendered = False
             if use_external and rule.kind in _EXTERNAL_KINDS and external_renderer is not None:
                 try:
-                    rendered = bool(external_renderer(plan.data, target))
+                    rendered_source = external_renderer(external_spec, target)
+                    if isinstance(rendered_source, str):
+                        candidate = rendered_source.strip()
+                        if _MCP_SOURCE_RE.fullmatch(candidate):
+                            external_source = candidate
+                    elif rendered_source:
+                        external_source = "mcp"
+                    rendered = external_source is not None
                 except Exception as exc:  # noqa: BLE001 - fallback to internal
-                    warnings.append(f"外部绘图工具失败，已回退内置渲染：{type(exc).__name__}")
+                    detail = " ".join(str(exc).split())[:120] or type(exc).__name__
+                    warnings.append(f"外部绘图工具失败，已回退内置渲染：{detail}")
                     logger.warning("external figure renderer failed: %s", exc)
                     rendered = False
                 if rendered:
-                    external = True
                     warnings.append("由外部绘图工具生成，须人工核验")
             if not rendered:
                 result = render_figure(
@@ -349,7 +385,7 @@ def generate_figures(
             continue
 
         disclaimer = rule.disclaimer
-        if external:
+        if external_source is not None:
             disclaimer = f"{disclaimer}（由外部绘图工具生成，须人工核验）"
         spec = FigureSpec(
             figure_id=f"fig-{order:02d}-{rule.kind}",
@@ -359,7 +395,7 @@ def generate_figures(
             title=plan.title,
             caption=_caption(order, plan.title),
             disclaimer=disclaimer,
-            source="mcp" if external else plan.source,  # type: ignore[arg-type]
+            source=external_source or plan.source,
             file=file,
             data=plan.data,
             source_hash=source_hash,
@@ -368,7 +404,7 @@ def generate_figures(
             image_height=image_height,
             page_estimate=page_estimate,
             warnings=warnings,
-            external=external,
+            external=external_source is not None,
         )
         manifest.figures.append(spec)
 
@@ -453,6 +489,7 @@ def figure_report(manifest: FigureManifest | None) -> dict[str, Any]:
 
 __all__ = [
     "ExternalRenderer",
+    "append_manifest_warnings",
     "build_figure_blocks",
     "clear_figures",
     "figure_report",

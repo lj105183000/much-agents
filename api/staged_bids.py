@@ -15,6 +15,11 @@ from src.bidding.outline import build_brief
 from src.bidding.profile import BidderProfile
 from src.bidding.retrieval import build_retriever
 from src.bidding.staged import generate_sections
+from src.mcp_client.config import McpClientConfig
+from src.mcp_client.manager import (
+    McpClientManager,
+    threadsafe_external_renderer,
+)
 
 from .bid_run_mapping import outline_from_records
 from .bid_run_repo import (
@@ -105,6 +110,47 @@ def _summary(
     }
 
 
+async def _open_job_mcp_manager(
+    bid_settings: BidSettings,
+) -> tuple[McpClientManager | None, str | None]:
+    """Open a job-scoped MCP client only when it can affect this job."""
+    try:
+        config = McpClientConfig.from_env(
+            project_root=bid_settings.base.project_root
+        )
+        if not config.enabled:
+            return None, None
+        wants_evidence = config.has_tools("evidence") or config.has_tools("company")
+        wants_figures = bool(
+            bid_settings.figures_enabled
+            and bid_settings.figures_external
+            and config.has_tools("figure")
+        )
+        if not (wants_evidence or wants_figures):
+            return None, None
+        manager = McpClientManager(config)
+        await manager.start()
+        return manager, None
+    except Exception as exc:  # noqa: BLE001 - MCP is optional
+        logger.warning("could not start MCP client: %s", exc)
+        return None, f"MCP 客户端不可用：{type(exc).__name__}"
+
+
+async def _merge_run_mcp_warnings(
+    repo: BidRunRepository,
+    run_id: str,
+    manager: McpClientManager | None,
+) -> BidRunRecord | None:
+    latest = await repo.get_run(run_id)
+    if latest is None or manager is None or not manager.warnings:
+        return latest
+    merged = list(dict.fromkeys([*latest.warnings, *manager.warnings]))
+    if merged != list(latest.warnings):
+        await repo.update_run(run_id, warnings=merged)
+        latest = await repo.get_run(run_id) or latest
+    return latest
+
+
 async def execute_staged_bid_job(
     job: Job,
     *,
@@ -140,6 +186,7 @@ async def execute_staged_bid_job(
     warnings: list[str] = []
     selected_count = 0
     written_count = 0
+    mcp_manager: McpClientManager | None = None
     try:
         run = await repo.claim_worker(
             run_id,
@@ -175,6 +222,15 @@ async def execute_staged_bid_job(
             bid_settings,
             concurrency=bid_settings.llm_concurrency,
         )
+        mcp_manager, mcp_warning = await _open_job_mcp_manager(bid_settings)
+        if mcp_warning:
+            warnings.append(mcp_warning)
+        evidence_provider = None
+        if mcp_manager is not None and (
+            mcp_manager.has_tools("evidence") or mcp_manager.has_tools("company")
+        ):
+            evidence_provider = mcp_manager.collect_evidence
+        company_name = (profile.company.name or "").strip()
         states: dict[str, SectionStateRecord] = {
             state.section_id: state for state in await repo.get_states(run_id)
         }
@@ -218,12 +274,20 @@ async def execute_staged_bid_job(
             allowed=allowed,
             hooks=hooks,
             section_ids=section_ids or None,
+            evidence_provider=evidence_provider,
+            company_name=company_name,
         )
         warnings = list(
             dict.fromkeys(
-                warning
-                for item in outcome.outcomes
-                for warning in item.warnings
+                [
+                    *warnings,
+                    *(mcp_manager.warnings if mcp_manager is not None else []),
+                    *(
+                        warning
+                        for item in outcome.outcomes
+                        for warning in item.warnings
+                    ),
+                ]
             )
         )
         latest_states = await repo.get_states(run_id)
@@ -262,8 +326,21 @@ async def execute_staged_bid_job(
                 bid_settings=bid_settings,
                 repo=repo,
             )
-            await assembler.assemble(run_id, allow_active=True)
-            latest_run = await repo.get_run(run_id)
+            external_renderer = None
+            if (
+                mcp_manager is not None
+                and bid_settings.figures_external
+                and mcp_manager.has_tools("figure")
+            ):
+                external_renderer = threadsafe_external_renderer(mcp_manager)
+            await assembler.assemble(
+                run_id,
+                allow_active=True,
+                external_renderer=external_renderer,
+            )
+            latest_run = await _merge_run_mcp_warnings(
+                repo, run_id, mcp_manager
+            )
             status = latest_run.status if latest_run is not None else "assembled"
             warnings = list(latest_run.warnings) if latest_run is not None else warnings
         elif written_count == selected_count:
@@ -330,6 +407,11 @@ async def execute_staged_bid_job(
         except Exception:  # noqa: BLE001
             logger.exception("could not mark Redis job failed")
     finally:
+        if mcp_manager is not None:
+            try:
+                await mcp_manager.aclose()
+            except Exception:  # noqa: BLE001 - shutdown must not mask the job
+                logger.warning("could not close MCP client", exc_info=True)
         await database.close()
 
 

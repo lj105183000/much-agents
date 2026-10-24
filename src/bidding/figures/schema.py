@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 FigureKind = Literal["org_chart", "process_flow", "gantt", "site_plan"]
-FigureSource = Literal["profile", "tender", "section", "mcp"]
+# External drawings record the exact MCP tool, e.g. "mcp:drawing/render_site_plan".
+FigureSource = str
+_LOCAL_SOURCES = frozenset({"profile", "tender", "section", "mcp"})
+_MCP_SOURCE_RE = re.compile(
+    r"^mcp:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+)
 
 
 class FigureSpec(BaseModel):
@@ -32,6 +38,14 @@ class FigureSpec(BaseModel):
     page_estimate: float = 0.5
     warnings: list[str] = Field(default_factory=list)
     external: bool = False
+
+    @field_validator("source")
+    @classmethod
+    def _safe_source(cls, value: str) -> str:
+        text = (value or "").strip()
+        if text in _LOCAL_SOURCES or _MCP_SOURCE_RE.fullmatch(text):
+            return text
+        raise ValueError("figure source must be a known local source or mcp:<server>/<tool>")
 
     @field_validator("file")
     @classmethod

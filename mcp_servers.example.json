@@ -1,0 +1,41 @@
+{
+  "servers": {
+    "company_kb": {
+      "transport": "stdio",
+      "command": "uv",
+      "args": ["run", "python", "-m", "company_kb_mcp"],
+      "timeout_seconds": 20,
+      "allowed_tools": [
+        {
+          "name": "search",
+          "purpose": "company",
+          "arguments": {
+            "query": "${query}",
+            "company": "${company_name}",
+            "limit": 5
+          },
+          "max_chars": 4000
+        }
+      ]
+    },
+    "drawing": {
+      "transport": "streamable_http",
+      "url": "http://127.0.0.1:9000/mcp",
+      "timeout_seconds": 45,
+      "allowed_tools": [
+        {
+          "name": "render_site_plan",
+          "purpose": "figure",
+          "arguments": {"spec": "${figure_spec}"},
+          "figure_kinds": ["site_plan"]
+        },
+        {
+          "name": "render_process_flow",
+          "purpose": "figure",
+          "arguments": {"spec": "${figure_spec}"},
+          "figure_kinds": ["process_flow"]
+        }
+      ]
+    }
+  }
+}

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 from src.bidding.checks import build_allowed
@@ -343,3 +344,62 @@ def test_parse_date_and_duration_ignore_placeholders() -> None:
     assert parse_duration_days("计划工期 218 日历天") == 218
     assert parse_duration_days("【待填写：工期】") is None
     assert len(FIGURE_RULES) == 4
+
+
+def test_external_renderer_marks_source_and_falls_back_on_failure(
+    tmp_path: Path,
+) -> None:
+    planned, profile, outputs, assembly, _settings = _planned(tmp_path)
+    settings = make_bid_settings(
+        tmp_path,
+        BID_FIGURES_EXTERNAL="true",
+        BID_FIGURES_USE_LLM="false",
+    )
+    seen: list[dict] = []
+
+    def renderer(spec: dict, target: Path) -> str:
+        seen.append(spec)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (240, 120), "white").save(target, format="PNG")
+        return "mcp:drawing/render_site_plan"
+
+    manifest = generate_figures(
+        context=planned.context,
+        profile=profile,
+        outline=planned.outline,
+        section_markdowns=assembly.section_markdowns,
+        outputs=outputs,
+        run_dir=tmp_path / "external",
+        settings=settings,
+        external_renderer=renderer,
+    )
+    assert {spec["kind"] for spec in seen} == {"process_flow", "site_plan"}
+    assert all("profile" not in json.dumps(spec, ensure_ascii=False) for spec in seen)
+    external = [spec for spec in manifest.figures if spec.external]
+    assert {spec.kind for spec in external} == {"process_flow", "site_plan"}
+    assert all(spec.source == "mcp:drawing/render_site_plan" for spec in external)
+    assert manifest.stats["external"] == 2
+    assert all("外部绘图工具" in spec.disclaimer for spec in external)
+
+    def failing(_spec: dict, _target: Path) -> str:
+        raise RuntimeError("drawing server unavailable")
+
+    fallback = generate_figures(
+        context=planned.context,
+        profile=profile,
+        outline=planned.outline,
+        section_markdowns=assembly.section_markdowns,
+        outputs=outputs,
+        run_dir=tmp_path / "fallback",
+        settings=settings,
+        external_renderer=failing,
+        force=True,
+    )
+    assert fallback.stats["external"] == 0
+    assert fallback.stats["generated"] == 4
+    assert all((tmp_path / "fallback" / spec.file).is_file() for spec in fallback.figures)
+    assert any(
+        "外部绘图工具失败" in warning
+        for spec in fallback.figures
+        for warning in spec.warnings
+    )

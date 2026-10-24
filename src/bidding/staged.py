@@ -27,7 +27,7 @@ from .models import (
     SectionReview,
     SectionRevision,
 )
-from .retrieval import TenderRetriever
+from .retrieval import TenderRetriever, truncate_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,20 @@ class StagedHooks(Protocol):
     async def heartbeat(self, stage: str, percent: int, message: str) -> None: ...
 
     async def is_cancelled(self) -> bool: ...
+
+
+class EvidenceProvider(Protocol):
+    async def __call__(
+        self,
+        *,
+        query: str,
+        doc_id: str,
+        top_k: int,
+        company_name: str = "",
+        project_name: str = "",
+        section_id: str = "",
+        section_title: str = "",
+    ) -> tuple[list[Evidence], list[str]]: ...
 
 
 @dataclass(slots=True)
@@ -75,6 +89,25 @@ async def _retrieve(
     except Exception as exc:  # noqa: BLE001 - one section must not kill the run
         logger.warning("retrieval failed for %s: %s", doc_id, exc)
         return [], f"retrieval failed: {type(exc).__name__}"
+
+
+def _merge_evidence(
+    local: list[Evidence],
+    external: list[Evidence],
+    max_chars: int,
+) -> list[Evidence]:
+    """Keep local tender evidence first, reserving at most a third for MCP.
+
+    Unused external budget is returned to local evidence, then the merged list
+    is truncated once more so the total never exceeds ``max_chars``.
+    """
+    budget = max(0, int(max_chars))
+    if not external:
+        return truncate_evidence(local, budget)
+    external_kept = truncate_evidence(external, max(1, budget // 3))
+    external_chars = sum(len(item.text) for item in external_kept)
+    local_kept = truncate_evidence(local, max(0, budget - external_chars))
+    return truncate_evidence([*local_kept, *external_kept], budget)
 
 
 async def _write(
@@ -173,6 +206,8 @@ async def _run_section(
     allowed: AllowedFacts,
     hooks: StagedHooks,
     semaphore: asyncio.Semaphore,
+    evidence_provider: EvidenceProvider | None = None,
+    company_name: str = "",
 ) -> StagedSectionOutcome:
     async with semaphore:
         if await hooks.is_cancelled():
@@ -197,6 +232,33 @@ async def _run_section(
                 context.doc_id,
                 settings.retrieval_top_k,
             )
+            provider_warnings: list[str] = []
+            if evidence_provider is not None:
+                try:
+                    external, provider_warnings = await evidence_provider(
+                        query=query,
+                        doc_id=context.doc_id,
+                        top_k=settings.retrieval_top_k,
+                        company_name=company_name,
+                        project_name=context.facts.project_name,
+                        section_id=section.id,
+                        section_title=section.title,
+                    )
+                except Exception as exc:  # noqa: BLE001 - MCP must not block a section
+                    logger.warning(
+                        "external evidence provider failed for %s: %s",
+                        section.id,
+                        exc,
+                    )
+                    external = []
+                    provider_warnings = [
+                        f"MCP 证据检索失败：{type(exc).__name__}"
+                    ]
+                evidence = _merge_evidence(
+                    evidence,
+                    external,
+                    settings.max_evidence_chars,
+                )
             await hooks.update_section(section.id, evidence_count=len(evidence))
             draft = await _write(
                 writer,
@@ -272,6 +334,7 @@ async def _run_section(
                         *draft.warnings,
                         *review.warnings,
                         *(revision.warnings if revision is not None else []),
+                        *provider_warnings,
                         *([retrieval_warning] if retrieval_warning else []),
                     ]
                 )
@@ -332,6 +395,8 @@ async def generate_sections(
     allowed: AllowedFacts,
     hooks: StagedHooks,
     section_ids: list[str] | None = None,
+    evidence_provider: EvidenceProvider | None = None,
+    company_name: str = "",
 ) -> StagedRunOutcome:
     requested = set(section_ids or [])
     candidates = [
@@ -370,6 +435,8 @@ async def generate_sections(
             allowed=allowed,
             hooks=hooks,
             semaphore=semaphore,
+            evidence_provider=evidence_provider,
+            company_name=company_name,
         )
         if result.status == "pending":
             cancelled = True
@@ -396,6 +463,7 @@ async def generate_sections(
 
 
 __all__ = [
+    "EvidenceProvider",
     "StagedHooks",
     "StagedRunOutcome",
     "StagedSectionOutcome",
