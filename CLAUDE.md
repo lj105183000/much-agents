@@ -264,3 +264,6 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `ENVIRONMENT=production` 会在启动时拒绝不安全配置；不要绕过 fail-fast。生产部署只用 `docker-compose.prod.yml`，不要直接用 `start.bat`。
 - 不要提交 `.env`、`deploy/env.production`、`backups/`、`deploy/nginx/certs/*.pem|key|crt`、`chroma_db/`、`upload/`、`node_modules/`、`dist/`、`release/`、真实的 `mcp_servers.json` 或 `.mcp.json`。
 - `profile.json` 永不进入 artifact allowlist、MCP 工具输出、Redis/Celery payload、审计 detail 或任何下载 URL；只存 MinIO 私有 key `private/profiles/<doc_id>/<run_id>.json`。外部证据默认不可信，外部绘图默认关闭。认证 token、密码也不得进入 URL、日志、审计 detail 或 Redis/Celery payload。
+- 项目以 **AGPL-3.0-or-later** 发布（根目录 `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md`）。新增或升级依赖必须与 AGPL-3.0 兼容，并更新 `THIRD_PARTY_NOTICES.md` 的组件表、版权行与所需许可证全文；PyMuPDF 为 AGPL-3.0 或 Artifex 商业许可双许可，闭源使用需购买商业许可。
+- 不要移除前端源码链接（`SourceLink`、`VITE_SOURCE_URL`）或 Docker/CI 中的许可证文件断言。修改版部署必须让 `VITE_SOURCE_URL` 指向自己发布的对应源码；这是 AGPL §13 的网络源码提供义务，不是可选装饰。
+- 许可证与源码链接属于公开分发面：不要把 `profile.json`、真实招标/投标数据、账号口令、token 或私钥带入 `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` / README / 前端构建产物。

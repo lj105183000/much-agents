@@ -2,8 +2,9 @@
 
 多 Agent 标书编写系统：把招标文件 PDF 解析为结构化知识，检索相关章节，由多个 Agent 生成投标文件，并完成合规检查、跨章节一致性核对、AI 配图与严格门禁导出。
 
-> 当前为内部/私有项目，未授予开源许可。生产部署与本轮验收边界见
-> [`docs/m1-acceptance-report.md`](docs/m1-acceptance-report.md)。
+> 本项目以 GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）发布。
+> 源码：<https://github.com/lj105183000/much-agents>。
+> 生产部署与本轮验收边界见 [`docs/m1-acceptance-report.md`](docs/m1-acceptance-report.md)。
 
 ## 主要能力
 
@@ -134,6 +135,8 @@ npm audit --omit=dev --audit-level=high
 - [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
 - [产品化路线图](docs/productization-roadmap.md)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
+- [贡献指南](CONTRIBUTING.md)
+- [第三方组件与许可证](THIRD_PARTY_NOTICES.md)
 
 ## 状态与未实现项
 
@@ -141,4 +144,16 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 
 ## License
 
-内部/私有项目，未授予开源许可。如需对外开源，请先补充合适的 LICENSE。
+Copyright (C) 2026 lj105183000。
+
+本项目以 **GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）** 发布：
+
+- 许可证全文：[`LICENSE`](LICENSE)（GNU 官方 AGPL-3.0 原文）。
+- 版权与源码地址：[`NOTICE`](NOTICE)。
+- 第三方组件归属：[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+AGPL §13 要求通过网络向用户提供服务时提供对应源代码。本项目在登录页与已登录页脚展示源码链接，默认指向 <https://github.com/lj105183000/much-agents>；修改版部署必须通过 `VITE_SOURCE_URL` 指向自己发布的对应源码（见 [`docs/deployment.md`](docs/deployment.md) 第 13 节）。
+
+**PyMuPDF 双许可提示**：本项目硬依赖 PyMuPDF 2.0，它以 AGPL-3.0 或 Artifex 商业许可双许可发布。本项目按 AGPL-3.0 使用；如需闭源或商业授权分发，必须向 Artifex 购买商业许可。
+
+以上内容不构成法律意见；商业闭源托管或分发前请咨询专业律师。

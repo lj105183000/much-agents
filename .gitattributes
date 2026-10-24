@@ -12,6 +12,8 @@
 *.bat text eol=crlf
 *.svg text eol=lf
 .gitignore text eol=lf
+LICENSE text eol=lf
+NOTICE text eol=lf
 .gitattributes text eol=lf
 .python-version text eol=lf
 .env.example text eol=lf
