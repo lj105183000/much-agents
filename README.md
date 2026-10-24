@@ -132,6 +132,7 @@ npm audit --omit=dev --audit-level=high
 - [审计哈希链](docs/audit.md)
 - [MinIO 对象存储](docs/minio-storage.md)
 - [生产部署与运维](docs/deployment.md)
+- [依赖安全审计与例外](docs/dependency-security.md)
 - [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
 - [产品化路线图](docs/productization-roadmap.md)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)

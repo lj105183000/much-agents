@@ -267,3 +267,4 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 项目以 **AGPL-3.0-or-later** 发布（根目录 `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md`）。新增或升级依赖必须与 AGPL-3.0 兼容，并更新 `THIRD_PARTY_NOTICES.md` 的组件表、版权行与所需许可证全文；PyMuPDF 为 AGPL-3.0 或 Artifex 商业许可双许可，闭源使用需购买商业许可。
 - 不要移除前端源码链接（`SourceLink`、`VITE_SOURCE_URL`）或 Docker/CI 中的许可证文件断言。修改版部署必须让 `VITE_SOURCE_URL` 指向自己发布的对应源码；这是 AGPL §13 的网络源码提供义务，不是可选装饰。
 - 许可证与源码链接属于公开分发面：不要把 `profile.json`、真实招标/投标数据、账号口令、token 或私钥带入 `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` / README / 前端构建产物。
+- pip-audit 的例外只允许按 GHSA ID 精确豁免，并记录在 `docs/dependency-security.md`；禁止包级忽略或关闭审计。例外失效条件（上游修复、暴露 Chroma、改用嵌入式服务端等）出现时必须重新评审。

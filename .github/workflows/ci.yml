@@ -119,7 +119,15 @@ jobs:
           version: "0.12.12"
           enable-cache: true
       - name: Python dependency audit
+        # chromadb 1.5.9 (latest) has four unfixed server-side advisories; our usage is
+        # client-only and Chroma is not published outside the Compose network. See
+        # docs/dependency-security.md. Keep this list scoped to those GHSA IDs and remove
+        # the exceptions as soon as upstream ships a fix.
         run: |
           uv export --frozen --no-dev --no-hashes --format requirements-txt \
             > "$RUNNER_TEMP/requirements.txt"
-          uvx --from pip-audit pip-audit -r "$RUNNER_TEMP/requirements.txt"
+          uvx --from pip-audit pip-audit -r "$RUNNER_TEMP/requirements.txt" \
+            --ignore-vuln GHSA-f4j7-r4q5-qw2c \
+            --ignore-vuln GHSA-2wm9-hf6c-p5cr \
+            --ignore-vuln GHSA-36p7-vc44-83pf \
+            --ignore-vuln GHSA-xph7-9rjv-w5fr
