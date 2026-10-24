@@ -21,6 +21,13 @@ from src.mcp_client.manager import (
     threadsafe_external_renderer,
 )
 from src.storage.base import Storage
+from src.storage.errors import StorageError, StorageObjectNotFound
+from src.storage.hydration import (
+    ensure_document_cached,
+    ensure_run_cached,
+    is_remote,
+)
+from src.storage.layout import StorageLayout
 
 from .bid_run_mapping import outline_from_records
 from .bid_run_repo import (
@@ -204,6 +211,32 @@ async def execute_staged_bid_job(
             return
 
         run_dir = bid_settings.bids_dir / run.doc_id / run.run_id
+        if is_remote(storage):
+            assert storage is not None
+            layout = StorageLayout(
+                upload_dir=bid_settings.upload_dir,
+                parsed_dir=bid_settings.parsed_dir,
+                bids_dir=bid_settings.bids_dir,
+            )
+            try:
+                ensure_document_cached(
+                    storage, bid_settings.parsed_dir, run.doc_id
+                )
+                ensure_run_cached(
+                    storage,
+                    layout,
+                    run.doc_id,
+                    run.run_id,
+                    required=True,
+                )
+            except StorageObjectNotFound as exc:
+                raise RuntimeError(
+                    "bidder profile snapshot is missing"
+                ) from exc
+            except StorageError as exc:
+                raise RuntimeError(
+                    f"object storage is unavailable: {exc}"
+                ) from exc
         profile_path = run_dir / "profile.json"
         if not profile_path.is_file():
             raise RuntimeError("bidder profile snapshot is missing")

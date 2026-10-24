@@ -24,6 +24,16 @@ from src.bidding.profile import BidderProfile
 from src.bidding.runner import run_bid_writing
 from src.parsing.artifacts import atomic_write_json, ensure_dir
 from src.storage.base import Storage
+from src.storage.errors import StorageError, StorageObjectNotFound
+from src.storage.hydration import (
+    ensure_document_cached,
+    ensure_run_cached,
+    is_remote,
+    sync_run_derived,
+    upload_private_profile,
+)
+from src.storage.keys import private_profile_key
+from src.storage.layout import StorageLayout
 
 from .companies import CompanyError, CompanyService
 from .config import ApiSettings
@@ -73,6 +83,17 @@ class BidService:
         max_sections: int | None,
         company_id: str | None = None,
     ) -> Job:
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    ensure_document_cached,
+                    self.storage,
+                    self.bid_settings.parsed_dir,
+                    doc_id,
+                )
+            except StorageError as exc:
+                raise UploadError(503, "object storage is unavailable") from exc
         try:
             TenderContext.validate(doc_id, self.bid_settings)
         except BidContextError as exc:
@@ -110,6 +131,19 @@ class BidService:
         job_id = uuid4().hex
         run_dir = ensure_dir(self.bid_settings.bids_dir / doc_id / job_id)
         atomic_write_json(run_dir / "profile.json", bidder_profile.to_dict())
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    upload_private_profile,
+                    self.storage,
+                    doc_id,
+                    job_id,
+                    run_dir / "profile.json",
+                )
+            except StorageError as exc:
+                shutil.rmtree(run_dir, ignore_errors=True)
+                raise UploadError(503, "object storage is unavailable") from exc
         payload = {"doc_id": doc_id, "max_sections": resolved_max}
         if company_key:
             payload["company_id"] = company_key
@@ -123,6 +157,17 @@ class BidService:
             )
         except JobStoreError as exc:
             shutil.rmtree(run_dir, ignore_errors=True)
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.delete,
+                        private_profile_key(doc_id, job_id),
+                    )
+                except StorageError:
+                    logger.warning(
+                        "could not remove the private profile", exc_info=True
+                    )
             raise UploadError(503, "job store is unavailable") from exc
 
         try:
@@ -186,6 +231,24 @@ def execute_bid_job(
                 logger.exception("could not mark staged bid job %s failed", job_id)
         return
 
+    layout = StorageLayout(
+        upload_dir=bid_settings.upload_dir,
+        parsed_dir=bid_settings.parsed_dir,
+        bids_dir=bid_settings.bids_dir,
+    )
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            ensure_document_cached(storage, bid_settings.parsed_dir, job.doc_id)
+            ensure_run_cached(storage, layout, job.doc_id, job.job_id, required=True)
+        except StorageObjectNotFound:
+            _fail(store, job_id, "bidder profile snapshot is missing", 2)
+            return
+        except StorageError as exc:
+            logger.warning("could not hydrate bid job %s: %s", job_id, exc)
+            _fail(store, job_id, "object storage is unavailable", 1)
+            return
+
     max_sections = payload.get("max_sections")
     if max_sections is not None and (
         isinstance(max_sections, bool)
@@ -222,6 +285,29 @@ def execute_bid_job(
         )
         summary = result.to_summary()
         if result.ok:
+            try:
+                stats = sync_run_derived(
+                    storage, layout, job.doc_id, job.job_id
+                )
+            except StorageError as exc:
+                store.mark_failed(
+                    job_id,
+                    error=f"could not sync bid artifacts: {exc}",
+                    exit_code=1,
+                    summary=summary,
+                )
+                return
+            if not stats.ok:
+                store.mark_failed(
+                    job_id,
+                    error=(
+                        "could not sync bid artifacts: "
+                        + "; ".join(stats.errors[:3])
+                    ),
+                    exit_code=1,
+                    summary=summary,
+                )
+                return
             store.mark_succeeded(job_id, summary)
         else:
             store.mark_failed(

@@ -3,9 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.bidding.errors import BidContextError
 from src.cli import main
 from tests.fakes import make_bid_result
+
+
+@pytest.fixture(autouse=True)
+def _local_storage(monkeypatch) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
 
 
 def _summary(capsys) -> dict:

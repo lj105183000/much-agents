@@ -13,6 +13,7 @@ from src.parsing.errors import IngestError
 def _isolated_cli_env(monkeypatch, tmp_path: Path) -> None:
     """Keep CLI tests independent from the developer's .env and real keys."""
     monkeypatch.setattr("src.parsing.config.load_dotenv", lambda *args, **kwargs: False)
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
     for name in (
         "MINERU_API_KEY",
         "DEEPSEEK_API_KEY",

@@ -13,6 +13,9 @@ from src.bidding.config import BidSettings
 from src.bidding.errors import BID_EXIT_INTERNAL, BidError, BidInputError
 from src.bidding.runner import run_bid_writing
 from src.parsing.logging_utils import configure_logging, configure_stdio, make_progress
+from src.storage import StorageLayout, build_storage
+from src.storage.errors import StorageError
+from src.storage.hydration import ensure_document_cached, is_remote, sync_run_derived
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,20 @@ def main(argv: list[str] | None = None) -> int:
         if profile_path is not None and not profile_path.is_file():
             raise BidInputError(f"bidder profile not found: {profile_path}")
 
+        layout = StorageLayout(
+            upload_dir=settings.upload_dir,
+            parsed_dir=settings.parsed_dir,
+            bids_dir=args.out or settings.bids_dir,
+        )
+        storage = build_storage(settings.storage, layout)
+        if is_remote(storage):
+            try:
+                ensure_document_cached(storage, settings.parsed_dir, args.doc_id)
+            except StorageError as exc:
+                logger.warning(
+                    "object storage unavailable; using local parsed files: %s", exc
+                )
+
         result = run_bid_writing(
             args.doc_id,
             profile_path=profile_path,
@@ -62,6 +79,18 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             progress=make_progress(args.verbose),
         )
+        if result.ok and is_remote(storage):
+            try:
+                stats = sync_run_derived(
+                    storage, layout, args.doc_id, result.run_id
+                )
+                if not stats.ok:
+                    logger.warning(
+                        "bid artifacts were not fully synced: %s",
+                        "; ".join(stats.errors[:3]),
+                    )
+            except StorageError as exc:
+                logger.warning("could not sync bid artifacts: %s", exc)
         print(json.dumps(result.to_summary(), ensure_ascii=False))
         return result.exit_code
     except BidError as exc:

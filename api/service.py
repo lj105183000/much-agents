@@ -381,3 +381,15 @@ class ParseService:
         finally:
             if not upload_complete:
                 shutil.rmtree(job_dir, ignore_errors=True)
+                if is_remote(self.storage):
+                    assert self.storage is not None
+                    try:
+                        await asyncio.to_thread(
+                            self.storage.delete, inbox_key(job_id)
+                        )
+                    except StorageError:
+                        logger.warning(
+                            "could not remove the inbox object for job %s",
+                            job_id,
+                            exc_info=True,
+                        )

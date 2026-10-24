@@ -48,9 +48,17 @@ from src.mcp_client.manager import (
 )
 from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
 from src.storage.base import Storage
-from src.storage.errors import StorageError
-from src.storage.hydration import is_remote
-from src.storage.keys import run_prefix
+from src.storage.errors import StorageError, StorageObjectNotFound
+from src.storage.hydration import (
+    delete_run_derived,
+    ensure_document_cached,
+    ensure_run_cached,
+    is_remote,
+    sync_run,
+    sync_run_derived,
+)
+from src.storage.keys import private_profile_key, run_prefix
+from src.storage.layout import StorageLayout
 
 from .bid_run_mapping import (
     outline_data_from_records,
@@ -354,7 +362,129 @@ class BidRunService:
     def _run_dir(self, run: BidRunRecord) -> Path:
         return self.bid_settings.bids_dir / run.doc_id / run.run_id
 
-    def _clear_reports(self, run: BidRunRecord, *, include_figures: bool = True) -> None:
+    def _layout(self) -> StorageLayout:
+        return StorageLayout(
+            upload_dir=self.bid_settings.upload_dir,
+            parsed_dir=self.bid_settings.parsed_dir,
+            bids_dir=self.bid_settings.bids_dir,
+        )
+
+    async def _ensure_document(self, doc_id: str) -> None:
+        if not is_remote(self.storage):
+            return
+        assert self.storage is not None
+        try:
+            await asyncio.to_thread(
+                ensure_document_cached,
+                self.storage,
+                self.bid_settings.parsed_dir,
+                doc_id,
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+
+    async def _ensure_run_profile(self, run: BidRunRecord) -> Path:
+        """Hydrate the private profile (and any missing run inputs)."""
+        run_dir = self._run_dir(run)
+        if not is_remote(self.storage):
+            if not (run_dir / "profile.json").is_file():
+                raise BidRunError(409, "bidder profile snapshot is missing")
+            return run_dir
+        assert self.storage is not None
+        try:
+            await asyncio.to_thread(
+                ensure_run_cached,
+                self.storage,
+                self._layout(),
+                run.doc_id,
+                run.run_id,
+                required=True,
+            )
+        except StorageObjectNotFound as exc:
+            raise BidRunError(409, "bidder profile snapshot is missing") from exc
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        return run_dir
+
+    async def _ensure_run_files(
+        self,
+        run: BidRunRecord,
+        relative_paths: tuple[str, ...],
+    ) -> None:
+        if not is_remote(self.storage):
+            return
+        assert self.storage is not None
+        try:
+            await asyncio.to_thread(
+                self.storage.ensure_files,
+                run_prefix(run.doc_id, run.run_id),
+                self._run_dir(run),
+                relative_paths,
+                required=False,
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+
+    async def _sync_run_files(
+        self,
+        run: BidRunRecord,
+        relative_paths: tuple[str, ...],
+    ) -> None:
+        if not is_remote(self.storage):
+            return
+        assert self.storage is not None
+        run_dir = self._run_dir(run)
+        prefix = run_prefix(run.doc_id, run.run_id)
+        try:
+            for relative in relative_paths:
+                path = run_dir / relative
+                if path.is_file():
+                    await asyncio.to_thread(
+                        self.storage.put_file, f"{prefix}/{relative}", path
+                    )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+
+    async def _sync_run_derived(self, run: BidRunRecord) -> None:
+        if not is_remote(self.storage):
+            return
+        assert self.storage is not None
+        try:
+            stats = await asyncio.to_thread(
+                sync_run_derived,
+                self.storage,
+                self._layout(),
+                run.doc_id,
+                run.run_id,
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        if not stats.ok:
+            logger.warning(
+                "could not fully sync bid run %s: %s",
+                run.run_id,
+                "; ".join(stats.errors[:3]),
+            )
+
+    def _discard_run_objects(self, doc_id: str, run_id: str) -> None:
+        if not is_remote(self.storage):
+            return
+        assert self.storage is not None
+        try:
+            self.storage.delete_prefix(run_prefix(doc_id, run_id))
+        except StorageError:
+            logger.warning("could not remove remote run objects", exc_info=True)
+        try:
+            self.storage.delete(private_profile_key(doc_id, run_id))
+        except StorageError:
+            logger.warning("could not remove the private profile", exc_info=True)
+
+    async def _clear_reports(
+        self,
+        run: BidRunRecord,
+        *,
+        include_figures: bool = True,
+    ) -> None:
         """Remove derived reports/figures that no longer match the run."""
         run_dir = self._run_dir(run)
         for name in ("compliance.json", "consistency.json", "gate.json", "report.json"):
@@ -366,6 +496,19 @@ class BidRunService:
                 logger.warning("could not remove stale %s", name, exc_info=True)
         if include_figures:
             clear_figures(run_dir)
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    delete_run_derived,
+                    self.storage,
+                    self._layout(),
+                    run.doc_id,
+                    run.run_id,
+                    include_figures=include_figures,
+                )
+            except StorageError:
+                logger.warning("could not remove stale remote reports", exc_info=True)
 
     def _llm_client(self) -> Any | None:
         if self.llm_factory is not None:
@@ -383,6 +526,7 @@ class BidRunService:
             return None
 
     async def create(self, payload: BidRequest) -> BidRunCreatedResponse:
+        await self._ensure_document(payload.doc_id)
         try:
             TenderContext.validate(payload.doc_id, self.bid_settings)
         except BidContextError as exc:
@@ -548,10 +692,40 @@ class BidRunService:
             started_at=None,
             finished_at=None,
         )
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                stats = await asyncio.to_thread(
+                    sync_run,
+                    self.storage,
+                    self._layout(),
+                    payload.doc_id,
+                    run_id,
+                )
+            except StorageError as exc:
+                shutil.rmtree(run_dir, ignore_errors=True)
+                await asyncio.to_thread(
+                    self._discard_run_objects, payload.doc_id, run_id
+                )
+                raise BidRunError(503, "object storage is unavailable") from exc
+            if not stats.ok:
+                shutil.rmtree(run_dir, ignore_errors=True)
+                await asyncio.to_thread(
+                    self._discard_run_objects, payload.doc_id, run_id
+                )
+                logger.warning(
+                    "could not sync the new bid run: %s",
+                    "; ".join(stats.errors[:3]),
+                )
+                raise BidRunError(503, "object storage is unavailable")
+
         try:
             await self._repo().create(run, outline_sections, states)
         except Exception as exc:  # noqa: BLE001 - database errors become 503
             shutil.rmtree(run_dir, ignore_errors=True)
+            await asyncio.to_thread(
+                self._discard_run_objects, payload.doc_id, run_id
+            )
             logger.exception("could not persist bid run %s", run_id)
             raise BidRunError(503, "bid-run database is unavailable") from exc
 
@@ -710,7 +884,7 @@ class BidRunService:
         if not updated:
             raise BidRunError(409, "outline revision conflict; reload and try again")
         if invalidated or new_status == "outline_ready":
-            self._clear_reports(run)
+            await self._clear_reports(run)
         return BidOutlinePatchResponse(
             run_id=run.run_id,
             revision=new_revision,
@@ -811,6 +985,9 @@ class BidRunService:
         ]
         if not generated_ids:
             raise BidRunError(422, "all selected narrative sections are already final")
+
+        await self._ensure_run_profile(run)
+        await self._ensure_document(run.doc_id)
 
         job_id = uuid4().hex
         generation_token = uuid4().hex
@@ -1008,6 +1185,8 @@ class BidRunService:
         if state.status != "final":
             raise BidRunError(409, "only a final section can be edited")
 
+        await self._ensure_run_profile(run)
+        await self._ensure_document(run.doc_id)
         context, profile, outline = self._load_edit_context(run, records)
         section = next(
             (item for item in outline.sections if item.id == section_id),
@@ -1056,7 +1235,7 @@ class BidRunService:
         )
         if not run_updated:
             raise BidRunError(409, "bid run changed; reload and try again")
-        self._clear_reports(run)
+        await self._clear_reports(run)
         return await self.get_section(run_id, section_id)
 
     async def regenerate_section(
@@ -1119,7 +1298,7 @@ class BidRunService:
                 finished_at=prior.finished_at,
             )
             raise BidRunError(409, "bid run changed; reload and try again")
-        self._clear_reports(run)
+        await self._clear_reports(run)
         try:
             return await self.generate(
                 run_id,
@@ -1149,7 +1328,7 @@ class BidRunService:
                 gate=None,
                 finished_at=None,
             )
-            self._clear_reports(run)
+            await self._clear_reports(run)
             raise
 
     async def _load_validation_inputs(
@@ -1164,10 +1343,9 @@ class BidRunService:
         Any,
     ]:
         repo = self._repo()
-        run_dir = self._run_dir(run)
+        run_dir = await self._ensure_run_profile(run)
+        await self._ensure_document(run.doc_id)
         profile_path = run_dir / "profile.json"
-        if not profile_path.is_file():
-            raise BidRunError(409, "bidder profile snapshot is missing")
         try:
             context = TenderContext.load(run.doc_id, self.bid_settings)
             profile = BidderProfile.from_file(profile_path)
@@ -1209,6 +1387,7 @@ class BidRunService:
             outputs,
             allowed,
         ) = await self._load_validation_inputs(run)
+        await self._ensure_run_files(run, ("figures/manifest.json",))
         manifest = read_manifest(run_dir)
         try:
             assembly = assemble_staged_bid(
@@ -1245,10 +1424,13 @@ class BidRunService:
             evaluation,
         )
 
-    def _read_reports(
+    async def _read_reports(
         self,
         run: BidRunRecord,
     ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        await self._ensure_run_files(
+            run, ("compliance.json", "consistency.json")
+        )
         run_dir = self._run_dir(run)
         try:
             compliance = read_json(run_dir / "compliance.json")
@@ -1272,6 +1454,9 @@ class BidRunService:
             atomic_write_json(run_dir / "consistency.json", evaluation.consistency)
         except OSError:
             logger.warning("could not persist compliance reports", exc_info=True)
+        await self._sync_run_files(
+            run, ("compliance.json", "consistency.json")
+        )
         return BidComplianceResponse(
             run_id=run_id,
             compliance=evaluation.compliance,
@@ -1283,7 +1468,7 @@ class BidRunService:
         run = await repo.get_run(run_id)
         if run is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
-        reports = self._read_reports(run)
+        reports = await self._read_reports(run)
         if reports is None:
             raise BidRunError(
                 404,
@@ -1301,7 +1486,7 @@ class BidRunService:
         run = await repo.get_run(run_id)
         if run is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
-        reports = self._read_reports(run)
+        reports = await self._read_reports(run)
         if reports is None:
             raise BidRunError(
                 404,
@@ -1419,10 +1604,9 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid run: {run_id}")
         if run.status in ACTIVE_RUN_STATUSES and not allow_active:
             raise BidRunError(409, "cannot assemble while the run is active")
-        run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        run_dir = await self._ensure_run_profile(run)
+        await self._ensure_document(run.doc_id)
         profile_path = run_dir / "profile.json"
-        if not profile_path.is_file():
-            raise BidRunError(409, "bidder profile snapshot is missing")
         try:
             context = TenderContext.load(run.doc_id, self.bid_settings)
             profile = BidderProfile.from_file(profile_path)
@@ -1541,6 +1725,8 @@ class BidRunService:
             logger.exception("could not assemble bid run %s", run_id)
             raise BidRunError(500, "bid assembly failed") from exc
 
+        await self._sync_run_derived(run)
+
         warnings = list(
             dict.fromkeys([*assembly.warnings, *(result.get("report", {}).get("warnings") or [])])
         )
@@ -1623,6 +1809,7 @@ class BidRunService:
         run = await repo.get_run(run_id)
         if run is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
+        await self._ensure_run_files(run, ("figures/manifest.json",))
         manifest = read_manifest(self._run_dir(run))
         if manifest is None and (
             self._run_dir(run) / "figures" / "manifest.json"
@@ -1702,7 +1889,8 @@ class BidRunService:
         )
         if not updated:
             raise BidRunError(409, "bid run changed; reload and try again")
-        self._clear_reports(run, include_figures=False)
+        await self._clear_reports(run, include_figures=False)
+        await self._sync_run_derived(run)
         return self._figures_response(run, manifest)
 
     async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:

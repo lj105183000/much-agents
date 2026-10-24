@@ -24,6 +24,8 @@ from .errors import (
 from .logging_utils import configure_logging, configure_stdio, make_progress
 from .models import ParseOptions
 from .pipeline import parse_document
+from src.storage import StorageLayout, build_storage, parsed_prefix
+from src.storage.errors import StorageError
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,26 @@ def main(argv: list[str] | None = None) -> int:
     progress = make_progress(args.verbose or args.debug)
     try:
         result = parse_document(args.pdf, options, settings, progress)
+        if result.ok and settings.storage.backend != "local":
+            try:
+                storage = build_storage(
+                    settings.storage,
+                    StorageLayout(
+                        upload_dir=settings.upload_dir,
+                        parsed_dir=result.output_dir.parent,
+                        bids_dir=settings.upload_dir / "bids",
+                    ),
+                )
+                stats = storage.sync_up(
+                    result.output_dir, parsed_prefix(result.doc_id)
+                )
+                if not stats.ok:
+                    logger.warning(
+                        "parsed artifacts were not fully synced: %s",
+                        "; ".join(stats.errors[:3]),
+                    )
+            except StorageError as exc:
+                logger.warning("could not sync parsed artifacts: %s", exc)
         print(json.dumps(result.to_summary(), ensure_ascii=False))
         return result.exit_code
     except InputError as exc:
