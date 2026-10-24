@@ -509,3 +509,40 @@ export interface BidGateResponse {
   consistency_status: 'consistent' | 'warning' | 'conflict' | null
   consistency_summary: BidConsistencySummary | null
 }
+
+export type BidFigureKind =
+  | 'org_chart'
+  | 'process_flow'
+  | 'gantt'
+  | 'site_plan'
+
+export interface BidFigureView {
+  figure_id: string
+  index: number
+  section_id: string
+  section_title: string
+  kind: BidFigureKind
+  title: string
+  caption: string
+  disclaimer: string
+  source: string
+  file: string
+  width_cm: number
+  external: boolean
+  warnings: string[]
+  download_url: string | null
+}
+
+export interface BidFiguresResponse {
+  run_id: string
+  enabled: boolean
+  generated_at: string | null
+  figures: BidFigureView[]
+  skipped: Array<Record<string, unknown>>
+  stats: Record<string, number | string | boolean | null>
+  warnings: string[]
+}
+
+export interface BidFigureRegenerateRequest {
+  force?: boolean
+}

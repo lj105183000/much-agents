@@ -10,6 +10,7 @@ import type {
 import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
 import { BidCompliancePanel } from '../components/BidCompliancePanel'
+import { BidFiguresPanel } from '../components/BidFiguresPanel'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
@@ -527,6 +528,15 @@ export function BidView({
     bidRun.refresh()
   }
 
+  const handleFiguresChanged = () => {
+    setGate(null)
+    setGateError(null)
+    setExportError(null)
+    setComplianceRefresh((value) => value + 1)
+    setNotice('配图已重新生成；旧门禁与合规报告已失效，请重新组装。')
+    bidRun.refresh()
+  }
+
   const resetRun = () => {
     setRunId(null)
     onRunChange(null)
@@ -849,6 +859,16 @@ export function BidView({
               runId={run.run_id}
               active={active}
               onApplied={handleFixApplied}
+            />
+          ) : null}
+
+          {run ? (
+            <BidFiguresPanel
+              key={run.run_id}
+              runId={run.run_id}
+              refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
+              active={active}
+              onChanged={handleFiguresChanged}
             />
           ) : null}
 

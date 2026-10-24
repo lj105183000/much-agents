@@ -407,6 +407,72 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert detail["gate_status"] == gate["status"]
 
 
+def test_bid_run_figures_api_and_regeneration(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": sample_profile(), "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        empty = client.get(f"/api/bid-runs/{run_id}/figures")
+        assert empty.status_code == 200
+        assert empty.json()["run_id"] == run_id
+        assert empty.json()["figures"] == []
+
+        _mark_section_final(repo, run_id)
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        response = client.get(f"/api/bid-runs/{run_id}/figures")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        kinds = {item["kind"] for item in body["figures"]}
+        assert kinds == {"org_chart", "gantt", "site_plan"}
+        assert body["stats"]["generated"] == 3
+        assert [item["index"] for item in body["figures"]] == [1, 2, 3]
+        first = body["figures"][0]
+        image = client.get(first["download_url"])
+        assert image.status_code == 200
+        assert image.headers["content-type"] == "image/png"
+        assert image.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+        artifacts = client.get(f"/api/documents/doc-1/bids/{run_id}/artifacts")
+        assert artifacts.status_code == 200
+        rows = {row["path"]: row for row in artifacts.json()["artifacts"]}
+        manifest = rows["figures/manifest.json"]
+        assert manifest["content_type"] == "application/json"
+        assert manifest["previewable"] is True
+        assert rows[first["file"]]["previewable"] is True
+        assert "profile.json" not in rows
+        profile = client.get(
+            f"/api/documents/doc-1/bids/{run_id}/artifacts/profile.json"
+        )
+        assert profile.status_code == 404
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "gate.json").is_file()
+        regenerated = client.post(
+            f"/api/bid-runs/{run_id}/figures/regenerate",
+            json={"force": True},
+        )
+        assert regenerated.status_code == 200, regenerated.text
+        assert regenerated.json()["stats"]["generated"] == 3
+        assert (run_dir / "figures" / "manifest.json").is_file()
+        assert not (run_dir / "gate.json").exists()
+        assert not (run_dir / "report.json").exists()
+        assert not (run_dir / "compliance.json").exists()
+        assert not (run_dir / "consistency.json").exists()
+        assert repo.runs[run_id].status == "paused"
+        assert repo.runs[run_id].stage == "edited"
+        assert repo.runs[run_id].gate is None
+        assert client.get(f"/api/bid-runs/{run_id}/gate").status_code == 404
+
+        repo.runs[run_id] = replace(repo.runs[run_id], status="generating")
+        active = client.post(f"/api/bid-runs/{run_id}/figures/regenerate", json={})
+        assert active.status_code == 409
+        assert client.get("/api/bid-runs/unknown/figures").status_code == 404
+
+
 def test_bid_run_edit_invalidates_figures_and_gate(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:

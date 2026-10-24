@@ -5,6 +5,8 @@ import type {
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
+  BidFigureRegenerateRequest,
+  BidFiguresResponse,
   BidFixApplyRequest,
   BidFixPlanRequest,
   BidFixPlanResponse,
@@ -384,6 +386,26 @@ export const api = {
   getBidGate(runId: string): Promise<BidGateResponse> {
     return request<BidGateResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  listBidFigures(runId: string): Promise<BidFiguresResponse> {
+    return request<BidFiguresResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/figures`,
+    )
+  },
+
+  regenerateBidFigures(
+    runId: string,
+    payload: BidFigureRegenerateRequest = {},
+  ): Promise<BidFiguresResponse> {
+    return request<BidFiguresResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/figures/regenerate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
   },
 

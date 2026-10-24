@@ -205,6 +205,39 @@ class BidGateResponse(BaseModel):
     consistency_summary: dict[str, Any] | None = None
 
 
+class BidFigureView(BaseModel):
+    figure_id: str
+    index: int
+    section_id: str
+    section_title: str
+    kind: str
+    title: str
+    caption: str
+    disclaimer: str
+    source: str
+    file: str
+    width_cm: float = 15.5
+    external: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    download_url: str | None = None
+
+
+class BidFiguresResponse(BaseModel):
+    run_id: str
+    enabled: bool = True
+    generated_at: str | None = None
+    figures: list[BidFigureView] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    stats: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidFigureRegenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = True
+
+
 class BidComplianceResponse(BaseModel):
     run_id: str
     compliance: dict[str, Any]

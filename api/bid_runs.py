@@ -10,6 +10,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -56,6 +57,9 @@ from .schemas import (
     BidConsistencyResponse,
     BidFixApplyRequest,
     BidFixPlanRequest,
+    BidFigureRegenerateRequest,
+    BidFiguresResponse,
+    BidFigureView,
     BidFixPlanResponse,
     BidGateResponse,
     BidGenerateRequest,
@@ -283,7 +287,7 @@ class BidRunService:
     def _run_dir(self, run: BidRunRecord) -> Path:
         return self.bid_settings.bids_dir / run.doc_id / run.run_id
 
-    def _clear_reports(self, run: BidRunRecord) -> None:
+    def _clear_reports(self, run: BidRunRecord, *, include_figures: bool = True) -> None:
         """Remove derived reports/figures that no longer match the run."""
         run_dir = self._run_dir(run)
         for name in ("compliance.json", "consistency.json", "gate.json", "report.json"):
@@ -293,7 +297,8 @@ class BidRunService:
                 continue
             except OSError:
                 logger.warning("could not remove stale %s", name, exc_info=True)
-        clear_figures(run_dir)
+        if include_figures:
+            clear_figures(run_dir)
 
     def _llm_client(self) -> Any | None:
         if self.llm_factory is not None:
@@ -1488,6 +1493,133 @@ class BidRunService:
         if not run.gate:
             raise BidRunError(404, "gate is not available; assemble the run first")
         return self._gate_response(run)
+
+    def _figures_response(
+        self,
+        run: BidRunRecord,
+        manifest: Any,
+    ) -> BidFiguresResponse:
+        if manifest is None:
+            return BidFiguresResponse(
+                run_id=run.run_id,
+                enabled=self.bid_settings.figures_enabled,
+                generated_at=None,
+                figures=[],
+                skipped=[],
+                stats={},
+                warnings=[],
+            )
+        prefix = (
+            f"/api/documents/{quote(run.doc_id, safe='')}"
+            f"/bids/{quote(run.run_id, safe='')}/artifacts"
+        )
+        figures = [
+            BidFigureView(
+                figure_id=spec.figure_id,
+                index=index,
+                section_id=spec.section_id,
+                section_title=spec.section_title,
+                kind=spec.kind,
+                title=spec.title,
+                caption=spec.caption,
+                disclaimer=spec.disclaimer,
+                source=spec.source,
+                file=spec.file,
+                width_cm=spec.width_cm,
+                external=spec.external,
+                warnings=list(spec.warnings),
+                download_url=f"{prefix}/{quote(spec.file, safe='/')}",
+            )
+            for index, spec in enumerate(manifest.figures, start=1)
+        ]
+        return BidFiguresResponse(
+            run_id=run.run_id,
+            enabled=manifest.enabled,
+            generated_at=manifest.generated_at,
+            figures=figures,
+            skipped=list(manifest.skipped),
+            stats=dict(manifest.stats),
+            warnings=list(manifest.warnings),
+        )
+
+    async def get_figures(self, run_id: str) -> BidFiguresResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        manifest = read_manifest(self._run_dir(run))
+        if manifest is None and (
+            self._run_dir(run) / "figures" / "manifest.json"
+        ).is_file():
+            return BidFiguresResponse(
+                run_id=run_id,
+                enabled=self.bid_settings.figures_enabled,
+                figures=[],
+                warnings=["配图清单无法读取，请重新生成配图"],
+            )
+        return self._figures_response(run, manifest)
+
+    async def regenerate_figures(
+        self,
+        run_id: str,
+        payload: BidFigureRegenerateRequest | None = None,
+    ) -> BidFiguresResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise BidRunError(409, "cannot regenerate figures while the run is active")
+        (
+            run_dir,
+            context,
+            profile,
+            outline,
+            outputs,
+            allowed,
+        ) = await self._load_validation_inputs(run)
+        force = bool(payload.force) if payload is not None else True
+        try:
+            base = assemble_staged_bid(
+                context=context,
+                profile=profile,
+                outline=outline,
+                outputs=outputs,
+                allowed=allowed,
+                warnings=list(run.warnings),
+            )
+            figure_llm = (
+                self._llm_client() if self.bid_settings.figures_use_llm else None
+            )
+            manifest = await asyncio.to_thread(
+                generate_figures,
+                context=context,
+                profile=profile,
+                outline=outline,
+                section_markdowns=base.section_markdowns,
+                outputs=outputs,
+                run_dir=run_dir,
+                settings=self.bid_settings,
+                llm=figure_llm,
+                force=force,
+            )
+        except Exception as exc:  # noqa: BLE001 - report a controlled API error
+            logger.exception("could not regenerate figures for bid run %s", run_id)
+            raise BidRunError(500, "figure regeneration failed") from exc
+        updated = await repo.update_run(
+            run_id,
+            status="paused",
+            stage="edited",
+            percent=run.percent,
+            message="figures regenerated; re-assemble",
+            gate_status=None,
+            gate=None,
+            finished_at=None,
+        )
+        if not updated:
+            raise BidRunError(409, "bid run changed; reload and try again")
+        self._clear_reports(run, include_figures=False)
+        return self._figures_response(run, manifest)
 
     async def export(self, run_id: str, *, force: bool = False) -> Path:
         repo = self._repo()

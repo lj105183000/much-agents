@@ -32,6 +32,10 @@ BID_PATTERNS: tuple[str, ...] = (
     "compliance.json",
     "consistency.json",
     "sections/*.md",
+    "figures/*.png",
+    "figures/*.jpg",
+    "figures/*.jpeg",
+    "figures/manifest.json",
 )
 
 _CONTENT_TYPES = {
@@ -40,10 +44,15 @@ _CONTENT_TYPES = {
     ".jsonl": "application/x-ndjson",
     ".txt": "text/plain; charset=utf-8",
     ".csv": "text/csv; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 _PREVIEW_SUFFIXES = {".md", ".json", ".jsonl", ".txt", ".csv"}
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 _PREVIEW_MAX_BYTES = 2_000_000
+_IMAGE_PREVIEW_MAX_BYTES = 8_000_000
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-一-鿿.]+$")
 _RESERVED = {
     "CON",
@@ -169,8 +178,14 @@ def list_artifacts(
                     ),
                     content_type=artifact_content_type(path),
                     previewable=(
-                        suffix in _PREVIEW_SUFFIXES
-                        and stat.st_size <= _PREVIEW_MAX_BYTES
+                        (
+                            suffix in _PREVIEW_SUFFIXES
+                            and stat.st_size <= _PREVIEW_MAX_BYTES
+                        )
+                        or (
+                            suffix in _IMAGE_SUFFIXES
+                            and stat.st_size <= _IMAGE_PREVIEW_MAX_BYTES
+                        )
                     ),
                     download_url=f"{url_prefix}/{quote(relative, safe='/')}",
                 )

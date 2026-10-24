@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   api,
   ApiError,
@@ -34,6 +34,26 @@ function prettyJson(text: string): string {
 }
 
 const PREVIEW_CHAR_LIMIT = 60_000
+
+function isPreviewableImage(artifact: ArtifactInfo | null): boolean {
+  return Boolean(artifact?.content_type.startsWith('image/'))
+}
+
+function resolveArtifactImage(
+  artifact: ArtifactInfo,
+  src: string,
+): string | null {
+  if (/^https?:\/\//i.test(src)) return src
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return null
+  try {
+    const base = new URL(artifactUrl(artifact))
+    const resolved = new URL(src, base)
+    if (resolved.origin !== base.origin) return null
+    return resolved.toString()
+  } catch {
+    return null
+  }
+}
 
 export function ArtifactPanel({
   source,
@@ -77,10 +97,15 @@ export function ArtifactPanel({
   }, [key])
 
   useEffect(() => {
-    if (!selected || !selected.previewable) {
+    if (
+      !selected ||
+      !selected.previewable ||
+      isPreviewableImage(selected)
+    ) {
       setPreview(null)
       setPreviewError(null)
       setPreviewTruncated(false)
+      setPreviewLoading(false)
       return
     }
     let cancelled = false
@@ -108,6 +133,12 @@ export function ArtifactPanel({
       cancelled = true
     }
   }, [selected])
+
+  const resolveImageUrl = useCallback(
+    (src: string) => (selected ? resolveArtifactImage(selected, src) : null),
+    [selected],
+  )
+  const selectedIsImage = isPreviewableImage(selected)
 
   return (
     <Card className={cn('overflow-hidden', className)}>
@@ -204,28 +235,46 @@ export function ArtifactPanel({
           ) : null
         }
       >
-        {previewTruncated ? (
-          <p className="mb-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200">
-            内容较长，仅预览前 {PREVIEW_CHAR_LIMIT.toLocaleString()} 个字符；完整内容请下载文件。
-          </p>
-        ) : null}
-        {previewLoading ? (
-          <div className="flex items-center gap-2 py-10 text-xs text-slate-500">
-            <Spinner className="h-4 w-4" />
-            正在读取预览…
+        {selectedIsImage && selected ? (
+          <div className="flex flex-col items-center gap-3">
+            <img
+              src={artifactUrl(selected)}
+              alt={selected.name}
+              className="max-h-[68vh] max-w-full rounded-xl border border-slate-800 bg-white object-contain shadow-lg shadow-black/20"
+            />
+            <p className="text-center text-[11px] text-slate-500">
+              {selected.path} · {formatBytes(selected.size)}
+            </p>
           </div>
-        ) : previewError ? (
-          <p className="py-8 text-xs text-red-200">{previewError}</p>
-        ) : selected?.path.endsWith('.md') ? (
-          <MarkdownPreview content={preview ?? ''} />
-        ) : selected?.path.endsWith('.json') ? (
-          <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-[11px] leading-6 text-slate-300">
-            {prettyJson(preview ?? '')}
-          </pre>
         ) : (
-          <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-[11px] leading-6 text-slate-300">
-            {preview ?? ''}
-          </pre>
+          <>
+            {previewTruncated ? (
+              <p className="mb-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200">
+                内容较长，仅预览前 {PREVIEW_CHAR_LIMIT.toLocaleString()} 个字符；完整内容请下载文件。
+              </p>
+            ) : null}
+            {previewLoading ? (
+              <div className="flex items-center gap-2 py-10 text-xs text-slate-500">
+                <Spinner className="h-4 w-4" />
+                正在读取预览…
+              </div>
+            ) : previewError ? (
+              <p className="py-8 text-xs text-red-200">{previewError}</p>
+            ) : selected?.path.endsWith('.md') ? (
+              <MarkdownPreview
+                content={preview ?? ''}
+                resolveImageUrl={resolveImageUrl}
+              />
+            ) : selected?.path.endsWith('.json') ? (
+              <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-[11px] leading-6 text-slate-300">
+                {prettyJson(preview ?? '')}
+              </pre>
+            ) : (
+              <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-[11px] leading-6 text-slate-300">
+                {preview ?? ''}
+              </pre>
+            )}
+          </>
         )}
       </Modal>
     </Card>

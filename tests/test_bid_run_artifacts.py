@@ -23,6 +23,9 @@ def test_staged_job_artifacts_use_run_id_and_hide_profile(tmp_path: Path) -> Non
     (run_dir / "bid.md").write_text("# bid", encoding="utf-8")
     (run_dir / "bid.docx").write_bytes(b"PK")
     (run_dir / "gate.json").write_text("{}", encoding="utf-8")
+    (run_dir / "figures").mkdir()
+    (run_dir / "figures" / "fig-01.png").write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    (run_dir / "figures" / "manifest.json").write_text("{}", encoding="utf-8")
     (run_dir / "profile.json").write_text('{"secret": "PROFILE-SECRET"}', encoding="utf-8")
 
     job = Job(
@@ -46,12 +49,26 @@ def test_staged_job_artifacts_use_run_id_and_hide_profile(tmp_path: Path) -> Non
     assert "profile.json" not in patterns
 
     artifacts = list_artifacts(root, patterns, "/artifacts")
-    assert {item.path for item in artifacts} == {"bid.md", "bid.docx", "gate.json"}
+    assert {item.path for item in artifacts} == {
+        "bid.md",
+        "bid.docx",
+        "gate.json",
+        "figures/fig-01.png",
+        "figures/manifest.json",
+    }
+    image = next(item for item in artifacts if item.path.endswith(".png"))
+    assert image.content_type == "image/png"
+    assert image.previewable is True
     assert resolve_artifact(root, patterns, "gate.json").is_file()
+    assert resolve_artifact(root, patterns, "figures/fig-01.png").is_file()
     with pytest.raises(ArtifactError):
         resolve_artifact(root, patterns, "profile.json")
+    with pytest.raises(ArtifactError):
+        resolve_artifact(root, patterns, "figures/../profile.json")
 
 
 def test_bid_patterns_never_include_profile() -> None:
     assert "gate.json" in BID_PATTERNS
+    assert "figures/manifest.json" in BID_PATTERNS
+    assert "figures/*.png" in BID_PATTERNS
     assert "profile.json" not in BID_PATTERNS

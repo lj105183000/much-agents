@@ -31,6 +31,8 @@ from .schemas import (
     BidComplianceResponse,
     BidConsistencyResponse,
     BidCreatedResponse,
+    BidFigureRegenerateRequest,
+    BidFiguresResponse,
     BidFixApplyRequest,
     BidFixPlanRequest,
     BidFixPlanResponse,
@@ -306,6 +308,27 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGateResponse:
         return await service.get_gate(run_id)
+
+    @router.get(
+        "/bid-runs/{run_id}/figures",
+        response_model=BidFiguresResponse,
+    )
+    async def get_bid_run_figures(
+        run_id: str,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidFiguresResponse:
+        return await service.get_figures(run_id)
+
+    @router.post(
+        "/bid-runs/{run_id}/figures/regenerate",
+        response_model=BidFiguresResponse,
+    )
+    async def regenerate_bid_run_figures(
+        run_id: str,
+        payload: BidFigureRegenerateRequest | None = None,
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidFiguresResponse:
+        return await service.regenerate_figures(run_id, payload)
 
     @router.get(
         "/bid-runs/{run_id}/compliance",
