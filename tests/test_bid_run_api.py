@@ -744,7 +744,7 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         repo.runs[run_id] = replace(
             repo.runs[run_id],
             status="assembled",
-            attempt=2,
+            attempt=1,
             gate_status="warn",
             gate={"status": "warn", "checks": []},
         )
@@ -768,7 +768,7 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         assert state.warnings == []
         run = repo.runs[run_id]
         assert run.status == "queued"
-        assert run.attempt == 1
+        assert run.attempt == 2
         assert run.gate is None
         assert run.gate_status is None
 
@@ -787,8 +787,36 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         again = client.post(
             f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
         )
-        assert again.status_code == 202, again.text
-        assert repo.runs[run_id].attempt == 1
+        assert again.status_code == 409
+        assert repo.runs[run_id].attempt == 2
+
+
+def test_bid_run_section_regenerate_respects_section_attempt_limit(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.runs[run_id] = replace(
+            repo.runs[run_id], status="assembled", attempt=0
+        )
+        repo.states[run_id] = [
+            replace(item, attempt=2)
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+
+        response = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert response.status_code == 409
+        assert "maximum attempts" in response.json()["detail"]
 
 
 def test_bid_run_section_regenerate_rolls_back_on_enqueue_failure(
