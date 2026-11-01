@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。PDF/DOC 导出、审批与版本、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验。PDF/DOC 导出、审批与版本、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -42,6 +42,10 @@ uv run celery -A api.celery_app:celery_app worker -Q parse,bid --pool=solo --log
 docker compose -f docker-compose.prod.yml up -d --build                      # 生产单机部署（Nginx TLS + 全部依赖）
 scripts/backup.sh && scripts/restore.sh backups/<timestamp>                  # 备份 / 恢复（bash，生产主机）
 uv run python -m scripts.worker_healthcheck parse                             # 检查是否有 worker 消费指定队列
+uv run python -m scripts.baseline_metrics                                    # 从已有 parsed/bids 产物生成 L0 离线基线
+uv run python -m scripts.eval_dataset build --all                            # 构建私有评测集到 eval-data/（gitignored）
+uv run python -m scripts.eval_dataset validate                               # 校验评测集结构并提示待人工标注项
+uv run python -m scripts.dlq --limit 20                                      # 查看 Redis 死信列表
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
 uv run python -m api.mcp_server --check      # 列出 MCP 服务端工具后退出
@@ -161,7 +165,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 - `POST /api/parse`：multipart `file`，查询参数 `parser=auto|mineru|pymupdf`、`extract=true`、`ingest=true`；**默认执行完整流程**；返回 202 + `job_id`/`poll_url`/`doc_id`。
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
-- `GET /api/health`：返回 `storage_backend`/`storage_ok`；MinIO 不可达时 `status=degraded` 但仍 200。`GET /api/live` 始终 200；`GET /api/ready` 检查 Redis/DB/storage，失败 503，结果缓存 `READINESS_CACHE_SECONDS`。
+- `GET /api/health`：返回 `storage_backend`/`storage_ok`；MinIO 不可达时 `status=degraded` 但仍 200。`GET /api/live` 始终 200；`GET /api/ready` 检查 Redis/DB/storage/Chroma，失败 503，结果缓存 `READINESS_CACHE_SECONDS`；`READINESS_STRICT=false` 时 Chroma 失败返回 200+degraded。`GET /api/metrics` 返回 Prometheus 文本指标，`METRICS_TOKEN` 可要求 Bearer；生产 Nginx 对 `/api/metrics` 返回 404，由内网 Prometheus 直接抓取。
 - `GET /api/documents`：只列出当前项目 `documents` 注册表内的文档（minio 模式结合对象列表），返回项目名、页数、chunks、bid_ready 与历史 bid run。
 - `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；只检索当前项目允许的文档；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，项目外/未知 doc 404。minio 模式的关键词检索通过 `iter_lines` 直接读 `chunks.jsonl`。
 - `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：先校验项目归属，再按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；minio 模式流式返回对象字节并支持 `GET`/`HEAD`/`Range`；路径穿越返回 404，**`profile.json` 永不暴露**；`bid.docx` 已从 allowlist 移除，DOCX 只能走严格门禁导出。
@@ -238,18 +242,19 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批流与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、监控告警与 Celery beat、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
+- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批流与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、Prometheus/Grafana 告警栈、L1 标注与 L2 judge 校准、DOCX 质量检查、镜像 digest pin/SBOM/签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`ENVIRONMENT`、`API_HOST/API_PORT`、`DOCS_ENABLED`、`TRUSTED_PROXIES`、`READINESS_CACHE_SECONDS`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`MAX_PDF_PAGES`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`CELERY_SOFT_TIME_LIMIT_SECONDS`、`CELERY_TIME_LIMIT_SECONDS`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
+- 生产就绪与运维：`READINESS_STRICT`、`METRICS_ENABLED`、`METRICS_TOKEN`、`LOG_FORMAT`、`BID_SECTION_MAX_ATTEMPTS`、`BID_HEARTBEAT_SECONDS`、`DEEPSEEK_ALLOW_FALLBACK`、`LLM_PRICE_TABLE`，以及 `BACKUP_ENCRYPT`/`BACKUP_AGE_RECIPIENT`/`BACKUP_GPG_RECIPIENT`/`BACKUP_OFFSITE_TARGET`/`BACKUP_METRICS_DIR`。
 - 认证：`AUTH_ENABLED`（默认 true）、`AUTH_SESSION_TTL_HOURS`、`AUTH_LOGIN_MAX_FAILURES`、`AUTH_LOCKOUT_MINUTES`、`AUTH_HASH_CONCURRENCY`、`AUTH_LOGIN_IP_MAX_FAILURES`、`AUTH_LOGIN_IP_WINDOW_SECONDS`、`TRUSTED_PROXIES`、`MCP_API_TOKEN`、`MCP_DEFAULT_PROJECT_ID`。`AUTH_ENABLED=false` 仅用于无数据库的本机开发，所有请求按本地 admin 处理。
 - 对象存储：`STORAGE_BACKEND`（默认 minio）、`MINIO_ENDPOINT`、`MINIO_SECURE`、`MINIO_BUCKET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_CONSOLE_PORT`（仅 start.bat）、`MINIO_TIMEOUT_SECONDS`。
 - AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。
 - MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`、`MCP_API_TOKEN`（调用业务 API 的 service token）。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
 - 生产部署：`deploy/env.production` 从 `deploy/env.production.example` 复制（真实文件已 gitignore），其中 `ENVIRONMENT=production` 触发 fail-fast；TLS 证书放在 `deploy/nginx/certs/{fullchain.pem,privkey.pem}`（已 gitignore，可用 `generate-self-signed.sh` 生成）。生产只通过 `docker compose -f docker-compose.prod.yml` 启动，详见 `docs/deployment.md`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
-- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
+- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建，项目/文档注册表由 `0004` 创建，`audit_events` 由 `0005` 创建，`llm_call_log`/`run_usage` 由 `0006` 创建，章节 `generation_token`/`last_heartbeat_at` 由 `0007` 增加，`bid_runs.content_sha256` 由 `0008` 增加。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
