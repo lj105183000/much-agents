@@ -108,6 +108,17 @@ def test_deepseek_client_fallback_and_disabled_fallback() -> None:
     assert disabled.last_usage["status"] == "error"
 
 
+def test_empty_price_table_warns_once(monkeypatch, caplog) -> None:
+    import logging
+
+    import src.bidding.llm_usage as llm_usage
+
+    monkeypatch.setattr(llm_usage, "_price_warning_emitted", False)
+    with caplog.at_level(logging.WARNING):
+        assert llm_usage.load_price_table("") == {}
+    assert any("LLM_PRICE_TABLE" in record.message for record in caplog.records)
+
+
 def test_price_table_and_cost_estimation(tmp_path) -> None:
     table = load_price_table(
         json.dumps(

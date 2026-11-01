@@ -22,6 +22,7 @@ from src.bidding.errors import BidLLMTruncatedError
 from src.observability.metrics import record_llm_usage
 
 logger = logging.getLogger(__name__)
+_price_warning_emitted = False
 
 
 class _Metered(Protocol):
@@ -123,6 +124,12 @@ def load_price_table(raw: str | None = None) -> dict[str, dict[str, Any]]:
     value = raw if raw is not None else os.environ.get("LLM_PRICE_TABLE", "")
     value = (value or "").strip()
     if not value:
+        global _price_warning_emitted
+        if not _price_warning_emitted:
+            logger.warning(
+                "LLM_PRICE_TABLE is not configured; LLM cost_cny will be null/zero"
+            )
+            _price_warning_emitted = True
         return {}
     try:
         if Path(value).is_file():
