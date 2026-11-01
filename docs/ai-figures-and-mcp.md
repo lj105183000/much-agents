@@ -517,6 +517,6 @@ MCP_CLIENT_ENABLED=true uv run python -m src.mcp_client check
 
 - 文生图模型、自由绘图、Logo/品牌模板；
 - 配图审批流与可编辑 figure spec UI；
-- PDF/DOC 导出；
+- DOC（97-2003）导出；PDF 导出已通过 Headless LibreOffice 提供；
 - MCP OAuth、远程多用户、LLM 自由调用任意 MCP 工具；
 - 前端 MCP 配置 UI。

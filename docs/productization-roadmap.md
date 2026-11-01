@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`。
+> 状态：路线图（2026-10-24，2026-11-01 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复与 P3 的 PDF 导出（Headless LibreOffice）也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`。
 
 ## Context
 

@@ -28,6 +28,9 @@ import type {
   BidRunListResponse,
   BidSectionDetail,
   BidSectionUpdateRequest,
+  BidSectionVersionDetail,
+  BidSectionVersionDiffResponse,
+  BidSectionVersionListResponse,
   CompanyDetail,
   CompanyListResponse,
   CompanyUpsertRequest,
@@ -555,6 +558,49 @@ export const api = {
     )
   },
 
+  listBidSectionVersions(
+    runId: string,
+    sectionId: string,
+    limit = 50,
+  ): Promise<BidSectionVersionListResponse> {
+    return request<BidSectionVersionListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions?limit=${limit}`,
+    )
+  },
+
+  getBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+  ): Promise<BidSectionVersionDetail> {
+    return request<BidSectionVersionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}`,
+    )
+  },
+
+  diffBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+    against?: number,
+  ): Promise<BidSectionVersionDiffResponse> {
+    const query = against ? `?against=${against}` : ''
+    return request<BidSectionVersionDiffResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/diff${query}`,
+    )
+  },
+
+  restoreBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+  ): Promise<BidSectionDetail> {
+    return request<BidSectionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/restore`,
+      { method: 'POST' },
+    )
+  },
+
   regenerateBidSection(
     runId: string,
     sectionId: string,
@@ -692,6 +738,14 @@ export const api = {
     const query = force ? '?force=true' : ''
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export${query}`,
+      { method: 'POST' },
+    )
+  },
+
+  exportBidRunPdf(runId: string, force = false): Promise<Blob> {
+    const query = force ? '?force=true' : ''
+    return requestBlob(
+      `/api/bid-runs/${encodeURIComponent(runId)}/export/pdf${query}`,
       { method: 'POST' },
     )
   },

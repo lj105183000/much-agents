@@ -34,6 +34,7 @@ DERIVED_REPORT_FILES: tuple[str, ...] = (
     "consistency.json",
     "gate.json",
     "report.json",
+    "bid.pdf",
 )
 
 

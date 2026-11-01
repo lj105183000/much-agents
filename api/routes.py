@@ -109,6 +109,9 @@ from .schemas import (
     BidRunListResponse,
     BidSectionDetail,
     BidSectionUpdateRequest,
+    BidSectionVersionDetail,
+    BidSectionVersionDiffResponse,
+    BidSectionVersionListResponse,
     CompanyDetail,
     CompanyListResponse,
     CompanySummary,
@@ -1459,14 +1462,21 @@ def build_router() -> APIRouter:
         run_id: str,
         payload: BidFixApplyRequest,
         request: Request,
+        user: UserContext = Depends(require_user),
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidSectionDetail:
-        result = await service.apply_fix(run_id, payload)
+        result = await service.apply_fix(
+            run_id,
+            payload,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
         await _audit(
             request,
             "bid_run.fix.apply",
             context=context,
+            actor=user,
             resource_type="bid_run",
             resource_id=run_id,
             detail={"section_id": payload.section_id},
@@ -1548,6 +1558,83 @@ def build_router() -> APIRouter:
             return _artifact_response(target.path)
         return stored_artifact_response(request, storage, info)
 
+    @router.post("/bid-runs/{run_id}/export/pdf")
+    async def export_bid_run_pdf(
+        run_id: str,
+        request: Request,
+        force: bool = Query(False),
+        reason: str | None = Query(default=None, max_length=500),
+        user: UserContext = Depends(require_user),
+        context: ProjectContext = Depends(require_run_read),
+        projects: ProjectService = Depends(get_project_service),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        if force:
+            if user.is_service or user.role != "admin":
+                raise HTTPException(
+                    status_code=403,
+                    detail="only an administrator can force export",
+                )
+            if not (reason or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="force export requires a reason",
+                )
+        else:
+            if not (user.is_service or can_manage(user)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="export requires bid manager permission",
+                )
+            if not projects.has_permission(context, "manage"):
+                raise HTTPException(status_code=403, detail="permission denied")
+        target = await service.export_pdf(run_id, force=force)
+        if force:
+            try:
+                await service.record_force_override(
+                    run_id,
+                    reason=(reason or "").strip(),
+                    actor_id=user.id,
+                    actor_name=user.display_name or user.username,
+                )
+            except Exception:  # noqa: BLE001 - export already succeeded
+                logger.warning(
+                    "could not record forced PDF export override",
+                    exc_info=True,
+                )
+        storage = _remote_storage(request)
+        info = None
+        if storage is not None:
+            info = await asyncio.to_thread(storage.stat, target.key)
+            if info is None:
+                raise HTTPException(
+                    status_code=404, detail="artifact is unavailable"
+                )
+        await _audit(
+            request,
+            "bid_run.export_pdf",
+            context=context,
+            actor=user,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"force": force},
+            required=True,
+        )
+        if force:
+            await _audit(
+                request,
+                "bid_run.export_pdf.force",
+                context=context,
+                actor=user,
+                resource_type="bid_run",
+                resource_id=run_id,
+                detail={"reason": (reason or "").strip()},
+                required=True,
+            )
+        if storage is None:
+            return _artifact_response(target.path)
+        return stored_artifact_response(request, storage, info)
+
     @router.get(
         "/bid-runs/{run_id}/sections/{section_id}",
         response_model=BidSectionDetail,
@@ -1569,17 +1656,112 @@ def build_router() -> APIRouter:
         section_id: str,
         payload: BidSectionUpdateRequest,
         request: Request,
+        user: UserContext = Depends(require_user),
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidSectionDetail:
-        result = await service.edit_section(run_id, section_id, payload)
+        result = await service.edit_section(
+            run_id,
+            section_id,
+            payload,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
         await _audit(
             request,
             "bid_run.section.edit",
             context=context,
+            actor=user,
             resource_type="bid_run",
             resource_id=run_id,
             detail={"section_id": section_id},
+        )
+        return result
+
+    @router.get(
+        "/bid-runs/{run_id}/sections/{section_id}/versions",
+        response_model=BidSectionVersionListResponse,
+    )
+    async def list_bid_run_section_versions(
+        run_id: str,
+        section_id: str,
+        limit: int = Query(50, ge=1, le=100),
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionVersionListResponse:
+        return BidSectionVersionListResponse(
+            **await service.list_section_versions(
+                run_id, section_id, limit=limit
+            )
+        )
+
+    @router.get(
+        "/bid-runs/{run_id}/sections/{section_id}/versions/{version_id}",
+        response_model=BidSectionVersionDetail,
+    )
+    async def get_bid_run_section_version(
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionVersionDetail:
+        return BidSectionVersionDetail(
+            **await service.get_section_version(
+                run_id, section_id, version_id
+            )
+        )
+
+    @router.get(
+        "/bid-runs/{run_id}/sections/{section_id}/versions/{version_id}/diff",
+        response_model=BidSectionVersionDiffResponse,
+    )
+    async def diff_bid_run_section_version(
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        against: int | None = Query(None, ge=1),
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionVersionDiffResponse:
+        return BidSectionVersionDiffResponse(
+            **await service.diff_section_version(
+                run_id,
+                section_id,
+                version_id,
+                against_version_id=against,
+            )
+        )
+
+    @router.post(
+        "/bid-runs/{run_id}/sections/{section_id}/versions/{version_id}/restore",
+        response_model=BidSectionDetail,
+    )
+    async def restore_bid_run_section_version(
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        request: Request,
+        user: UserContext = Depends(require_user),
+        context: ProjectContext = Depends(require_run_write),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidSectionDetail:
+        result = await service.restore_section_version(
+            run_id,
+            section_id,
+            version_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
+        await _audit(
+            request,
+            "bid_run.section.version_restore",
+            context=context,
+            actor=user,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"section_id": section_id, "version_id": version_id},
+            required=True,
         )
         return result
 

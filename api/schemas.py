@@ -221,6 +221,42 @@ class BidSectionDetail(BaseModel):
     error: str | None = None
 
 
+class BidSectionVersionView(BaseModel):
+    id: int
+    version: int
+    source: str
+    content_sha256: str
+    char_count: int = 0
+    created_by: str | None = None
+    created_by_name: str | None = None
+    created_at: str
+
+
+class BidSectionVersionListResponse(BaseModel):
+    run_id: str
+    section_id: str
+    versions: list[BidSectionVersionView] = Field(default_factory=list)
+
+
+class BidSectionVersionDetail(BidSectionVersionView):
+    run_id: str
+    section_id: str
+    markdown: str
+
+
+class BidSectionVersionDiffResponse(BaseModel):
+    run_id: str
+    section_id: str
+    version_id: int
+    against_version_id: int | None = None
+    from_label: str
+    to_label: str
+    from_sha256: str
+    to_sha256: str
+    changed: bool
+    diff: str
+
+
 class BidGateResponse(BaseModel):
     run_id: str
     status: str

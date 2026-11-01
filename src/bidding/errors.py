@@ -35,3 +35,7 @@ class BidGenerationError(BidError):
 
 class BidExportError(BidError):
     exit_code = BID_EXIT_EXPORT
+
+
+class PdfExportError(BidExportError):
+    """PDF conversion is unavailable or failed."""

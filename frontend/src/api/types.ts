@@ -466,6 +466,42 @@ export interface BidSectionDetail {
   error: string | null
 }
 
+export interface BidSectionVersion {
+  id: number
+  version: number
+  source: string
+  content_sha256: string
+  char_count: number
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+}
+
+export interface BidSectionVersionListResponse {
+  run_id: string
+  section_id: string
+  versions: BidSectionVersion[]
+}
+
+export interface BidSectionVersionDetail extends BidSectionVersion {
+  run_id: string
+  section_id: string
+  markdown: string
+}
+
+export interface BidSectionVersionDiffResponse {
+  run_id: string
+  section_id: string
+  version_id: number
+  against_version_id: number | null
+  from_label: string
+  to_label: string
+  from_sha256: string
+  to_sha256: string
+  changed: boolean
+  diff: string
+}
+
 export interface BidSectionUpdateRequest {
   markdown: string
 }
