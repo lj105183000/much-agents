@@ -248,7 +248,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批 UI 与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、Prometheus/Grafana 告警栈、L1 人工复核与 L2 judge 校准数据、Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
+- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批 UI 与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、Prometheus/Grafana 告警栈、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
 
 ### 配置与数据
 
