@@ -262,7 +262,7 @@ docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus 
 ```
 
 - Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
-- Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`。
+- Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`，并预置 `Much Agents Overview` 看板（5xx、readiness、24h LLM 成本、队列深度、run 状态、LLM 调用状态）。
 - 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（信息级）。
 - `METRICS_TOKEN` 非空时，需要给 Prometheus 增加 `authorization` 配置；默认假设 API 只在内部 Compose 网络可达。
 - `monitoring` profile 默认不启动，不影响普通部署；Grafana 管理员密码缺失时会回退到 `change_me`，生产必须显式设置。

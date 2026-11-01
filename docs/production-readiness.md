@@ -22,7 +22,7 @@
 - 供应链：MinIO/Chroma/Postgres/Redis 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
 - L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
 - 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单，供专家确认评分因素、候选点和关键事实。
-- 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Grafana、5 条告警规则和 Grafana 数据源；Grafana 仅绑定 `127.0.0.1:3000`。
+- 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Grafana、5 条告警规则、Grafana 数据源与 `Much Agents Overview` 看板；Grafana 仅绑定 `127.0.0.1:3000`，看板已实测加载（HTTP 200）。
 - 检索快照：每个章节的 query、mode、top_k、命中 chunk/score/页码/文本哈希写入 `retrieval_snapshots`（迁移 `0010`），不保存证据原文。
 - Prompt registry：`prompt_registry`（迁移 `0011`）记录 prompt 文件哈希、默认模型/温度与 git sha，`scripts/seed_prompts.py` 可重复 upsert。
 
