@@ -5,6 +5,27 @@
 > 关联文档：[产品化路线图](productization-roadmap.md)、[生产部署与运维](deployment.md)、[M1 生产验收报告](m1-acceptance-report.md)
 > 本文只做诊断与分阶段规划，不代表已实施；功能现状以代码与 `CLAUDE.md` 为准。
 
+## 实施进度（2026-11-01）
+
+已落地：
+
+- L0 指标模块与离线基线脚本：`src/bidding/metrics.py`、`scripts/baseline_metrics.py`；报告新增 `coverage.weighted`、`coverage.reviewer_gap`。
+- 私有评测集构建/校验：`src/evaluation/dataset.py`、`scripts/eval_dataset.py`；真实标书写入 gitignored 的 `eval-data/`。
+- LLM 调用账本与成本计量：`src/bidding/llm_usage.py`、迁移 `0006`、`llm_call_log`/`run_usage`；记录实际模型、token、延迟、重试、fallback、finish_reason。
+- 单节重试上限与 regenerate 绕过修复：`BID_SECTION_MAX_ATTEMPTS`。
+- Chroma readiness、JSON 日志、request_id 贯穿 API→Celery、`/api/metrics` 与核心指标：`src/observability/`、`api/metrics.py`。
+- 可靠性：独立心跳、generation_token 条件写、Celery beat stale reaper、取消终态修复、Redis DLQ 与 `scripts/dlq.py`；迁移 `0007`。
+- 备份：`age`/`gpg` 加密归档、rclone/rsync 异地、最后成功指标、systemd timer。
+- 交付完整性：assembled run 写入 `content_sha256`，导出前校验；迁移 `0008`。
+
+仍待实施（按优先级）：
+
+- 审批 API/UI 与 `BID_REQUIRE_APPROVAL` 的完整流程（当前只有 force 留痕与内容哈希）。
+- DOCX 质量检查（TOC 域、页码、字体、DPI、表头重复）。
+- 镜像 digest pin、Trivy/Syft/Cosign CI（当前环境无法解析 registry digest）。
+- L1 5–10 份评测集的人工标注、L2 judge 校准、夜间真实模型回归。
+- 检索快照、prompt registry 完整落地、MinerU/Embedding 配额、PITR。
+
 ## 0. 摘要
 
 ### 0.1 三句话结论
