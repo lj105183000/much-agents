@@ -152,6 +152,44 @@ def _text_units(
     return units, 1, []
 
 
+def _ocr_units(
+    path: Path,
+    *,
+    size: int,
+    overlap: int,
+    parser: Any,
+    doc_id: str,
+) -> tuple[list[tuple[str, int, int, str]], int]:
+    """Use the MinerU OCR parser and turn its blocks into attachment units."""
+
+    parsed = parser.parse(path, doc_id)
+    units: list[tuple[str, int, int, str]] = []
+    blocks = getattr(parsed, "content_list", None) or []
+    for block in blocks:
+        block_type = str(getattr(block, "type", "text") or "text").lower()
+        if block_type == "image":
+            continue
+        text = str(
+            getattr(block, "table_body", None)
+            or getattr(block, "text", "")
+            or ""
+        ).strip()
+        if not text:
+            continue
+        page = int(getattr(block, "page", 1) or 1)
+        kind = "table" if getattr(block, "table_body", None) else "text"
+        for piece in _split_text(text, size, overlap):
+            units.append((piece, page, page, kind))
+    if not units:
+        markdown = str(getattr(parsed, "markdown", "") or "").strip()
+        units = [
+            (piece, 1, 1, "text")
+            for piece in _split_text(markdown, size, overlap)
+        ]
+    pages = int(getattr(parsed, "page_count", 0) or 0)
+    return units, pages
+
+
 def build_attachment_chunks(
     doc_id: str,
     path: str | Path,
@@ -160,6 +198,7 @@ def build_attachment_chunks(
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
     overlap: int = _DEFAULT_OVERLAP,
     use_tables: bool = True,
+    ocr_parser: Any | None = None,
 ) -> tuple[list[Chunk], dict[str, Any]]:
     """Build chunks for one attachment without touching the parsed document."""
 
@@ -186,6 +225,29 @@ def build_attachment_chunks(
             use_tables=use_tables,
         )
         parser = "pymupdf"
+        if ocr_parser is not None and warnings:
+            try:
+                ocr_units, ocr_pages = _ocr_units(
+                    source,
+                    size=size,
+                    overlap=overlap_value,
+                    parser=ocr_parser,
+                    doc_id=f"{doc_id}-{attachment_id}",
+                )
+                if ocr_units:
+                    units = ocr_units
+                    pages = ocr_pages or pages
+                    parser = "mineru"
+                    warnings = [
+                        item
+                        for item in warnings
+                        if "no extractable text" not in item
+                    ]
+                    warnings.append("used MinerU OCR fallback")
+            except Exception as exc:  # noqa: BLE001 - OCR is best-effort
+                warnings.append(
+                    f"MinerU OCR failed: {type(exc).__name__}: {exc}"
+                )
     elif suffix in TABLE_SUFFIXES:
         units, pages, warnings = _csv_units(
             source, size=size, overlap=overlap_value
@@ -262,6 +324,56 @@ def _read_project_name(parsed_dir: Path) -> str:
     return str(overview.get("project_name") or "").strip()
 
 
+def _load_attachments(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(payload, dict):
+        raw = payload.get("attachments")
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _write_attachments(path: Path, items: list[dict[str, Any]]) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps({"attachments": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _sync_parsed_files(
+    settings: Settings,
+    doc_id: str,
+    paths: list[Path],
+) -> tuple[bool, list[str]]:
+    if settings.storage.backend == "local":
+        return False, []
+    try:
+        from src.storage.factory import build_storage
+        from src.storage.layout import StorageLayout
+
+        layout = StorageLayout(
+            upload_dir=settings.upload_dir,
+            parsed_dir=settings.parsed_dir,
+            bids_dir=settings.upload_dir / "bids",
+        )
+        storage = build_storage(settings.storage, layout)
+        for path in paths:
+            storage.put_file(f"parsed/{doc_id}/{path.name}", path)
+        return True, []
+    except Exception as exc:  # noqa: BLE001 - remote sync is best-effort
+        return False, [f"storage sync failed: {type(exc).__name__}: {exc}"]
+
+
 def append_attachment_chunks(
     parsed_dir: Path,
     *,
@@ -296,31 +408,14 @@ def append_attachment_chunks(
     temporary.replace(chunks_path)
 
     attachments_path = parsed_dir / "attachments.json"
-    existing: list[dict[str, Any]] = []
-    if attachments_path.is_file():
-        try:
-            payload = json.loads(attachments_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            payload = None
-        if isinstance(payload, dict):
-            raw = payload.get("attachments")
-            if isinstance(raw, list):
-                existing = [item for item in raw if isinstance(item, dict)]
-        elif isinstance(payload, list):
-            existing = [item for item in payload if isinstance(item, dict)]
     existing = [
         item
-        for item in existing
+        for item in _load_attachments(attachments_path)
         if item.get("attachment_id") != attachment_id
         and item.get("sha256") != meta.get("sha256")
     ]
     existing.append(dict(meta))
-    temporary = attachments_path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps({"attachments": existing}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary.replace(attachments_path)
+    _write_attachments(attachments_path, existing)
     return {
         "chunks_path": str(chunks_path),
         "attachments_path": str(attachments_path),
@@ -337,6 +432,7 @@ def attach_evidence(
     ingest: bool = True,
     collection: str | None = None,
     sync_storage: bool = True,
+    allow_ocr: bool = True,
 ) -> dict[str, Any]:
     """Parse an attachment, append its chunks and optionally upsert Chroma."""
 
@@ -347,6 +443,17 @@ def attach_evidence(
             f"parsed document {doc_id} not found under {parsed_dir}; parse it first"
         )
     project_name = _read_project_name(parsed_dir)
+    setup_warnings: list[str] = []
+    ocr_parser = None
+    if allow_ocr and settings.mineru_api_key:
+        try:
+            from .parsers.mineru import MineruParser
+
+            ocr_parser = MineruParser(settings)
+        except Exception as exc:  # noqa: BLE001 - OCR is optional
+            setup_warnings.append(
+                f"MinerU OCR unavailable: {type(exc).__name__}: {exc}"
+            )
     chunks, meta = build_attachment_chunks(
         doc_id,
         path,
@@ -354,6 +461,7 @@ def attach_evidence(
         chunk_size=settings.chunk_size,
         overlap=settings.chunk_overlap,
         use_tables=settings.pymupdf_tables,
+        ocr_parser=ocr_parser,
     )
     appended = append_attachment_chunks(
         parsed_dir,
@@ -362,7 +470,7 @@ def attach_evidence(
         chunks=chunks,
         meta=meta,
     )
-    warnings = list(meta.get("warnings") or [])
+    warnings = [*setup_warnings, *list(meta.get("warnings") or [])]
     ingest_summary: dict[str, Any] | None = None
     if ingest:
         try:
@@ -380,26 +488,16 @@ def attach_evidence(
             else:
                 raise
     storage_synced = False
-    if sync_storage and settings.storage.backend != "local":
-        try:
-            from src.storage.factory import build_storage
-            from src.storage.layout import StorageLayout
-
-            layout = StorageLayout(
-                upload_dir=settings.upload_dir,
-                parsed_dir=settings.parsed_dir,
-                bids_dir=settings.upload_dir / "bids",
-            )
-            storage = build_storage(settings.storage, layout)
-            storage.put_file(
-                f"parsed/{doc_id}/chunks.jsonl", Path(appended["chunks_path"])
-            )
-            storage.put_file(
-                f"parsed/{doc_id}/attachments.json", Path(appended["attachments_path"])
-            )
-            storage_synced = True
-        except Exception as exc:  # noqa: BLE001 - remote sync is best-effort
-            warnings.append(f"storage sync failed: {type(exc).__name__}: {exc}")
+    if sync_storage:
+        storage_synced, sync_warnings = _sync_parsed_files(
+            settings,
+            doc_id,
+            [
+                Path(appended["chunks_path"]),
+                Path(appended["attachments_path"]),
+            ],
+        )
+        warnings.extend(sync_warnings)
     return {
         "ok": True,
         "doc_id": doc_id,
@@ -421,9 +519,98 @@ def attach_evidence(
     }
 
 
+def list_attachments(doc_id: str, settings: Settings) -> dict[str, Any]:
+    path = settings.parsed_dir / doc_id / "attachments.json"
+    return {
+        "ok": True,
+        "doc_id": doc_id,
+        "attachments": _load_attachments(path),
+        "attachments_path": str(path),
+    }
+
+
+def detach_evidence(
+    doc_id: str,
+    attachment_id: str,
+    settings: Settings,
+    *,
+    collection: str | None = None,
+    sync_storage: bool = True,
+    delete_chroma: bool = True,
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Remove one attachment's chunks, manifest entry and Chroma vectors."""
+
+    parsed_dir = settings.parsed_dir / doc_id
+    chunks_path = parsed_dir / "chunks.jsonl"
+    if not chunks_path.is_file():
+        raise AttachmentError(
+            f"parsed document {doc_id} not found under {parsed_dir}; parse it first"
+        )
+    prefix = f"{doc_id}:{attachment_id}:"
+    kept: list[str] = []
+    removed_ids: list[str] = []
+    for line in chunks_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            kept.append(line)
+            continue
+        chunk_id = str(payload.get("id") or "")
+        if chunk_id.startswith(prefix):
+            removed_ids.append(chunk_id)
+            continue
+        kept.append(json.dumps(payload, ensure_ascii=False))
+    temporary = chunks_path.with_suffix(".jsonl.tmp")
+    temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    temporary.replace(chunks_path)
+
+    attachments_path = parsed_dir / "attachments.json"
+    remaining = [
+        item
+        for item in _load_attachments(attachments_path)
+        if item.get("attachment_id") != attachment_id
+    ]
+    _write_attachments(attachments_path, remaining)
+
+    warnings: list[str] = []
+    chroma_deleted = 0
+    if delete_chroma and removed_ids:
+        try:
+            from .ingest import ChromaStore
+
+            chroma = store or ChromaStore(settings)
+            chroma.ensure_collection(collection).delete(ids=removed_ids)
+            chroma_deleted = len(removed_ids)
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+            warnings.append(
+                f"Chroma delete failed: {type(exc).__name__}: {exc}"
+            )
+    storage_synced = False
+    if sync_storage:
+        storage_synced, sync_warnings = _sync_parsed_files(
+            settings, doc_id, [chunks_path, attachments_path]
+        )
+        warnings.extend(sync_warnings)
+    return {
+        "ok": True,
+        "doc_id": doc_id,
+        "attachment_id": attachment_id,
+        "removed_chunks": len(removed_ids),
+        "remaining_attachments": len(remaining),
+        "chroma_deleted": chroma_deleted,
+        "storage_synced": storage_synced,
+        "warnings": warnings,
+    }
+
+
 __all__ = [
     "AttachmentError",
     "append_attachment_chunks",
     "attach_evidence",
     "build_attachment_chunks",
+    "detach_evidence",
+    "list_attachments",
 ]
