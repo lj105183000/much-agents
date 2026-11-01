@@ -108,6 +108,27 @@ def test_profile_brief_includes_safe_facts_and_excludes_sensitive_fields() -> No
     assert "do-not-send" not in brief
 
 
+def test_profile_facts_include_list_items() -> None:
+    profile = BidderProfile.from_mapping(
+        {
+            "management_certificates": [
+                {
+                    "name": "ISO9001",
+                    "number": "ISO-2026-0001",
+                    "valid_until": "2028-12-31",
+                }
+            ],
+            "personnel": [{"name": "赵六", "certificate_number": "C-1"}],
+        }
+    )
+
+    facts = profile.facts()
+
+    assert facts["management_certificates[0].number"] == "ISO-2026-0001"
+    assert facts["management_certificates[0].valid_until"] == "2028-12-31"
+    assert facts["personnel[0].name"] == "赵六"
+
+
 def test_brief_allows_labeled_resource_proposals(tmp_path: Path) -> None:
     write_parsed_fixture(tmp_path)
     settings = make_bid_settings(tmp_path)
