@@ -13,6 +13,7 @@ import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
 import { usePermissions } from '../hooks/usePermissions'
 import { BidCompliancePanel } from '../components/BidCompliancePanel'
+import { BidCoveragePanel } from '../components/BidCoveragePanel'
 import { BidFiguresPanel } from '../components/BidFiguresPanel'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
@@ -1036,6 +1037,15 @@ export function BidView({
               runId={run.run_id}
               active={active}
               onApplied={handleFixApplied}
+            />
+          ) : null}
+
+          {run ? (
+            <BidCoveragePanel
+              key={`${run.run_id}:${complianceRefresh}`}
+              runId={run.run_id}
+              active={active}
+              refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
             />
           ) : null}
 

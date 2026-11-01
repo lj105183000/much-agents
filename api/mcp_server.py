@@ -483,6 +483,20 @@ def create_server(
         )
 
     @server.tool()
+    async def get_requirements(run_id: str) -> dict[str, Any]:
+        """读取需求登记与覆盖矩阵。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/requirements"
+        )
+
+    @server.tool()
+    async def get_citations(run_id: str) -> dict[str, Any]:
+        """读取章节证据引用覆盖率与未引用关键事实。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/citations"
+        )
+
+    @server.tool()
     async def get_job(job_id: str) -> dict[str, Any]:
         """读取解析或标书长任务状态；用于轮询 create/generate 返回的 job_id。"""
         return await api_proxy.get_json(f"/api/jobs/{_segment(job_id)}")

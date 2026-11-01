@@ -402,6 +402,14 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert (run_dir / "report.json").is_file()
         assert (run_dir / "outline.json").is_file()
         assert (run_dir / "gate.json").is_file()
+        assert (run_dir / "requirements.json").is_file()
+        assert (run_dir / "citations.json").is_file()
+        requirements = client.get(f"/api/bid-runs/{run_id}/requirements")
+        assert requirements.status_code == 200
+        assert "summary" in requirements.json()
+        citations = client.get(f"/api/bid-runs/{run_id}/citations")
+        assert citations.status_code == 200
+        assert "summary" in citations.json()
         report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
         provenance = report["provenance"]
         assert report["model"] == provenance["model"]
@@ -426,6 +434,74 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         detail = client.get(f"/api/bid-runs/{run_id}").json()
         assert detail["status"] == "assembled"
         assert detail["gate_status"] == gate["status"]
+
+
+def test_bid_run_citations_are_validated_and_stripped(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.states[run_id] = [
+            replace(
+                item,
+                final_markdown="合同金额 100万元[E1]。质量要求合格。",
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        repo.retrieval_snapshots.append(
+            {
+                "run_id": run_id,
+                "section_id": "narr-06-01",
+                "mode": "semantic",
+                "query_text": "query",
+                "query_sha256": "a" * 64,
+                "top_k": 1,
+                "hits": [
+                    {
+                        "chunk_id": "doc-1:s1:0001",
+                        "page_start": 3,
+                        "page_end": 3,
+                        "section_path": "第八章 > 六、施工组织设计",
+                        "score": 0.9,
+                        "text_sha256": "b" * 64,
+                        "text_chars": 20,
+                    }
+                ],
+                "evidence_chars": 20,
+            }
+        )
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        bid_md = (run_dir / "bid.md").read_text(encoding="utf-8")
+        section_md = (run_dir / "sections" / "narr-06-01.md").read_text(
+            encoding="utf-8"
+        )
+        assert "[E1]" not in bid_md
+        assert "[E1]" not in section_md
+        assert "合同金额 100万元" in bid_md
+
+        citations = client.get(
+            f"/api/bid-runs/{run_id}/citations"
+        ).json()
+        section = next(
+            item
+            for item in citations["sections"]
+            if item["section_id"] == "narr-06-01"
+        )
+        assert section["coverage"] == 1.0
+        assert section["citations"][0]["evidence_id"] == "E1"
+        assert section["citations"][0]["page_start"] == 3
+        assert citations["summary"]["invalid_markers"] == 0
 
 
 def test_bid_run_pdf_export_uses_converter(

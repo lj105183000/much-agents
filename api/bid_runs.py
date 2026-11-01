@@ -20,6 +20,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 
 from src.bidding.checks import build_allowed, deterministic_review
+from src.bidding.citations import build_citations, strip_citation_markers
 from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
 from src.bidding.content_hash import (
@@ -44,6 +45,7 @@ from src.bidding.pdf_export import PdfExportError, convert_docx_to_pdf
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
 from src.bidding.provenance import build_provenance
+from src.bidding.requirements import build_requirements
 from src.bidding.staged_output import (
     SectionOutput,
     assemble_staged_bid,
@@ -515,6 +517,8 @@ class BidRunService:
             "consistency.json",
             "gate.json",
             "report.json",
+            "requirements.json",
+            "citations.json",
             "bid.pdf",
         ):
             try:
@@ -1592,6 +1596,43 @@ class BidRunService:
         allowed = build_allowed(context, profile, outline)
         return run_dir, context, profile, outline, outputs, allowed
 
+    async def _build_coverage_artifacts(
+        self,
+        run: BidRunRecord,
+        context: TenderContext,
+        outline: BidOutline,
+        assembly: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build requirements/citations, then strip internal markers from text."""
+
+        snapshots = await self._repo().latest_retrieval_snapshots(run.run_id)
+        citations = build_citations(
+            run_id=run.run_id,
+            outline=outline,
+            section_markdowns=assembly.section_markdowns,
+            snapshots=snapshots,
+        )
+        requirements = build_requirements(
+            run_id=run.run_id,
+            context=context,
+            outline=outline,
+            section_markdowns=assembly.section_markdowns,
+        )
+        assembly.report["requirements"] = {
+            "summary": requirements.get("summary") or {},
+            "warnings": list(requirements.get("warnings") or []),
+        }
+        assembly.report["citations"] = {
+            "summary": citations.get("summary") or {},
+            "warnings": list(citations.get("warnings") or []),
+        }
+        assembly.markdown = strip_citation_markers(assembly.markdown)
+        assembly.section_markdowns = {
+            section_id: strip_citation_markers(markdown)
+            for section_id, markdown in assembly.section_markdowns.items()
+        }
+        return requirements, citations
+
     async def _review_run(
         self,
         run: BidRunRecord,
@@ -1631,6 +1672,7 @@ class BidRunService:
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not review bid run %s", run.run_id)
             raise BidRunError(500, "bid assembly failed") from exc
+        await self._build_coverage_artifacts(run, context, outline, assembly)
         evaluation = evaluate_compliance(
             context=context,
             profile=profile,
@@ -1719,6 +1761,32 @@ class BidRunService:
                 "consistency report is not available; assemble or run a check first",
             )
         return BidConsistencyResponse(run_id=run_id, consistency=reports[1])
+
+    async def _read_coverage_file(
+        self, run_id: str, name: str
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        await self._ensure_run_files(run, (name,))
+        try:
+            payload = read_json(self._run_dir(run) / name)
+        except (OSError, ValueError, TypeError) as exc:
+            raise BidRunError(
+                404, f"{name} is not available; assemble the run first"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise BidRunError(
+                404, f"{name} is not available; assemble the run first"
+            )
+        return payload
+
+    async def get_requirements(self, run_id: str) -> dict[str, Any]:
+        return await self._read_coverage_file(run_id, "requirements.json")
+
+    async def get_citations(self, run_id: str) -> dict[str, Any]:
+        return await self._read_coverage_file(run_id, "citations.json")
 
     async def fix_plan(
         self,
@@ -1927,6 +1995,9 @@ class BidRunService:
                 figure_warnings=figure_warnings,
                 figures_enabled=figures_enabled,
             )
+            requirements, citations = await self._build_coverage_artifacts(
+                run, context, outline, assembly
+            )
             evaluation = evaluate_compliance(
                 context=context,
                 profile=profile,
@@ -1942,6 +2013,10 @@ class BidRunService:
                 missing_profile_fields=list(run.missing_profile_fields),
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
+                requirements_block=self.bid_settings.requirements_block,
+                citation_min_coverage=(
+                    self.bid_settings.citation_min_coverage
+                ),
             )
             outline_data = outline_data_from_records(outline, records)
             llm_calls = sum(int(state.llm_calls or 0) for state in states)
@@ -1970,6 +2045,8 @@ class BidRunService:
                 },
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
+                requirements=requirements,
+                citations=citations,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
             )
             if isinstance(result.get("report", {}).get("docx_quality"), dict):
@@ -1980,6 +2057,10 @@ class BidRunService:
                     missing_profile_fields=list(run.missing_profile_fields),
                     compliance=evaluation.compliance,
                     consistency=evaluation.consistency,
+                    requirements_block=self.bid_settings.requirements_block,
+                    citation_min_coverage=(
+                        self.bid_settings.citation_min_coverage
+                    ),
                 )
                 result["report"]["gate"] = gate
                 atomic_write_json(run_dir / "gate.json", gate)

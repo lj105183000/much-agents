@@ -1440,6 +1440,22 @@ def build_router() -> APIRouter:
     ) -> BidConsistencyResponse:
         return await service.get_consistency(run_id)
 
+    @router.get("/bid-runs/{run_id}/requirements")
+    async def get_bid_run_requirements(
+        run_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> dict[str, Any]:
+        return await service.get_requirements(run_id)
+
+    @router.get("/bid-runs/{run_id}/citations")
+    async def get_bid_run_citations(
+        run_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> dict[str, Any]:
+        return await service.get_citations(run_id)
+
     @router.post(
         "/bid-runs/{run_id}/compliance/fix-plan",
         response_model=BidFixPlanResponse,

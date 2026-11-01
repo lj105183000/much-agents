@@ -764,6 +764,18 @@ class FakeBidRunRepository:
             )
         return len(records)
 
+    async def latest_retrieval_snapshots(
+        self, run_id: str
+    ) -> dict[str, dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for record in reversed(self.retrieval_snapshots):
+            if record.get("run_id") != run_id:
+                continue
+            section_id = str(record.get("section_id") or "")
+            if section_id and section_id not in latest:
+                latest[section_id] = dict(record)
+        return latest
+
     async def add_approval(
         self,
         run_id: str,

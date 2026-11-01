@@ -32,6 +32,8 @@ EXPECTED_TOOLS = {
     "get_bid_gate",
     "get_compliance",
     "get_consistency",
+    "get_requirements",
+    "get_citations",
     "get_job",
     "list_artifacts",
     "read_artifact_text",

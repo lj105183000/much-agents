@@ -73,6 +73,8 @@ class BidSettings:
     use_chroma: bool = True
     profile_max_mb: int = 5
     section_version_keep: int = 50
+    requirements_block: bool = False
+    citation_min_coverage: float = 0.8
     figures_enabled: bool = True
     figures_max: int = 4
     figures_use_llm: bool = True
@@ -127,6 +129,12 @@ class BidSettings:
             profile_max_mb=_int(env, "BID_PROFILE_MAX_MB", 5, minimum=1),
             section_version_keep=_int(
                 env, "BID_SECTION_VERSION_KEEP", 50, minimum=1
+            ),
+            requirements_block=_bool(
+                env, "BID_REQUIREMENTS_BLOCK", False
+            ),
+            citation_min_coverage=_float(
+                env, "BID_CITATION_MIN_COVERAGE", 0.8, minimum=0.0
             ),
             figures_enabled=_bool(env, "BID_FIGURES_ENABLED", True),
             figures_max=_int(env, "BID_FIGURES_MAX", 4, minimum=0),

@@ -641,6 +641,95 @@ export interface BidFixApplyRequest {
   replace: string
 }
 
+export interface BidRequirementsSummary {
+  total: number
+  evaluation_total: number
+  qualification_total: number
+  covered: number
+  partial: number
+  missing: number
+  not_applicable: number
+  mandatory_total: number
+  mandatory_missing: number
+  mandatory_partial: number
+  weighted_coverage: number
+  narrative_coverage: number | null
+}
+
+export interface BidRequirementItem {
+  id: string
+  kind: 'evaluation' | 'qualification'
+  category: string
+  text: string
+  source_page: number | null
+  source_section: string | null
+  evidence: string
+  max_score: number | null
+  mandatory: boolean
+  status: 'covered' | 'partial' | 'missing' | 'not_applicable'
+  section_ids: string[]
+  section_titles?: string[]
+  reason: string
+}
+
+export interface BidRequirementsResponse {
+  schema_version: string
+  run_id: string
+  generated_at: string
+  summary: BidRequirementsSummary
+  items: BidRequirementItem[]
+  warnings: string[]
+}
+
+export interface BidCitationEvidence {
+  id: string
+  chunk_id: string
+  page_start: number | null
+  page_end: number | null
+  section_path: string
+  score: number | null
+  text_sha256: string | null
+  text_chars: number | null
+  marker?: string
+  evidence_id?: string
+}
+
+export interface BidCitationSection {
+  section_id: string
+  title: string
+  written: boolean
+  mode: string | null
+  evidence: BidCitationEvidence[]
+  citations: BidCitationEvidence[]
+  invalid_markers: string[]
+  key_claims: number
+  cited_key_claims: number
+  coverage: number
+  uncited_claims: Array<{ quote: string; reasons: string[] }>
+  warnings: string[]
+}
+
+export interface BidCitationsSummary {
+  sections: number
+  sections_with_evidence: number
+  evidence_items: number
+  citation_markers: number
+  invalid_markers: number
+  key_claims: number
+  cited_key_claims: number
+  coverage: number
+  sections_with_uncited_claims: number
+}
+
+export interface BidCitationsResponse {
+  schema_version: string
+  run_id: string
+  generated_at: string
+  summary: BidCitationsSummary
+  sections: BidCitationSection[]
+  warnings: string[]
+}
+
 export interface BidApprovalRequest {
   reason?: string
   override?: boolean
