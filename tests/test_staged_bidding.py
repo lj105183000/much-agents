@@ -6,11 +6,16 @@ from typing import Any
 
 from src.bidding.checks import build_allowed
 from src.bidding.context import TenderContext
-from src.bidding.models import Evidence
+from src.bidding.models import Evidence, ReviewIssue
 from src.bidding.outline import build_outline
 from src.bidding.plan import build_content_plan
 from src.bidding.profile import BidderProfile
-from src.bidding.staged import build_retrieval_snapshot, generate_sections
+from src.bidding.staged import (
+    _filter_review_issues,
+    _quote_in_markdown,
+    build_retrieval_snapshot,
+    generate_sections,
+)
 from tests.fakes import FakeChatClient, FakeRetriever, make_bid_settings, write_parsed_fixture
 
 
@@ -204,6 +209,32 @@ def test_generate_sections_injects_profile_brief(tmp_path: Path) -> None:
 
     assert any("测试公司" in call["user"] for call in llm.calls)
     assert any("王五" in call["user"] for call in llm.calls)
+
+
+def test_stale_review_issues_are_dropped_after_revision() -> None:
+    issues = [
+        ReviewIssue(
+            type="fabrication",
+            severity="high",
+            message="stale",
+            quote="**基岩井成井工序**",
+        ),
+        ReviewIssue(
+            type="coverage",
+            severity="high",
+            message="current",
+            quote="管道安装",
+        ),
+        ReviewIssue(type="quality", severity="low", message="general"),
+    ]
+
+    kept = _filter_review_issues(
+        issues,
+        "本工程管道安装工序；成井类工序是否包含以图纸和工程量清单核实为准。",
+    )
+
+    assert [issue.message for issue in kept] == ["current", "general"]
+    assert _quote_in_markdown("", "任意正文") is False
 
 
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
