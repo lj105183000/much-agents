@@ -9,6 +9,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from markdown_it import MarkdownIt
@@ -264,6 +265,46 @@ def _render_table(node: SyntaxTreeNode, document) -> None:
             run = paragraph.add_run(value)
             _set_run_font(run, east_asia=BODY_FONT_EAST_ASIA, ascii_font=BODY_FONT_ASCII, size=10.5)
             run.bold = row_index < header_rows or None
+    for row_index in range(header_rows):
+        tr_pr = table.rows[row_index]._tr.get_or_add_trPr()
+        header = OxmlElement("w:tblHeader")
+        header.set(qn("w:val"), "true")
+        tr_pr.append(header)
+
+
+def _add_field(paragraph, instruction: str, placeholder: str = "") -> None:
+    run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = f" {instruction} "
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    text = OxmlElement("w:t")
+    text.text = placeholder
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    for element in (begin, instr, separate, text, end):
+        run._r.append(element)
+
+
+def _add_toc_field(document) -> None:
+    paragraph = document.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_field(paragraph, 'TOC \\o "1-3" \\h \\z \\u', "右键更新目录")
+    settings = document.settings.element
+    update = OxmlElement("w:updateFields")
+    update.set(qn("w:val"), "true")
+    settings.append(update)
+
+
+def _add_page_number_footer(document) -> None:
+    section = document.sections[0]
+    footer = section.footer
+    paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_field(paragraph, "PAGE", "1")
 
 
 def _configure_document(document) -> None:
@@ -304,6 +345,7 @@ def markdown_to_docx(
     try:
         document = Document()
         _configure_document(document)
+        _add_page_number_footer(document)
         if title:
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -311,6 +353,7 @@ def markdown_to_docx(
             run.bold = True
             _set_run_font(run, east_asia=HEADING_FONT_EAST_ASIA, ascii_font=HEADING_FONT_EAST_ASIA, size=18)
 
+        _add_toc_field(document)
         parser = MarkdownIt("commonmark").enable("table").enable("strikethrough")
         root = SyntaxTreeNode(parser.parse(markdown or ""))
         for node in root.children:

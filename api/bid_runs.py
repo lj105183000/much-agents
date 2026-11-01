@@ -1742,7 +1742,6 @@ class BidRunService:
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
             )
-            GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
             outline_data = outline_data_from_records(outline, records)
             llm_calls = sum(int(state.llm_calls or 0) for state in states)
             timings_seconds = {
@@ -1772,6 +1771,19 @@ class BidRunService:
                 consistency=evaluation.consistency,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
             )
+            if isinstance(result.get("report", {}).get("docx_quality"), dict):
+                gate = evaluate_gate(
+                    outline=outline,
+                    outputs=outputs,
+                    report=result["report"],
+                    missing_profile_fields=list(run.missing_profile_fields),
+                    compliance=evaluation.compliance,
+                    consistency=evaluation.consistency,
+                )
+                result["report"]["gate"] = gate
+                atomic_write_json(run_dir / "gate.json", gate)
+                atomic_write_json(run_dir / "report.json", result["report"])
+            GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)
             raise BidRunError(500, "bid assembly failed") from exc
