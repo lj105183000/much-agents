@@ -115,7 +115,7 @@ export function BidView({
   const [sectionActionError, setSectionActionError] = useState<string | null>(
     null,
   )
-  const { canWrite } = usePermissions()
+  const { canWrite, canManage } = usePermissions()
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
@@ -460,7 +460,7 @@ export function BidView({
   const approveRun = async () => {
     if (!runId) return
     const reason = window.prompt('审批意见（可选）', '') ?? ''
-    const override = gate?.status === 'block'
+    const override = canManage && gate?.status === 'block'
     if (
       override &&
       !window.confirm('门禁仍为阻止状态，确定以 override 方式审批吗？')
