@@ -23,6 +23,8 @@
 - L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
 - 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单，供专家确认评分因素、候选点和关键事实。
 
+**迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
+
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
 
 仍待实施（按优先级）：
@@ -436,7 +438,7 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 - 异地：通过 `rclone`/`rsync` 同步到 NAS 或对象存储；至少一份不在同一主机/机柜。
 - 保留：14–30 天；定期清理。
 - 告警：最后成功备份 >26 小时触发告警；备份脚本写 Prometheus textfile 指标。
-- 演练：每季度在干净 Linux 主机恢复；记录 RPO/RTO；当前只在 Windows 合成数据演练过，必须补真实 Linux 演练。
+- 演练：每季度在干净 Linux 主机恢复并记录 RPO/RTO；已在本地 Docker Desktop + 生产 Compose 完成一次真实数据演练，仍需在干净 Linux 主机按真实数据量复测。
 
 **PITR（P1，条件触发）**：
 
