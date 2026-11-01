@@ -393,6 +393,12 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert (run_dir / "report.json").is_file()
         assert (run_dir / "outline.json").is_file()
         assert (run_dir / "gate.json").is_file()
+        report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+        provenance = report["provenance"]
+        assert report["model"] == provenance["model"]
+        assert provenance["llm_calls"] >= 0
+        assert len(provenance["prompt_fingerprint"]) == 64
+        assert "assemble" in provenance["timings_seconds"]
 
         fetched = client.get(f"/api/bid-runs/{run_id}/gate")
         assert fetched.status_code == 200
