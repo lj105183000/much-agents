@@ -57,6 +57,11 @@ def assemble_staged_bid(
         output = outputs.get(section.id)
         final = output.final_markdown if output is not None else ""
         written = bool(output is not None and output.status == "final" and final)
+        review_payload = (
+            output.review
+            if output is not None and isinstance(output.review, dict)
+            else {}
+        )
         drafts.append(
             SectionDraft(
                 section_id=section.id,
@@ -69,12 +74,21 @@ def assemble_staged_bid(
         reviews.append(
             SectionReview(
                 section_id=section.id,
-                verdict="pass" if written else "skipped",
+                verdict=str(
+                    review_payload.get("verdict") or ("pass" if written else "skipped")
+                ),
                 issues=[
                     ReviewIssue.from_dict(item)
                     for item in (output.issues if output is not None else [])
                     if isinstance(item, dict)
                 ],
+                missing_points=[
+                    str(item) for item in review_payload.get("missing_points") or []
+                ],
+                covered_points=[
+                    str(item) for item in review_payload.get("covered_points") or []
+                ],
+                needs_revision=bool(review_payload.get("needs_revision", False)),
                 final_markdown=final,
                 warnings=list(output.warnings) if output is not None else [],
             )
