@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  api,
   request,
   setAuthToken,
   setProjectId,
@@ -24,6 +25,32 @@ function unauthorizedResponse(): Response {
     headers: { 'Content-Type': 'application/json' },
   })
 }
+
+describe('bid approval endpoints', () => {
+  it('reads, approves and rejects a run', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ run_id: 'run-1', status: 'approved' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await api.getBidApproval('run-1')
+    await api.approveBidRun('run-1', { reason: 'ok' })
+    await api.rejectBidRun('run-1', { reason: 'no' })
+
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [string, RequestInit]
+    >
+    expect(calls[0][0]).toContain('/api/bid-runs/run-1/approval')
+    expect(calls[1][0]).toContain('/api/bid-runs/run-1/approve')
+    expect(calls[1][1].method).toBe('POST')
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ reason: 'ok' })
+    expect(calls[2][0]).toContain('/api/bid-runs/run-1/reject')
+  })
+})
 
 describe('project context header', () => {
   it('adds X-Project-Id to business requests and skips exempt endpoints', async () => {

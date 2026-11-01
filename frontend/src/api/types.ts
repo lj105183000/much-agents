@@ -556,6 +556,23 @@ export interface BidFixApplyRequest {
   replace: string
 }
 
+export interface BidApprovalRequest {
+  reason?: string
+  override?: boolean
+}
+
+export interface BidApprovalResponse {
+  run_id: string
+  status: 'approved' | 'rejected' | 'not_requested'
+  content_sha256: string | null
+  gate_status: 'pass' | 'warn' | 'block' | null
+  approved_by: string | null
+  approved_by_name: string | null
+  reason: string
+  override: boolean
+  created_at: string | null
+}
+
 export interface BidGateResponse {
   run_id: string
   status: 'pass' | 'warn' | 'block'
