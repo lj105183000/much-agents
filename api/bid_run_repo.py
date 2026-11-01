@@ -93,6 +93,8 @@ class SectionStateRecord:
     started_at: datetime | None
     finished_at: datetime | None
     updated_at: datetime
+    generation_token: str | None = None
+    last_heartbeat_at: datetime | None = None
 
 
 def _run_record(row: BidRunRow) -> BidRunRecord:
@@ -168,6 +170,8 @@ def _state_record(row: BidSectionStateRow) -> SectionStateRecord:
         started_at=row.started_at,
         finished_at=row.finished_at,
         updated_at=row.updated_at,
+        generation_token=row.generation_token,
+        last_heartbeat_at=row.last_heartbeat_at,
     )
 
 
@@ -449,6 +453,14 @@ class BidRunRepository:
                 result = await session.execute(statement)
                 if result.rowcount == 0:
                     return None
+                await session.execute(
+                    update(BidSectionStateRow)
+                    .where(BidSectionStateRow.run_id == run_id)
+                    .values(
+                        generation_token=generation_token,
+                        last_heartbeat_at=now,
+                    )
+                )
                 row = await session.get(BidRunRow, run_id)
                 return _run_record(row) if row is not None else None
 
@@ -482,7 +494,21 @@ class BidRunRepository:
         async with self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(statement)
-                return bool(result.rowcount)
+                if not result.rowcount:
+                    return False
+                await session.execute(
+                    update(BidSectionStateRow)
+                    .where(
+                        BidSectionStateRow.run_id == run_id,
+                        BidSectionStateRow.generation_token
+                        == generation_token,
+                        BidSectionStateRow.status.in_(
+                            ("writing", "reviewing", "revising")
+                        ),
+                    )
+                    .values(last_heartbeat_at=now)
+                )
+                return True
 
     async def update_run(self, run_id: str, **fields: Any) -> bool:
         allowed = {
@@ -620,6 +646,7 @@ class BidRunRepository:
         section_id: str,
         *,
         expected_status: str | None = None,
+        expected_token: str | None = None,
         **fields: Any,
     ) -> bool:
         allowed = {
@@ -641,7 +668,10 @@ class BidRunRepository:
         values = {key: value for key, value in fields.items() if key in allowed}
         if not values:
             return False
-        values["updated_at"] = _now()
+        now = _now()
+        values["updated_at"] = now
+        if values.get("status") in {"writing", "reviewing", "revising", "final"}:
+            values["last_heartbeat_at"] = now
         statement = update(BidSectionStateRow).where(
             BidSectionStateRow.run_id == run_id,
             BidSectionStateRow.section_id == section_id,
@@ -649,6 +679,10 @@ class BidRunRepository:
         if expected_status is not None:
             statement = statement.where(
                 BidSectionStateRow.status == expected_status
+            )
+        if expected_token is not None:
+            statement = statement.where(
+                BidSectionStateRow.generation_token == expected_token
             )
         statement = statement.values(**values)
         async with self._session_factory() as session:
@@ -671,7 +705,13 @@ class BidRunRepository:
                             ("writing", "reviewing", "revising", "failed")
                         ),
                     )
-                    .values(status="pending", error=None, updated_at=now)
+                    .values(
+                        status="pending",
+                        error=None,
+                        generation_token=None,
+                        last_heartbeat_at=None,
+                        updated_at=now,
+                    )
                 )
                 run.status = "paused"
                 run.stage = "paused"
@@ -679,6 +719,34 @@ class BidRunRepository:
                 run.cancel_requested = False
                 run.updated_at = now
                 return _run_record(run)
+
+    async def reap_stale(
+        self,
+        *,
+        stale_seconds: int,
+        limit: int = 100,
+    ) -> list[str]:
+        """Pause runs whose heartbeat is older than ``stale_seconds``."""
+
+        cutoff = _now() - timedelta(seconds=max(1, int(stale_seconds)))
+        statement = (
+            select(BidRunRow.id)
+            .where(
+                BidRunRow.status.in_(("generating", "assembling")),
+                BidRunRow.heartbeat_at.is_not(None),
+                BidRunRow.heartbeat_at < cutoff,
+            )
+            .limit(max(1, int(limit)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        reaped: list[str] = []
+        for run_id in rows:
+            if await self.mark_stale_paused(
+                run_id, stale_seconds=stale_seconds
+            ) is not None:
+                reaped.append(run_id)
+        return reaped
 
     async def mark_stale_paused(
         self,
@@ -706,7 +774,13 @@ class BidRunRepository:
                             ("writing", "reviewing", "revising")
                         ),
                     )
-                    .values(status="pending", error=None, updated_at=now)
+                    .values(
+                        status="pending",
+                        error=None,
+                        generation_token=None,
+                        last_heartbeat_at=None,
+                        updated_at=now,
+                    )
                 )
                 run.status = "paused"
                 run.stage = "paused"

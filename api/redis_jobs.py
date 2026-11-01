@@ -17,6 +17,7 @@ from .jobs import JOB_KINDS, Job, JobKind, JobStoreError, JobStoreProtocol, JobS
 logger = logging.getLogger(__name__)
 
 JOB_KEY_PREFIX = "much-agents:job:"
+DLQ_KEY = "much-agents:dlq"
 DEFAULT_JOB_TTL_SECONDS = 24 * 3600
 JOB_STATES = frozenset({"queued", "running", "succeeded", "failed"})
 _OPTIONAL_FIELDS = (
@@ -70,6 +71,39 @@ class RedisJobStore(JobStoreProtocol):
         env: Mapping[str, str] | None = None,
     ) -> "RedisJobStore":
         return cls.from_settings(ApiSettings.from_env(env_file=env_file, env=env))
+
+    def push_dlq(
+        self,
+        *,
+        job_id: str,
+        task_name: str,
+        error: str,
+        error_type: str = "",
+    ) -> None:
+        payload = json.dumps(
+            {
+                "job_id": job_id,
+                "task_name": task_name,
+                "error": error[:1000],
+                "error_type": error_type,
+                "ts": self._iso(self._clock()),
+            },
+            ensure_ascii=False,
+        )
+        self._client.lpush(DLQ_KEY, payload)
+        self._client.ltrim(DLQ_KEY, 0, 999)
+
+    def list_dlq(self, limit: int = 50) -> list[dict[str, Any]]:
+        raw = self._client.lrange(DLQ_KEY, 0, max(0, int(limit)) - 1)
+        records: list[dict[str, Any]] = []
+        for item in raw:
+            try:
+                value = json.loads(item)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+        return records
 
     # ---- encoding -----------------------------------------------------
 

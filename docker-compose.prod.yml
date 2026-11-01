@@ -242,6 +242,62 @@ services:
       retries: 3
     stop_grace_period: 120s
 
+  worker-maintenance:
+    <<: *app-service
+    build:
+      <<: *app-build
+      target: worker
+    command:
+      - celery
+      - -A
+      - api.celery_app:celery_app
+      - worker
+      - -Q
+      - maintenance
+      - --pool=prefork
+      - --concurrency=1
+      - --loglevel=INFO
+      - --hostname=worker-maintenance@%h
+    environment:
+      ENVIRONMENT: production
+      TASK_BACKEND: celery
+      STORAGE_BACKEND: minio
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python -m scripts.worker_healthcheck maintenance"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    stop_grace_period: 60s
+
+  beat:
+    <<: *app-service
+    build:
+      <<: *app-build
+      target: worker
+    command:
+      - celery
+      - -A
+      - api.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
+      - --schedule=/tmp/celerybeat-schedule
+    environment:
+      ENVIRONMENT: production
+      TASK_BACKEND: celery
+      STORAGE_BACKEND: minio
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
   nginx:
     build:
       context: .

@@ -61,6 +61,7 @@ class _RunHooks:
         updated = await self.repo.update_section(
             self.run_id,
             section_id,
+            expected_token=self.generation_token,
             **fields,
         )
         if not updated:
@@ -444,9 +445,16 @@ async def execute_staged_bid_job(
         summary["outline_path"] = str(run_dir / "outline.json")
         summary["sections_dir"] = str(run_dir / "sections")
         try:
-            store.mark_succeeded(job.job_id, summary)
+            if cancelled:
+                store.mark_failed(
+                    job.job_id,
+                    error="cancelled by user",
+                    exit_code=130,
+                )
+            else:
+                store.mark_succeeded(job.job_id, summary)
         except JobStoreError:
-            logger.warning("could not mark Redis job succeeded", exc_info=True)
+            logger.warning("could not persist Redis job terminal state", exc_info=True)
     except Exception as exc:  # noqa: BLE001 - never leave a run/job running
         logger.exception("staged bid job %s failed", job.job_id)
         if run is not None:

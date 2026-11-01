@@ -134,6 +134,37 @@ def test_generate_sections_cancels_before_writing(tmp_path: Path) -> None:
     assert not llm.calls
 
 
+def test_generate_sections_cancels_after_writer(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, _narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+
+    def handler(_system: str, _user: str, _json_mode: bool) -> str:
+        hooks.cancel = True
+        return "本工程施工组织设计内容。" * 30
+
+    llm = FakeChatClient(handler=handler)
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={},
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=FakeRetriever(),
+            allowed=allowed,
+            hooks=hooks,
+        )
+    )
+    assert result.cancelled
+    assert result.outcomes
+    assert all(item.status == "pending" for item in result.outcomes)
+    assert llm.calls
+
+
 def test_generate_sections_isolates_writer_failure(tmp_path: Path) -> None:
     context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
     hooks = MemoryHooks()
