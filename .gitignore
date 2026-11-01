@@ -34,6 +34,7 @@ mcp_servers.json
 # Application data
 chroma_db/
 upload/
+eval-data/
 *.log
 
 # One-click launcher state/logs
