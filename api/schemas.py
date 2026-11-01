@@ -197,6 +197,9 @@ class BidSectionUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     markdown: str = Field(min_length=1, max_length=200_000)
+    expected_sha256: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
 
     @field_validator("markdown")
     @classmethod
@@ -215,6 +218,7 @@ class BidSectionDetail(BaseModel):
     status: str
     attempt: int = 0
     final_markdown: str = ""
+    content_sha256: str
     final_source: str | None = None
     issues: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -352,6 +356,7 @@ class BidFixPlanItem(BaseModel):
     check_id: str
     title: str
     section_id: str | None = None
+    section_sha256: str | None = None
     action: Literal["replace", "manual"]
     find: str = ""
     replace: str = ""
@@ -371,6 +376,9 @@ class BidFixApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     section_id: str = Field(min_length=1, max_length=128)
+    expected_sha256: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
     find: str = Field(min_length=1, max_length=5000)
     replace: str = Field(min_length=1, max_length=5000)
 

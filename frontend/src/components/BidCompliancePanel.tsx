@@ -427,7 +427,15 @@ export function BidCompliancePanel({
   }
 
   const applyFix = async (item: BidFixPlanItem) => {
-    if (!item.section_id || !item.find || !item.replace) return
+    if (
+      !item.section_id ||
+      !item.section_sha256 ||
+      !item.find ||
+      !item.replace
+    ) {
+      setPlanError('修复方案缺少章节内容哈希，请重新生成修复方案。')
+      return
+    }
     if (
       !window.confirm(
         `将在章节 ${item.section_id} 中替换一次：\n\n${item.find}\n→\n${item.replace}\n\n继续吗？`,
@@ -440,6 +448,7 @@ export function BidCompliancePanel({
     try {
       await api.applyBidFix(runId, {
         section_id: item.section_id,
+        expected_sha256: item.section_sha256,
         find: item.find,
         replace: item.replace,
       })
@@ -458,7 +467,12 @@ export function BidCompliancePanel({
         setReport(null)
       }
     } catch (caught) {
-      setPlanError(errorMessage(caught, '应用修复失败'))
+      if (caught instanceof ApiError && caught.status === 409) {
+        setPlan(null)
+        setPlanError('章节正文已变化，修复方案已失效，请重新生成。')
+      } else {
+        setPlanError(errorMessage(caught, '应用修复失败'))
+      }
     } finally {
       setApplying(null)
     }

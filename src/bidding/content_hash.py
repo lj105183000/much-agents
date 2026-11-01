@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Any
 
 
+def compute_section_content_sha256(markdown: str | None) -> str:
+    """Hash a section body exactly as version history stores it."""
+
+    return hashlib.sha256(
+        (markdown or "").strip().encode("utf-8")
+    ).hexdigest()
+
+
 def _update_file(digest: Any, path: Path) -> None:
     if not path.is_file():
         return
@@ -74,4 +82,7 @@ def compute_run_content_sha256(
     return digest.hexdigest()
 
 
-__all__ = ["compute_run_content_sha256"]
+__all__ = [
+    "compute_run_content_sha256",
+    "compute_section_content_sha256",
+]

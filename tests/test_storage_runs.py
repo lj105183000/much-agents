@@ -164,9 +164,15 @@ def test_edit_clears_remote_reports_and_figures(tmp_path: Path) -> None:
         prefix = f"bids/doc-1/{run_id}"
         assert storage.exists(f"{prefix}/gate.json")
 
+        section = client.get(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01"
+        ).json()
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "人工编辑后的施工组织设计正文。"},
+            json={
+                "markdown": "人工编辑后的施工组织设计正文。",
+                "expected_sha256": section["content_sha256"],
+            },
         )
         assert edited.status_code == 200, edited.text
         for name in (

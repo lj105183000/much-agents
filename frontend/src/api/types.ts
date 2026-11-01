@@ -460,6 +460,7 @@ export interface BidSectionDetail {
   status: string
   attempt: number
   final_markdown: string
+  content_sha256: string
   final_source: string | null
   issues: Array<Record<string, unknown>>
   warnings: string[]
@@ -504,6 +505,7 @@ export interface BidSectionVersionDiffResponse {
 
 export interface BidSectionUpdateRequest {
   markdown: string
+  expected_sha256: string
 }
 
 export interface BidGateCheck {
@@ -613,6 +615,7 @@ export interface BidFixPlanItem {
   check_id: string
   title: string
   section_id: string | null
+  section_sha256: string | null
   action: 'replace' | 'manual'
   find: string
   replace: string
@@ -630,6 +633,7 @@ export interface BidFixPlanResponse {
 
 export interface BidFixApplyRequest {
   section_id: string
+  expected_sha256: string
   find: string
   replace: string
 }

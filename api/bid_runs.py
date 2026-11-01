@@ -21,7 +21,10 @@ from sqlalchemy.exc import IntegrityError
 from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
-from src.bidding.content_hash import compute_run_content_sha256
+from src.bidding.content_hash import (
+    compute_run_content_sha256,
+    compute_section_content_sha256,
+)
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
@@ -1159,6 +1162,7 @@ class BidRunService:
             status=state.status,
             attempt=state.attempt,
             final_markdown=state.final_markdown or "",
+            content_sha256=compute_section_content_sha256(state.final_markdown),
             final_source=state.final_source,
             issues=list(state.issues),
             warnings=list(state.warnings),
@@ -1302,6 +1306,7 @@ class BidRunService:
         section_id: str,
         version_id: int,
         *,
+        expected_sha256: str,
         actor_id: str | None = None,
         actor_name: str | None = None,
     ) -> Any:
@@ -1317,7 +1322,10 @@ class BidRunService:
         return await self.edit_section(
             run_id,
             section_id,
-            BidSectionUpdateRequest(markdown=record.markdown),
+            BidSectionUpdateRequest(
+                markdown=record.markdown,
+                expected_sha256=expected_sha256,
+            ),
             actor_id=actor_id,
             actor_name=actor_name,
         )
@@ -1403,6 +1411,7 @@ class BidRunService:
             run_id,
             section_id,
             expected_status="final",
+            expected_final_sha256=payload.expected_sha256,
             final_markdown=payload.markdown,
             final_source="manual",
             issues=issues,
@@ -1779,7 +1788,10 @@ class BidRunService:
         return await self.edit_section(
             run_id,
             payload.section_id,
-            BidSectionUpdateRequest(markdown=updated),
+            BidSectionUpdateRequest(
+                markdown=updated,
+                expected_sha256=payload.expected_sha256,
+            ),
             actor_id=actor_id,
             actor_name=actor_name,
         )
