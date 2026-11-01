@@ -15,6 +15,7 @@ from .database import (
     BidRunRow,
     BidSectionStateRow,
     LlmCallLogRow,
+    PromptRegistryRow,
     RetrievalSnapshotRow,
     RunUsageRow,
 )
@@ -618,6 +619,78 @@ class BidRunRepository:
             async with session.begin():
                 result = await session.execute(statement)
                 return bool(result.rowcount)
+
+    async def upsert_prompt_registry(
+        self, records: list[dict[str, Any]]
+    ) -> int:
+        count = 0
+        async with self._session_factory() as session:
+            async with session.begin():
+                for record in records:
+                    kind = str(record.get("kind") or "")
+                    version = str(record.get("version") or "")
+                    if not kind or not version:
+                        continue
+                    existing = (
+                        await session.execute(
+                            select(PromptRegistryRow).where(
+                                PromptRegistryRow.kind == kind,
+                                PromptRegistryRow.version == version,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        session.add(
+                            PromptRegistryRow(
+                                kind=kind,
+                                version=version,
+                                template_sha256=str(
+                                    record.get("template_sha256") or ""
+                                ),
+                                template_path=str(
+                                    record.get("template_path") or ""
+                                ),
+                                model_default=record.get("model_default"),
+                                temperature_default=record.get(
+                                    "temperature_default"
+                                ),
+                                git_sha=record.get("git_sha"),
+                            )
+                        )
+                    else:
+                        existing.template_sha256 = str(
+                            record.get("template_sha256") or ""
+                        )
+                        existing.template_path = str(
+                            record.get("template_path") or ""
+                        )
+                        existing.model_default = record.get("model_default")
+                        existing.temperature_default = record.get(
+                            "temperature_default"
+                        )
+                        existing.git_sha = record.get("git_sha")
+                    count += 1
+        return count
+
+    async def list_prompt_registry(self) -> list[dict[str, Any]]:
+        statement = select(PromptRegistryRow).order_by(
+            PromptRegistryRow.kind, PromptRegistryRow.created_at.desc()
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [
+            {
+                "kind": row.kind,
+                "version": row.version,
+                "template_sha256": row.template_sha256,
+                "template_path": row.template_path,
+                "model_default": row.model_default,
+                "temperature_default": row.temperature_default,
+                "git_sha": row.git_sha,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
 
     async def add_retrieval_snapshots(
         self,

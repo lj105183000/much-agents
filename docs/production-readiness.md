@@ -24,6 +24,7 @@
 - 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单，供专家确认评分因素、候选点和关键事实。
 - 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Grafana、5 条告警规则和 Grafana 数据源；Grafana 仅绑定 `127.0.0.1:3000`。
 - 检索快照：每个章节的 query、mode、top_k、命中 chunk/score/页码/文本哈希写入 `retrieval_snapshots`（迁移 `0010`），不保存证据原文。
+- Prompt registry：`prompt_registry`（迁移 `0011`）记录 prompt 文件哈希、默认模型/温度与 git sha，`scripts/seed_prompts.py` 可重复 upsert。
 
 **迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
 
@@ -34,7 +35,7 @@
 - force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
 - 启用 Cosign 签名（CI 已提供可选步骤，需配置 `CI_SIGN_IMAGES`、`COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD`）。
 - L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具、复核清单与夜间 workflow 骨架已落地）。
-- prompt registry 完整落地、MinerU/Embedding 配额、PITR。
+- MinerU/Embedding 配额、PITR。
 
 ## 0. 摘要
 

@@ -534,6 +534,37 @@ class RetrievalSnapshotRow(Base):
     )
 
 
+class PromptRegistryRow(Base):
+    __tablename__ = "prompt_registry"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "version", name="uq_prompt_registry_kind_version"
+        ),
+        Index("ix_prompt_registry_kind", "kind", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    template_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    template_path: Mapped[str] = mapped_column(Text, nullable=False)
+    model_default: Mapped[str | None] = mapped_column(String(64))
+    temperature_default: Mapped[float | None] = mapped_column(Float)
+    git_sha: Mapped[str | None] = mapped_column(String(64))
+    deprecated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class AuditEventRow(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
