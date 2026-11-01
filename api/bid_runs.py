@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
+from src.bidding.content_hash import compute_run_content_sha256
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
@@ -1757,6 +1758,12 @@ class BidRunService:
 
         await self._sync_run_derived(run)
 
+        content_sha256 = compute_run_content_sha256(
+            run_dir=run_dir,
+            profile_sha256=run.profile_sha256,
+            outline_revision=run.revision,
+            figure_manifest=run_dir / "figures" / "manifest.json",
+        )
         warnings = list(
             dict.fromkeys([*assembly.warnings, *(result.get("report", {}).get("warnings") or [])])
         )
@@ -1768,6 +1775,7 @@ class BidRunService:
             message="assembly complete",
             gate_status=str(gate.get("status") or "warn"),
             gate=gate,
+            content_sha256=content_sha256,
             warnings=warnings,
             error=None,
             finished_at=_now(),
@@ -1936,10 +1944,23 @@ class BidRunService:
                 "export is blocked by the gate; use force=true to override",
             )
         run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        if run.content_sha256:
+            current_sha256 = compute_run_content_sha256(
+                run_dir=run_dir,
+                profile_sha256=run.profile_sha256,
+                outline_revision=run.revision,
+                figure_manifest=run_dir / "figures" / "manifest.json",
+            )
+            if current_sha256 != run.content_sha256:
+                raise BidRunError(
+                    409,
+                    "content changed since assembly; re-assemble before export",
+                )
         prefix = run_prefix(run.doc_id, run.run_id)
         if force and run.gate_status == "block":
             gate = dict(run.gate)
             gate["forced"] = True
+            gate["forced_at"] = datetime.now(timezone.utc).isoformat()
             await repo.update_run(run_id, gate=gate)
             try:
                 atomic_write_json(run_dir / "gate.json", gate)

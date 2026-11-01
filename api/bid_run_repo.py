@@ -52,6 +52,7 @@ class BidRunRecord:
     updated_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,7 @@ def _run_record(row: BidRunRow) -> BidRunRecord:
         updated_at=row.updated_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
+        content_sha256=row.content_sha256,
     )
 
 
@@ -523,6 +525,7 @@ class BidRunRepository:
             "attempt",
             "gate_status",
             "gate",
+            "content_sha256",
             "warnings",
             "error",
             "started_at",

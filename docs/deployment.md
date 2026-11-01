@@ -195,7 +195,27 @@ scripts/backup.sh                              # 默认 backups/<UTC 时间戳>/
 scripts/backup.sh /mnt/nas/much-agents/20261024
 BACKUP_CHROMA=1 scripts/backup.sh              # 额外备份 Chroma 卷
 BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天）
+# 加密归档 + 异地副本
+BACKUP_ENCRYPT=age BACKUP_AGE_RECIPIENT=age1... \
+  BACKUP_OFFSITE_TARGET=remote:much-agents-backups scripts/backup.sh
+# 让 node_exporter 抓取最后成功时间
+BACKUP_METRICS_DIR=/var/lib/node_exporter/textfile scripts/backup.sh
 ```
+
+### 6.1 自动调度
+
+仓库提供 `deploy/systemd/much-agents-backup.{service,timer}`：
+
+```bash
+sudo cp deploy/systemd/much-agents-backup.* /etc/systemd/system/
+sudo install -d -m 700 /etc/much-agents
+sudoedit /etc/much-agents/backup.env   # BACKUP_ENCRYPT/BACKUP_AGE_RECIPIENT/BACKUP_OFFSITE_TARGET 等
+sudo systemctl daemon-reload
+sudo systemctl enable --now much-agents-backup.timer
+systemctl list-timers much-agents-backup.timer
+```
+
+定时器默认每天 02:00（服务器时区）执行，`Persistent=true` 补跑错过的窗口。
 
 内容：
 
@@ -210,7 +230,9 @@ BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天
 - 脚本在 Git Bash/MSYS 下会用 `cygpath -m` 转换 Docker bind mount 路径，便于 Windows 本机演练；生产 Linux 主机行为不变。
 - 如果 MinIO 备份为空，脚本默认失败，避免生成一个恢复时会清空 bucket 的不可用备份。确实使用空 bucket 时才设置 `ALLOW_EMPTY_MINIO=1`。
 - `deploy/env.production` 与 TLS 私钥**不在备份内**，单独加密保存。
-- 保留策略只删除 `backups/` 下的旧目录；自定义目标目录需自行清理。
+- `BACKUP_ENCRYPT=age|gpg` 会额外生成 `backups/<timestamp>.tar.gz.age|gpg` 供异地保存；本地目录仍是快速恢复源，主机磁盘应启用全盘加密。`BACKUP_OFFSITE_TARGET` 用 `rclone`（`remote:path`）或 `rsync`（本地/NAS 路径）推送该加密归档。
+- 保留策略删除 `backups/` 下的旧目录与旧加密归档；自定义目标目录需自行清理。
+- 加密私钥/身份文件必须与备份分开保存；丢失后无法解密异地归档。
 
 ## 7. 恢复
 
@@ -306,7 +328,7 @@ docker compose -f docker-compose.prod.yml config
 
 - 单机 Compose，无 HA/多副本；Postgres/Redis/MinIO 故障会导致服务不可用。
 - `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前 `chromadb/chroma:latest` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
-- 没有内置监控/告警、Celery beat、自动备份调度；备份需由主机 cron/systemd timer 触发。
+- 没有内置 Prometheus/Grafana 栈；API 暴露受保护的 `/api/metrics`，需自行部署抓取与告警。Celery beat 与 `deploy/systemd/much-agents-backup.timer` 分别负责 stale reaper 与每日备份。
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。

@@ -401,6 +401,12 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         exported = client.post(f"/api/bid-runs/{run_id}/export")
         assert exported.status_code == 200
         assert exported.content[:2] == b"PK"
+        assert repo.runs[run_id].content_sha256
+
+        (run_dir / "bid.md").write_text("tampered\n", encoding="utf-8")
+        tampered = client.post(f"/api/bid-runs/{run_id}/export")
+        assert tampered.status_code == 409
+        assert "re-assemble" in tampered.json()["detail"]
 
         detail = client.get(f"/api/bid-runs/{run_id}").json()
         assert detail["status"] == "assembled"

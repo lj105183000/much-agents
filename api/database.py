@@ -250,6 +250,7 @@ class BidRunRow(Base):
     )
     gate_status: Mapped[str | None] = mapped_column(String(8))
     gate: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
     warnings: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
