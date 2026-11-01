@@ -230,6 +230,64 @@ def test_xlsx_attachment_chunks(tmp_path: Path) -> None:
     assert "DN200" in combined
 
 
+def test_csv_attachment_supports_gbk(tmp_path: Path) -> None:
+    path = tmp_path / "gbk.csv"
+    path.write_bytes(
+        "项目编码,项目名称\n010101001,沟槽土方\n".encode("gb18030")
+    )
+
+    chunks, meta = build_attachment_chunks(DOC_ID, path, chunk_size=1000)
+
+    assert meta["parser"] == "csv"
+    assert any("010101001" in chunk.text for chunk in chunks)
+
+
+def test_csv_attachment_rejects_binary(tmp_path: Path) -> None:
+    path = tmp_path / "binary.csv"
+    path.write_bytes(b"\x00\x01\x02")
+
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path)
+
+    assert exc.value.status_code == 415
+
+
+def test_csv_attachment_rejects_too_many_rows(tmp_path: Path) -> None:
+    path = _csv(tmp_path / "rows.csv")
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path, max_rows=1)
+    assert exc.value.status_code == 413
+
+
+def test_attachment_rejects_too_many_characters(tmp_path: Path) -> None:
+    path = _csv(tmp_path / "chars.csv")
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path, max_chars=10)
+    assert exc.value.status_code == 413
+
+
+def test_pdf_attachment_rejects_page_limit(tmp_path: Path) -> None:
+    path = tmp_path / "two-pages.pdf"
+    document = pymupdf.open()
+    document.new_page()
+    document.new_page()
+    document.save(path)
+    document.close()
+
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path, max_pages=1)
+    assert exc.value.status_code == 413
+
+
+def test_fake_xlsx_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "fake.xlsx"
+    path.write_bytes(b"not a zip workbook")
+
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path)
+    assert exc.value.status_code == 415
+
+
 def test_pdf_attachment_chunks(tmp_path: Path) -> None:
     path = _pdf(tmp_path / "evidence.pdf")
     chunks, meta = build_attachment_chunks(DOC_ID, path, chunk_size=1000, overlap=100)

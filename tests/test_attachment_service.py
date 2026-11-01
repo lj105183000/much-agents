@@ -4,6 +4,7 @@ import asyncio
 import io
 from pathlib import Path
 
+import pymupdf
 import pytest
 from fastapi import UploadFile
 
@@ -19,7 +20,7 @@ from src.parsing.attachments import AttachmentError
 from src.parsing.config import Settings
 
 
-def _api_settings(tmp_path: Path) -> ApiSettings:
+def _api_settings(tmp_path: Path, **extra: str) -> ApiSettings:
     return ApiSettings.from_env(
         env={
             "UPLOAD_DIR": str(tmp_path / "upload"),
@@ -27,6 +28,7 @@ def _api_settings(tmp_path: Path) -> ApiSettings:
             "TASK_BACKEND": "local",
             "STORAGE_BACKEND": "local",
             "AUTH_ENABLED": "false",
+            **extra,
         }
     )
 
@@ -54,6 +56,83 @@ def test_sanitize_attachment_filename() -> None:
         sanitize_attachment_filename("evil.exe")
     with pytest.raises(UploadError):
         sanitize_attachment_filename("")
+
+
+def test_attachment_service_rejects_binary_csv(tmp_path: Path) -> None:
+    settings = _api_settings(tmp_path)
+    store = JobStore()
+    dispatched = []
+    service = AttachmentService(
+        api_settings=settings,
+        parse_settings=_parse_settings(tmp_path),
+        store=store,
+        dispatch=dispatched.append,
+        storage=None,
+    )
+    upload = UploadFile(file=io.BytesIO(b"\x00\x01\x02"), filename="boq.csv")
+
+    with pytest.raises(UploadError) as exc:
+        asyncio.run(
+            service.submit(
+                upload, doc_id="doc-1", ingest=False, ocr=False
+            )
+        )
+
+    assert exc.value.status_code == 415
+    assert dispatched == []
+    assert store.count() == 0
+
+
+def test_attachment_service_rejects_fake_xlsx(tmp_path: Path) -> None:
+    settings = _api_settings(tmp_path)
+    service = AttachmentService(
+        api_settings=settings,
+        parse_settings=_parse_settings(tmp_path),
+        store=JobStore(),
+        dispatch=lambda _job: None,
+        storage=None,
+    )
+    upload = UploadFile(
+        file=io.BytesIO(b"not a zip workbook"), filename="boq.xlsx"
+    )
+
+    with pytest.raises(UploadError) as exc:
+        asyncio.run(
+            service.submit(
+                upload, doc_id="doc-1", ingest=False, ocr=False
+            )
+        )
+
+    assert exc.value.status_code == 415
+
+
+def test_attachment_service_rejects_oversized_pdf(tmp_path: Path) -> None:
+    settings = _api_settings(tmp_path, MAX_PDF_PAGES="1")
+    service = AttachmentService(
+        api_settings=settings,
+        parse_settings=_parse_settings(tmp_path),
+        store=JobStore(),
+        dispatch=lambda _job: None,
+        storage=None,
+    )
+    pdf_path = tmp_path / "scan.pdf"
+    document = pymupdf.open()
+    document.new_page()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    upload = UploadFile(
+        file=io.BytesIO(pdf_path.read_bytes()), filename="scan.pdf"
+    )
+
+    with pytest.raises(UploadError) as exc:
+        asyncio.run(
+            service.submit(
+                upload, doc_id="doc-1", ingest=False, ocr=False
+            )
+        )
+
+    assert exc.value.status_code == 413
 
 
 def test_attachment_service_creates_attach_job(tmp_path: Path) -> None:
