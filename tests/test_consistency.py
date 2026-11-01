@@ -144,6 +144,28 @@ def test_ledger_ignores_evaluation_index_criteria(tmp_path: Path) -> None:
     assert all(item["section_id"] != "idx-00" for item in quality["occurrences"])
 
 
+def test_ledger_ignores_person_title_cells(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "top-07": (
+            "| 姓名 | 岗位 | 职称 | 证书 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 王五 | 项目经理 | 高级工程师 | 一级建造师 |\n"
+        ),
+        narrative.id: "项目经理：王五\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    manager = _fact(ledger, "project_manager")
+    assert manager["status"] == "consistent"
+    assert manager["conflicting_values"] == []
+    assert all(item["value"] not in {"高级工程师", "一级建造师"} for item in manager["occurrences"])
+
+
 def test_ledger_reports_missing_canonical_values(tmp_path: Path) -> None:
     planned, _profile, narrative = _inputs(tmp_path)
     ledger = build_consistency_ledger(

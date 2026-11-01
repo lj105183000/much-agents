@@ -42,6 +42,14 @@ _NON_NAME_TOKENS = (
     "详见",
     "附件",
     "待填写",
+    "工程师",
+    "建造师",
+    "经理",
+    "董事长",
+    "总监",
+    "职称",
+    "职务",
+    "岗位",
 )
 
 # Table header cells are sometimes picked up as values (e.g. the row
