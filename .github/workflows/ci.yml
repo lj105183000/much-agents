@@ -133,6 +133,21 @@ jobs:
           image: much-agents-web:ci
           format: spdx-json
           artifact-name: much-agents-web-sbom.spdx.json
+      - name: Install cosign (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        uses: sigstore/cosign-installer@v3
+      - name: Sign API image (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-api:ci
+      - name: Sign web image (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-web:ci
       - name: Verify license files in images
         run: |
           docker run --rm --entrypoint sh much-agents-api:ci \
