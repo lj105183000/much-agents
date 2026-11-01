@@ -19,7 +19,7 @@
 - 交付完整性：assembled run 写入 `content_sha256`，导出前校验；迁移 `0008`。
 - 审批 API：`POST .../approve|reject`、`GET .../approval`，审批绑定内容哈希；`BID_REQUIRE_APPROVAL` 控制导出；迁移 `0009`。
 - DOCX 质量：导出补 TOC 域、页脚 PAGE 域、表格重复表头；门禁消费 TOC/页码/字体/表格/DPI 检查。
-- 供应链：MinIO/Chroma 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
+- 供应链：MinIO/Chroma/Postgres/Redis 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
 
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。
 
@@ -27,7 +27,6 @@
 
 - 审批 UI、force override 的 24 小时有效期与角色细化（当前审批 API 已可用，force 为每次导出显式传入）。
 - Cosign 镜像签名（Trivy 扫描与 SBOM 已在 CI 中，初始为 report-only）。
-- Postgres/Redis 基础镜像 digest pin。
 - L1 5–10 份评测集的人工复核、L2 judge 校准、夜间真实模型回归。
 - 检索快照、prompt registry 完整落地、MinerU/Embedding 配额、PITR。
 
@@ -145,7 +144,7 @@
 | 版本/反馈 | 人工编辑覆盖 `final_markdown`；无 `bid_section_versions`；无反馈/采纳入口；编辑/重写会删除 gate/compliance/consistency/report | 无法构造“修改前→修改后”样本，无法衡量真实采纳 |
 | 模型调用 | 两个重复的 DeepSeek 客户端；`llm.py:127-129` 静默 fallback 到 `deepseek-chat`；不检查 `finish_reason` | 实际模型不可知；截断内容静默返回 |
 | 检索 | Chroma 单集合；embedding 模型/维度不入集合版本；reviewer 只看前 3 条证据（`src/bidding/prompts.py:153`） | 检索不可复现；审查与完整证据不一致 |
-| 供应链 | MinIO/Chroma 已固定 digest；Postgres/Redis 仍为小版本 tag；无镜像扫描/SBOM/签名 | 供应链安全无法审计 |
+| 供应链 | MinIO/Chroma/Postgres/Redis 已固定 digest；CI 有 Trivy/Syft，Cosign 签名待接入 | 供应链安全仍需发布流程签名 |
 
 ### 2.3 单机 Demo 可接受、生产不可接受的边界
 
