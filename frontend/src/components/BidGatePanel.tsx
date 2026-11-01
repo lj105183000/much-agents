@@ -1,4 +1,4 @@
-import type { BidGateResponse } from '../api/types'
+import type { BidApprovalResponse, BidGateResponse } from '../api/types'
 import { usePermissions } from '../hooks/usePermissions'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, SectionHeader, Spinner } from './ui'
@@ -8,6 +8,12 @@ interface BidGatePanelProps {
   gate: BidGateResponse | null
   loading: boolean
   error: string | null
+  approval: BidApprovalResponse | null
+  approvalLoading: boolean
+  approvalBusy: boolean
+  approvalError: string | null
+  onApprove: () => void
+  onReject: () => void
   exporting: boolean
   exportError: string | null
   onExport: (force: boolean) => void
@@ -36,7 +42,20 @@ const CHECK_LABEL: Record<string, string> = {
   selected_narratives: '已选正文章节',
   compliance_block: '合规检查阻止项',
   compliance_warnings: '合规检查警告',
+  docx_quality: 'DOCX 交付质量',
 }
+
+const APPROVAL_LABEL: Record<string, string> = {
+  not_requested: '未审批',
+  approved: '已通过',
+  rejected: '已驳回',
+}
+
+const APPROVAL_TONE = {
+  not_requested: 'neutral',
+  approved: 'green',
+  rejected: 'red',
+} as const
 
 const COMPLIANCE_LABEL: Record<string, string> = {
   pass: '通过',
@@ -54,11 +73,17 @@ export function BidGatePanel({
   gate,
   loading,
   error,
+  approval,
+  approvalLoading,
+  approvalBusy,
+  approvalError,
+  onApprove,
+  onReject,
   exporting,
   exportError,
   onExport,
 }: BidGatePanelProps) {
-  const { canManage, isAdmin } = usePermissions()
+  const { canManage, canReview, isAdmin } = usePermissions()
 
   return (
     <Card className="overflow-hidden">
@@ -152,6 +177,70 @@ export function BidGatePanel({
               )
             })}
           </ul>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-200">审批</span>
+              <Badge
+                tone={
+                  APPROVAL_TONE[
+                    (approval?.status ?? 'not_requested') as keyof typeof APPROVAL_TONE
+                  ] ?? 'neutral'
+                }
+              >
+                {APPROVAL_LABEL[approval?.status ?? 'not_requested'] ??
+                  approval?.status ??
+                  '未审批'}
+              </Badge>
+            </div>
+            {approvalLoading ? (
+              <p className="mt-2 text-[11px] text-slate-500">正在读取审批状态…</p>
+            ) : null}
+            {approval?.status === 'approved' ? (
+              <p className="mt-2 text-[11px] leading-5 text-slate-400">
+                审批人：{approval.approved_by_name || approval.approved_by || '—'}
+                {approval.created_at
+                  ? ` · ${new Date(approval.created_at).toLocaleString('zh-CN')}`
+                  : ''}
+                {approval.override ? ' · override' : ''}
+              </p>
+            ) : null}
+            {approval?.reason ? (
+              <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                意见：{approval.reason}
+              </p>
+            ) : null}
+            {approvalError ? (
+              <p className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1.5 text-[11px] text-red-200">
+                {approvalError}
+              </p>
+            ) : null}
+            {canReview ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={approvalBusy}
+                  onClick={onApprove}
+                >
+                  <Icon name="check" className="h-3.5 w-3.5" />
+                  通过审批
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={approvalBusy}
+                  onClick={onReject}
+                >
+                  驳回
+                </Button>
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-slate-500">
+                审批需要评审人、投标经理或管理员权限。
+              </p>
+            )}
+          </div>
 
           {exportError ? (
             <p className="rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs leading-5 text-red-200">

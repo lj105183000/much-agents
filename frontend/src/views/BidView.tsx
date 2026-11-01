@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
+  BidApprovalResponse,
   BidGateResponse,
   BidOutlineResponse,
   BidSectionDetail,
@@ -97,6 +98,10 @@ export function BidView({
   const [gate, setGate] = useState<BidGateResponse | null>(null)
   const [gateLoading, setGateLoading] = useState(false)
   const [gateError, setGateError] = useState<string | null>(null)
+  const [approval, setApproval] = useState<BidApprovalResponse | null>(null)
+  const [approvalLoading, setApprovalLoading] = useState(false)
+  const [approvalBusy, setApprovalBusy] = useState(false)
+  const [approvalError, setApprovalError] = useState<string | null>(null)
   const [complianceRefresh, setComplianceRefresh] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
@@ -158,6 +163,10 @@ export function BidView({
     setOutlineError(null)
     setGate(null)
     setGateError(null)
+    setApproval(null)
+    setApprovalError(null)
+    setApprovalLoading(false)
+    setApprovalBusy(false)
     setExportError(null)
     setPreview(null)
     setPreviewError(null)
@@ -203,6 +212,34 @@ export function BidView({
     }
     // Only reload when the gate changes, not on every outline poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, run?.gate_status])
+
+  useEffect(() => {
+    if (!runId || !run?.gate_status) {
+      setApproval(null)
+      return
+    }
+    let cancelled = false
+    setApprovalLoading(true)
+    setApprovalError(null)
+    api
+      .getBidApproval(runId)
+      .then((response) => {
+        if (!cancelled) setApproval(response)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setApprovalError(
+            caught instanceof ApiError ? caught.message : '审批状态读取失败',
+          )
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setApprovalLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [runId, run?.gate_status])
 
   useEffect(() => {
@@ -417,6 +454,49 @@ export function BidView({
       }
     } finally {
       setExporting(false)
+    }
+  }
+
+  const approveRun = async () => {
+    if (!runId) return
+    const reason = window.prompt('审批意见（可选）', '') ?? ''
+    const override = gate?.status === 'block'
+    if (
+      override &&
+      !window.confirm('门禁仍为阻止状态，确定以 override 方式审批吗？')
+    ) {
+      return
+    }
+    setApprovalBusy(true)
+    setApprovalError(null)
+    try {
+      const result = await api.approveBidRun(runId, { reason, override })
+      setApproval(result)
+      setNotice('已通过审批')
+    } catch (caught) {
+      setApprovalError(
+        caught instanceof ApiError ? caught.message : '审批失败',
+      )
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
+
+  const rejectRun = async () => {
+    if (!runId) return
+    const reason = window.prompt('驳回原因', '') ?? ''
+    setApprovalBusy(true)
+    setApprovalError(null)
+    try {
+      const result = await api.rejectBidRun(runId, { reason })
+      setApproval(result)
+      setNotice('已驳回')
+    } catch (caught) {
+      setApprovalError(
+        caught instanceof ApiError ? caught.message : '驳回失败',
+      )
+    } finally {
+      setApprovalBusy(false)
     }
   }
 
@@ -854,6 +934,12 @@ export function BidView({
               gate={gate}
               loading={gateLoading}
               error={gateError}
+              approval={approval}
+              approvalLoading={approvalLoading}
+              approvalBusy={approvalBusy}
+              approvalError={approvalError}
+              onApprove={() => void approveRun()}
+              onReject={() => void rejectRun()}
               exporting={exporting}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}

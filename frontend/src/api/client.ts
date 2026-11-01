@@ -3,6 +3,8 @@ import type {
   ArtifactInfo,
   ArtifactListResponse,
   ArtifactSource,
+  BidApprovalRequest,
+  BidApprovalResponse,
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
@@ -537,6 +539,40 @@ export const api = {
   getBidGate(runId: string): Promise<BidGateResponse> {
     return request<BidGateResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  getBidApproval(runId: string): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approval`,
+    )
+  },
+
+  approveBidRun(
+    runId: string,
+    payload: BidApprovalRequest = {},
+  ): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  rejectBidRun(
+    runId: string,
+    payload: BidApprovalRequest = {},
+  ): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/reject`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
   },
 
