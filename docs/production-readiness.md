@@ -27,9 +27,9 @@
 
 仍待实施（按优先级）：
 
-- 审批 UI、force override 的 24 小时有效期与角色细化（当前审批 API 已可用，force 为每次导出显式传入）。
-- Cosign 镜像签名（Trivy 扫描与 SBOM 已在 CI 中，初始为 report-only）。
-- L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具与夜间 workflow 骨架已落地）。
+- force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
+- 启用 Cosign 签名（CI 已提供可选步骤，需配置 `CI_SIGN_IMAGES`、`COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD`）。
+- L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具、复核清单与夜间 workflow 骨架已落地）。
 - 检索快照、prompt registry 完整落地、MinerU/Embedding 配额、PITR。
 
 ## 0. 摘要
