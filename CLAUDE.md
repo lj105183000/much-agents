@@ -199,7 +199,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 入口：CLI `uv run python -m src.cli write <doc_id>` 与 legacy `POST /api/bids`（一次性创建并立即生成），以及新的持久化流程 `/api/bid-runs`（见下）。两者复用 `GET /api/jobs/{id}` 轮询、Redis JobStore 与 Celery `bid` 队列（任务名 `bidding.write_bid`；开发单 worker 同时消费两个队列）。
 - 产物：`upload/bids/<doc_id>/<run_id>/` 下的 `profile.json`、`outline.json`、`bid.md`、`bid.docx`、`report.json`、`gate.json`、`compliance.json`、`consistency.json`、`sections/*.md`；minio 模式同前缀对象 + 私有 `private/profiles/<doc_id>/<run_id>.json`。
 - LangGraph 流程（legacy/CLI）：确定性 plan → 逐节检索（Chroma/关键词兜底）→ 并行 Writer → 并行 Reviewer → 条件 Reviser → 确定性 assemble；只有施工组织设计的 11 个 narrative 子章节经过 LLM，其余表单/附件为确定性模板。
-- 投标人资料：`bidder_profile.example.json` 模板；缺失字段一律 `【待填写：...】`，严禁编造公司、人员、证书、业绩、报价、日期。Writer/Reviewer 不接收完整 profile；profile 快照只落本地 run 目录与私有对象 key，不进入 Redis/Celery 消息。
+- 投标人资料：`bidder_profile.example.json` 模板；缺失字段一律 `【待填写：...】`，严禁编造公司、人员、证书、业绩、报价、日期。Writer/Reviewer 不接收完整 profile；只接收 `BidderProfile.brief()` 生成的非敏感摘要（公司名称/地址/电话、人员姓名/岗位/证书编号、业绩、财务、投标信息），身份证号、银行账号、统一社会信用代码与 `other` 原始映射不进入摘要；profile 快照只落本地 run 目录与私有对象 key，不进入 Redis/Celery 消息。摘要中的类似业绩仅用于业绩描述，不得作为本工程范围或设计依据。
 - 评标覆盖：`report.json` 记录 55 条评标因素的 covered/partial/template/missing、占位符、缺失资料、审查问题与 token/耗时统计。
 - `--max-sections N` 控制生成的 narrative 数量（0=全部 11 个）；表单骨架始终完整。Word 转换支持标题/段落/列表/表格/基本内联样式，复杂排版需人工调整。
 

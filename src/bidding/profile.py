@@ -229,6 +229,146 @@ class BidderProfile(ProfileModel):
                 missing.append({"path": path, "label": label})
         return missing
 
+    def brief(self) -> str:
+        """Return a non-sensitive digest for Writer/Reviewer prompts.
+
+        Deliberately excludes identity numbers, bank details, the credit code
+        and the raw ``other`` mapping.  This is the only profile data sent to
+        the model, never the full ``profile.json`` snapshot.
+        """
+
+        lines: list[str] = []
+
+        def join(*values: object) -> str:
+            return "；".join(
+                str(value).strip()
+                for value in values
+                if value is not None and str(value).strip()
+            )
+
+        def add(label: str, value: object) -> None:
+            text = str(value or "").strip()
+            if text:
+                lines.append(f"{label}：{text}")
+
+        company = self.company
+        add("公司名称", company.name)
+        add("公司地址", company.address)
+        add("联系电话", company.phone)
+        add("传真", company.fax)
+        add("网站", company.website)
+        add("注册资本", company.registered_capital)
+        add("公司类型", company.company_type)
+        add("成立日期", company.established_date)
+        add("营业期限", company.business_term)
+        add("资质名称", company.qualification_name)
+        add("资质等级", company.qualification_grade)
+        add("资质证书编号", company.qualification_certificate)
+        add("安全生产许可证", company.safety_license)
+
+        legal = join(self.legal_representative.name, self.legal_representative.position)
+        if legal:
+            lines.append(f"法定代表人：{legal}")
+        agent = join(self.authorized_agent.name, self.authorized_agent.position)
+        if agent:
+            lines.append(f"委托代理人：{agent}")
+
+        pm = self.project_manager
+        manager = join(
+            pm.name,
+            pm.title,
+            pm.certificate_name,
+            pm.certificate_number,
+            pm.specialty,
+        )
+        if manager:
+            lines.append(f"项目经理：{manager}")
+
+        if self.personnel:
+            lines.append("拟投入人员：")
+            for member in self.personnel:
+                text = join(
+                    member.role,
+                    member.name,
+                    member.title,
+                    member.certificate_name,
+                    member.certificate_number,
+                )
+                if text:
+                    lines.append(f"- {text}")
+
+        for title, records in (
+            ("类似业绩：", self.similar_projects),
+            ("在建业绩：", self.ongoing_projects),
+        ):
+            if not records:
+                continue
+            lines.append(title)
+            for record in records:
+                text = join(
+                    record.name,
+                    record.owner,
+                    record.location,
+                    record.contract_amount,
+                    record.scale,
+                    record.role,
+                )
+                if text:
+                    lines.append(f"- {text}")
+
+        if self.financials.years:
+            lines.append("财务数据：")
+            for year in self.financials.years:
+                parts = [
+                    str(value).strip()
+                    for value in (
+                        year.year,
+                        f"营业收入 {year.revenue}" if year.revenue else "",
+                        f"净利润 {year.net_profit}" if year.net_profit else "",
+                        f"总资产 {year.total_assets}" if year.total_assets else "",
+                        f"负债 {year.liabilities}" if year.liabilities else "",
+                    )
+                    if value and str(value).strip()
+                ]
+                if parts:
+                    lines.append(f"- {'；'.join(parts)}")
+        add("流动资金", self.financials.liquid_funds)
+        add("授信额度", self.financials.line_of_credit)
+
+        credit = join(self.credit.rating, self.credit.authority)
+        if credit:
+            lines.append(f"信用评价：{credit}")
+        if self.credit.certificates:
+            lines.append("信用/体系证书：" + "；".join(self.credit.certificates))
+
+        if self.management_certificates:
+            lines.append("管理体系认证：")
+            for cert in self.management_certificates:
+                text = join(cert.name, cert.number, cert.valid_until)
+                if text:
+                    lines.append(f"- {text}")
+
+        bid = self.bid
+        add("投标保证金", join(bid.bid_bond_amount, bid.bid_bond_method))
+        add("投标有效期", bid.bid_validity_days)
+        add("计划开工日期", bid.planned_start)
+        add("计划竣工日期", bid.planned_end)
+        add("质量承诺", bid.quality_commitment)
+
+        if self.litigation:
+            lines.append("诉讼及仲裁：")
+            for item in self.litigation:
+                text = join(item.year, item.case, item.amount, item.status, item.result)
+                if text:
+                    lines.append(f"- {text}")
+
+        if self.consortium.is_consortium:
+            add("联合体", join(self.consortium.leader, "、".join(self.consortium.members)))
+        if self.subcontracting.has_subcontracting:
+            lines.append("拟分包内容以投标文件分包计划为准。")
+
+        return "\n".join(lines)
+
     def company_name(self) -> str:
         return resolve(self.company.name, "公司名称")
 

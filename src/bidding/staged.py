@@ -168,6 +168,7 @@ async def _write(
     evidence: list[Evidence],
     content_plan: dict[str, Any] | None,
     writing_focus: str,
+    profile_brief: str = "",
 ) -> SectionDraft:
     try:
         return await asyncio.to_thread(
@@ -178,6 +179,7 @@ async def _write(
             evidence,
             content_plan,
             writing_focus,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("writer raised for %s: %s", section.id, exc)
@@ -196,6 +198,7 @@ async def _review(
     draft: SectionDraft,
     evidence: list[Evidence],
     brief: str,
+    profile_brief: str = "",
 ) -> SectionReview:
     try:
         return await asyncio.to_thread(
@@ -204,6 +207,7 @@ async def _review(
             draft,
             evidence,
             brief,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("reviewer raised for %s: %s", section.id, exc)
@@ -221,6 +225,7 @@ async def _revise(
     draft: SectionDraft,
     review: SectionReview,
     evidence: list[Evidence],
+    profile_brief: str = "",
 ) -> SectionRevision:
     try:
         return await asyncio.to_thread(
@@ -229,6 +234,7 @@ async def _revise(
             draft,
             review,
             evidence,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("reviser raised for %s: %s", section.id, exc)
@@ -258,6 +264,7 @@ async def _run_section(
     semaphore: asyncio.Semaphore,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    profile_brief: str = "",
     retrieval_out: dict[str, Any] | None = None,
 ) -> StagedSectionOutcome:
     async with semaphore:
@@ -328,6 +335,7 @@ async def _run_section(
                 evidence,
                 content_plan,
                 writing_focus,
+                profile_brief,
             )
             if await hooks.is_cancelled():
                 return StagedSectionOutcome(
@@ -357,7 +365,9 @@ async def _run_section(
                 draft_markdown=draft.markdown,
                 warnings=list(draft.warnings),
             )
-            review = await _review(reviewer, section, draft, evidence, brief)
+            review = await _review(
+                reviewer, section, draft, evidence, brief, profile_brief
+            )
             if await hooks.is_cancelled():
                 return StagedSectionOutcome(
                     section_id=section.id, status="pending"
@@ -371,7 +381,9 @@ async def _run_section(
             revision: SectionRevision | None = None
             if review.needs_revision and settings.max_review_revisions > 0:
                 await hooks.update_section(section.id, status="revising")
-                revision = await _revise(reviser, section, draft, review, evidence)
+                revision = await _revise(
+                    reviser, section, draft, review, evidence, profile_brief
+                )
                 if await hooks.is_cancelled():
                     return StagedSectionOutcome(
                         section_id=section.id, status="pending"
@@ -471,6 +483,7 @@ async def generate_sections(
     section_ids: list[str] | None = None,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    profile_brief: str = "",
     run_id: str = "",
     job_id: str = "",
     request_id: str = "",
@@ -544,6 +557,7 @@ async def generate_sections(
                     semaphore=semaphore,
                     evidence_provider=evidence_provider,
                     company_name=company_name,
+                    profile_brief=profile_brief,
                     retrieval_out=retrieval_holder,
                 )
         finally:
