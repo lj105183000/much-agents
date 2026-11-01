@@ -710,6 +710,7 @@ class FakeBidRunRepository:
         self.sections: dict[str, list[OutlineSectionRecord]] = {}
         self.states: dict[str, list[SectionStateRecord]] = {}
         self.approvals: dict[str, list[BidApprovalRecord]] = {}
+        self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
         self,
@@ -751,6 +752,15 @@ class FakeBidRunRepository:
         if project_id is not None and run.project_id != project_id:
             return None
         return run
+
+    async def add_retrieval_snapshots(
+        self, run_id: str, records: list[dict[str, Any]], *, project_id: str
+    ) -> int:
+        for record in records:
+            self.retrieval_snapshots.append(
+                {"run_id": run_id, "project_id": project_id, **record}
+            )
+        return len(records)
 
     async def add_approval(
         self,

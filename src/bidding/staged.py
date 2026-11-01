@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ class StagedSectionOutcome:
     error: str | None = None
     llm_calls: int = 0
     usage: list[dict[str, Any]] = field(default_factory=list)
+    retrieval: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -114,6 +116,44 @@ def _merge_evidence(
     external_chars = sum(len(item.text) for item in external_kept)
     local_kept = truncate_evidence(local, max(0, budget - external_chars))
     return truncate_evidence([*local_kept, *external_kept], budget)
+
+
+def build_retrieval_snapshot(
+    query: str,
+    evidence: list[Evidence],
+    warning: str | None,
+    top_k: int,
+) -> dict[str, Any]:
+    lowered = (warning or "").lower()
+    if "chroma disabled" in lowered or "keyword" in lowered:
+        mode = "keyword"
+    elif "fallback" in lowered:
+        mode = "fallback"
+    else:
+        mode = "semantic"
+    hits = []
+    for item in evidence:
+        text = item.text or ""
+        hits.append(
+            {
+                "chunk_id": item.chunk_id,
+                "score": item.score,
+                "page_start": item.page_start,
+                "page_end": item.page_end,
+                "section_path": item.section_path,
+                "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "text_chars": len(text),
+            }
+        )
+    return {
+        "query_text": query,
+        "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        "mode": mode,
+        "top_k": int(top_k),
+        "hits": hits,
+        "evidence_chars": sum(len(item.text or "") for item in evidence),
+        "warning": warning,
+    }
 
 
 async def _write(
@@ -214,6 +254,7 @@ async def _run_section(
     semaphore: asyncio.Semaphore,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    retrieval_out: dict[str, Any] | None = None,
 ) -> StagedSectionOutcome:
     async with semaphore:
         if await hooks.is_cancelled():
@@ -264,6 +305,15 @@ async def _run_section(
                     evidence,
                     external,
                     settings.max_evidence_chars,
+                )
+            if retrieval_out is not None:
+                retrieval_out.update(
+                    build_retrieval_snapshot(
+                        query,
+                        evidence,
+                        retrieval_warning,
+                        settings.retrieval_top_k,
+                    )
                 )
             await hooks.update_section(section.id, evidence_count=len(evidence))
             draft = await _write(
@@ -462,6 +512,7 @@ async def generate_sections(
 
     async def run_one(section: OutlineSection) -> StagedSectionOutcome:
         nonlocal cancelled
+        retrieval_holder: dict[str, Any] = {}
         section_token = section_id_var.set(section.id)
         try:
             with usage_scope(
@@ -488,9 +539,11 @@ async def generate_sections(
                     semaphore=semaphore,
                     evidence_provider=evidence_provider,
                     company_name=company_name,
+                    retrieval_out=retrieval_holder,
                 )
         finally:
             section_id_var.reset(section_token)
+        result.retrieval = retrieval_holder or None
         result.usage = [record.to_dict() for record in scope.records]
         result.llm_calls = len(scope.records)
         if result.status in ("final", "failed"):

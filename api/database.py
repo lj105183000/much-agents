@@ -499,6 +499,41 @@ class BidApprovalRow(Base):
     )
 
 
+class RetrievalSnapshotRow(Base):
+    __tablename__ = "retrieval_snapshots"
+    __table_args__ = (
+        Index("ix_retrieval_snapshots_run_section", "run_id", "section_id"),
+        Index("ix_retrieval_snapshots_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    hits: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    evidence_chars: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_key: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class AuditEventRow(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
