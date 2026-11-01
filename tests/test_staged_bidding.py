@@ -4,9 +4,10 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from src.bidding.agents import ReviewerAgent
 from src.bidding.checks import build_allowed
 from src.bidding.context import TenderContext
-from src.bidding.models import Evidence, ReviewIssue
+from src.bidding.models import Evidence, ReviewIssue, SectionDraft
 from src.bidding.outline import build_outline
 from src.bidding.plan import build_content_plan
 from src.bidding.profile import BidderProfile
@@ -264,6 +265,40 @@ def test_attachment_evidence_is_merged_first_and_deduped() -> None:
     assert [item.chunk_id for item in merged] == ["att", "main"]
     assert merged[0].text == "BOQ evidence"
     assert _merge_attachment_evidence(main, [], 1000) == main
+
+
+def test_reviewer_retries_invalid_json_once(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    section = narratives[0]
+    draft = SectionDraft(
+        section_id=section.id,
+        title=section.title,
+        markdown="本工程按招标文件要求组织施工。",
+    )
+
+    class RetryingReviewer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("invalid json")
+            return {
+                "issues": [],
+                "missing_points": ["测试缺失点"],
+                "covered_points": ["测试覆盖点"],
+                "revise": False,
+            }
+
+    llm = RetryingReviewer()
+    reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
+
+    review = reviewer.review(section, draft, [], brief="")
+
+    assert llm.calls == 2
+    assert review.missing_points == ["测试缺失点"]
+    assert any("retrying once" in item for item in review.warnings)
 
 
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
