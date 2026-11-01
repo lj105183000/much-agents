@@ -14,6 +14,7 @@ from src.bidding.content_hash import compute_section_content_sha256
 
 from .database import (
     BidApprovalRow,
+    BidCommentRow,
     BidOutlineSectionRow,
     BidRunRow,
     BidSectionStateRow,
@@ -169,6 +170,26 @@ class SectionVersionRecord:
     created_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class BidCommentRecord:
+    comment_id: str
+    project_id: str
+    run_id: str
+    section_id: str | None
+    author_id: str | None
+    author_name: str
+    body: str
+    mentions: list[dict[str, Any]]
+    assignee_id: str | None
+    assignee_name: str | None
+    status: str
+    resolved_by: str | None
+    resolved_by_name: str | None
+    resolved_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
 def _run_record(row: BidRunRow) -> BidRunRecord:
     return BidRunRecord(
         run_id=row.id,
@@ -277,6 +298,27 @@ def _version_record(row: BidSectionVersionRow) -> SectionVersionRecord:
         created_by=row.created_by,
         created_by_name=row.created_by_name,
         created_at=row.created_at,
+    )
+
+
+def _comment_record(row: BidCommentRow) -> BidCommentRecord:
+    return BidCommentRecord(
+        comment_id=row.id,
+        project_id=row.project_id,
+        run_id=row.run_id,
+        section_id=row.section_id,
+        author_id=row.author_id,
+        author_name=row.author_name,
+        body=row.body,
+        mentions=list(row.mentions or []),
+        assignee_id=row.assignee_id,
+        assignee_name=row.assignee_name,
+        status=row.status,
+        resolved_by=row.resolved_by,
+        resolved_by_name=row.resolved_by_name,
+        resolved_at=row.resolved_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -1298,8 +1340,111 @@ class BidRunRepository:
                 run.updated_at = now
                 return _run_record(run)
 
+    async def add_comment(
+        self,
+        *,
+        comment_id: str,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        author_id: str | None,
+        author_name: str,
+        body: str,
+        mentions: list[dict[str, Any]],
+        assignee_id: str | None,
+        assignee_name: str | None,
+    ) -> BidCommentRecord:
+        now = _now()
+        row = BidCommentRow(
+            id=comment_id,
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            author_id=author_id,
+            author_name=author_name,
+            body=body,
+            mentions=list(mentions),
+            assignee_id=assignee_id,
+            assignee_name=assignee_name,
+            status="open",
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add(row)
+                await session.flush()
+                record = _comment_record(row)
+        return record
+
+    async def get_comment(
+        self, run_id: str, comment_id: str
+    ) -> BidCommentRecord | None:
+        async with self._session_factory() as session:
+            row = await session.get(BidCommentRow, comment_id)
+        if row is None or row.run_id != run_id:
+            return None
+        return _comment_record(row)
+
+    async def list_comments(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> list[BidCommentRecord]:
+        statement = (
+            select(BidCommentRow)
+            .where(BidCommentRow.run_id == run_id)
+            .order_by(BidCommentRow.created_at.desc())
+            .limit(max(1, min(int(limit), 500)))
+        )
+        if status:
+            statement = statement.where(BidCommentRow.status == status)
+        if section_id:
+            statement = statement.where(BidCommentRow.section_id == section_id)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_comment_record(row) for row in rows]
+
+    async def update_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        **fields: Any,
+    ) -> BidCommentRecord | None:
+        allowed = {
+            "body",
+            "assignee_id",
+            "assignee_name",
+            "status",
+            "resolved_by",
+            "resolved_by_name",
+            "resolved_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if not values:
+            return await self.get_comment(run_id, comment_id)
+        values["updated_at"] = _now()
+        statement = (
+            update(BidCommentRow)
+            .where(
+                BidCommentRow.id == comment_id,
+                BidCommentRow.run_id == run_id,
+            )
+            .values(**values)
+            .returning(BidCommentRow)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(statement)).scalar_one_or_none()
+                record = _comment_record(row) if row is not None else None
+        return record
+
 
 __all__ = [
+    "BidCommentRecord",
     "BidRunRecord",
     "BidRunRepository",
     "OutlineSectionRecord",

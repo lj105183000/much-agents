@@ -545,6 +545,54 @@ class BidApprovalRow(Base):
     )
 
 
+class BidCommentRow(Base):
+    __tablename__ = "bid_comments"
+    __table_args__ = (
+        Index("ix_bid_comments_run_created", "run_id", "created_at"),
+        Index("ix_bid_comments_project_status", "project_id", "status"),
+        Index("ix_bid_comments_assignee", "assignee_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    # Author/assignee identifiers are snapshots, not foreign keys: local
+    # development uses a synthetic user, and deleting a user must not delete
+    # the review discussion. Display names are snapshotted for the same reason.
+    author_id: Mapped[str | None] = mapped_column(String(36))
+    author_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    mentions: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    assignee_id: Mapped[str | None] = mapped_column(String(36))
+    assignee_name: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'open'")
+    )
+    resolved_by: Mapped[str | None] = mapped_column(String(36))
+    resolved_by_name: Mapped[str | None] = mapped_column(String(128))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class RetrievalSnapshotRow(Base):
     __tablename__ = "retrieval_snapshots"
     __table_args__ = (

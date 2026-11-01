@@ -303,6 +303,105 @@ class BidApprovalListResponse(BaseModel):
     approvals: list[BidApprovalResponse] = Field(default_factory=list)
 
 
+class BidCommentMention(BaseModel):
+    user_id: str
+    display_name: str
+
+
+class BidCommentCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=4000)
+    section_id: str | None = Field(default=None, max_length=64)
+    mentions: list[str] = Field(default_factory=list, max_length=20)
+    assignee_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("body")
+    @classmethod
+    def _body_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("body must not be blank")
+        return stripped
+
+
+class BidCommentUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    status: Literal["open", "resolved"] | None = None
+    assignee_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("body")
+    @classmethod
+    def _body_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("body must not be blank")
+        return stripped
+
+
+class BidCommentView(BaseModel):
+    comment_id: str
+    run_id: str
+    section_id: str | None = None
+    section_title: str | None = None
+    author_id: str | None = None
+    author_name: str
+    body: str
+    mentions: list[BidCommentMention] = Field(default_factory=list)
+    assignee_id: str | None = None
+    assignee_name: str | None = None
+    status: Literal["open", "resolved"] = "open"
+    resolved_by: str | None = None
+    resolved_by_name: str | None = None
+    resolved_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidCommentListResponse(BaseModel):
+    run_id: str
+    comments: list[BidCommentView] = Field(default_factory=list)
+
+
+class BidRunEventSection(BaseModel):
+    section_id: str
+    title: str
+    status: str
+
+
+class BidRunEventJob(BaseModel):
+    job_id: str
+    status: str
+    stage: str | None = None
+    percent: int = 0
+    message: str | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class BidRunEventSnapshot(BaseModel):
+    run_id: str
+    status: str
+    stage: str | None = None
+    percent: int = 0
+    message: str | None = None
+    gate_status: str | None = None
+    content_sha256: str | None = None
+    revision: int = 0
+    updated_at: datetime
+    counts: BidRunCounts = Field(default_factory=BidRunCounts)
+    sections: list[BidRunEventSection] = Field(default_factory=list)
+    job: BidRunEventJob | None = None
+    server_time: datetime
+    terminal: bool = False
+
+
 class BidFigureView(BaseModel):
     figure_id: str
     index: int
@@ -690,6 +789,17 @@ class ProjectMemberSummary(BaseModel):
 
 class ProjectMemberListResponse(BaseModel):
     members: list[ProjectMemberSummary] = Field(default_factory=list)
+
+
+class ProjectMemberBrief(BaseModel):
+    user_id: str
+    username: str
+    display_name: str
+    role: str
+
+
+class ProjectMemberBriefListResponse(BaseModel):
+    members: list[ProjectMemberBrief] = Field(default_factory=list)
 
 
 class ProjectMemberUpsertRequest(BaseModel):

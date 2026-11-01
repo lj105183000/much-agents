@@ -14,6 +14,7 @@ from api.audit import AuditEvent, AuditRecord, event_hash
 from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
     BidApprovalRecord,
+    BidCommentRecord,
     BidRunRecord,
     OutlineSectionRecord,
     SectionStateRecord,
@@ -712,6 +713,7 @@ class FakeBidRunRepository:
         self.states: dict[str, list[SectionStateRecord]] = {}
         self.approvals: dict[str, list[BidApprovalRecord]] = {}
         self.versions: dict[str, list[SectionVersionRecord]] = {}
+        self.comments: dict[str, BidCommentRecord] = {}
         self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
@@ -837,6 +839,92 @@ class FakeBidRunRepository:
             ),
             None,
         )
+
+    async def add_comment(
+        self,
+        *,
+        comment_id: str,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        author_id: str | None,
+        author_name: str,
+        body: str,
+        mentions: list[dict[str, Any]],
+        assignee_id: str | None,
+        assignee_name: str | None,
+    ) -> BidCommentRecord:
+        now = datetime.now(timezone.utc)
+        record = BidCommentRecord(
+            comment_id=comment_id,
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            author_id=author_id,
+            author_name=author_name,
+            body=body,
+            mentions=list(mentions),
+            assignee_id=assignee_id,
+            assignee_name=assignee_name,
+            status="open",
+            resolved_by=None,
+            resolved_by_name=None,
+            resolved_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.comments[comment_id] = record
+        return record
+
+    async def get_comment(
+        self, run_id: str, comment_id: str
+    ) -> BidCommentRecord | None:
+        record = self.comments.get(comment_id)
+        if record is None or record.run_id != run_id:
+            return None
+        return record
+
+    async def list_comments(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> list[BidCommentRecord]:
+        rows = [
+            record
+            for record in self.comments.values()
+            if record.run_id == run_id
+            and (status is None or record.status == status)
+            and (section_id is None or record.section_id == section_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 500))]
+
+    async def update_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        **fields: Any,
+    ) -> BidCommentRecord | None:
+        record = await self.get_comment(run_id, comment_id)
+        if record is None:
+            return None
+        allowed = {
+            "body",
+            "assignee_id",
+            "assignee_name",
+            "status",
+            "resolved_by",
+            "resolved_by_name",
+            "resolved_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        values["updated_at"] = datetime.now(timezone.utc)
+        updated = replace(record, **values)
+        self.comments[comment_id] = updated
+        return updated
 
     def _section_versions(
         self, run_id: str, section_id: str
