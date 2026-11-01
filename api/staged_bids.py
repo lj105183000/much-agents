@@ -14,7 +14,7 @@ from src.bidding.llm import DeepSeekChatClient
 from src.bidding.outline import build_brief
 from src.bidding.profile import BidderProfile
 from src.bidding.retrieval import build_retriever
-from src.bidding.staged import generate_sections
+from src.bidding.staged import StagedSectionOutcome, generate_sections
 from src.observability.logging import get_request_id, set_job_context
 from src.observability.metrics import RUN_DURATION, RUNS
 from src.mcp_client.config import McpClientConfig
@@ -297,6 +297,40 @@ async def execute_staged_bid_job(
         except JobStoreError:
             logger.warning("could not update Redis job progress", exc_info=True)
 
+        persisted_usage: set[str] = set()
+        persisted_retrieval: set[str] = set()
+
+        async def persist_section_artifacts(item: StagedSectionOutcome) -> None:
+            # Persist per section so a crash/resume does not lose the ledger
+            # for sections that already finished.  Failures fall back to the
+            # final aggregate write below.
+            if item.usage:
+                try:
+                    await repo.add_llm_usage(
+                        run_id, item.usage, project_id=run.project_id
+                    )
+                    persisted_usage.add(item.section_id)
+                except Exception:  # noqa: BLE001 - final flush retries
+                    logger.warning(
+                        "could not persist incremental LLM usage for %s",
+                        item.section_id,
+                        exc_info=True,
+                    )
+            if isinstance(item.retrieval, dict):
+                try:
+                    await repo.add_retrieval_snapshots(
+                        run_id,
+                        [{"section_id": item.section_id, **item.retrieval}],
+                        project_id=run.project_id,
+                    )
+                    persisted_retrieval.add(item.section_id)
+                except Exception:  # noqa: BLE001 - final flush retries
+                    logger.warning(
+                        "could not persist incremental retrieval snapshot for %s",
+                        item.section_id,
+                        exc_info=True,
+                    )
+
         outcome = await generate_sections(
             context=context,
             brief=brief,
@@ -325,9 +359,13 @@ async def execute_staged_bid_job(
             job_id=job.job_id,
             request_id=request_id,
             project_id=run.project_id,
+            usage_sink=persist_section_artifacts,
         )
         usage_records = [
-            record for item in outcome.outcomes for record in item.usage
+            record
+            for item in outcome.outcomes
+            if item.section_id not in persisted_usage
+            for record in item.usage
         ]
         if usage_records:
             try:
@@ -340,7 +378,8 @@ async def execute_staged_bid_job(
         retrieval_records = [
             {"section_id": item.section_id, **item.retrieval}
             for item in outcome.outcomes
-            if isinstance(item.retrieval, dict)
+            if item.section_id not in persisted_retrieval
+            and isinstance(item.retrieval, dict)
         ]
         if retrieval_records:
             try:

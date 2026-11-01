@@ -86,6 +86,52 @@ def test_generate_sections_checkpoints_each_stage(tmp_path: Path) -> None:
     assert len(retrieval["hits"][0]["text_sha256"]) == 64
 
 
+def test_generate_sections_persists_usage_per_outcome(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+    seen: list[tuple[str, int, bool]] = []
+
+    async def sink(item: Any) -> None:
+        seen.append(
+            (
+                item.section_id,
+                len(item.usage),
+                isinstance(item.retrieval, dict),
+            )
+        )
+
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+            usage_sink=sink,
+        )
+    )
+
+    assert len(seen) == len(result.outcomes) == 2
+    assert all(count > 0 for _section_id, count, _retrieval in seen)
+    assert all(has_retrieval for _section_id, _count, has_retrieval in seen)
+    assert {section_id for section_id, _count, _retrieval in seen} == {
+        item.section_id for item in result.outcomes
+    }
+
+
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
     evidence = [
         Evidence(

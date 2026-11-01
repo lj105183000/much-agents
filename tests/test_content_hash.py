@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from src.bidding.content_hash import compute_run_content_sha256
 
 
@@ -41,4 +43,23 @@ def test_content_hash_changes_when_figure_manifest_changes(tmp_path) -> None:
 
     baseline = _hash(run_dir)
     manifest.write_text('{"figures": [1]}', encoding="utf-8")
+    assert _hash(run_dir) != baseline
+
+
+def test_content_hash_ignores_figure_manifest_timestamp(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "bid.md").write_text("# bid\n", encoding="utf-8")
+    (run_dir / "figures").mkdir()
+    manifest = run_dir / "figures" / "manifest.json"
+    payload = {"generated_at": "2026-11-01T00:00:00+00:00", "figures": [{"id": "fig-1"}]}
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    baseline = _hash(run_dir)
+
+    payload["generated_at"] = "2026-11-01T01:00:00+00:00"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    assert _hash(run_dir) == baseline
+
+    payload["figures"] = [{"id": "fig-2"}]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
     assert _hash(run_dir) != baseline
