@@ -42,6 +42,10 @@ def weighted_coverage(items: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
     total = 0.0
     achieved = 0.0
+    narrative_total = 0.0
+    narrative_achieved = 0.0
+    narrative_count = 0
+    template_weight = 0.0
     counts = {status: 0 for status in STATUS_WEIGHTS}
     for item in items:
         status = str(item.get("status") or "missing")
@@ -51,8 +55,23 @@ def weighted_coverage(items: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         score = _max_score(item.get("max_score"))
         total += score
         achieved += score * STATUS_WEIGHTS[status]
+        if status == "template":
+            template_weight += score
+        else:
+            narrative_count += 1
+            narrative_total += score
+            narrative_achieved += score * STATUS_WEIGHTS[status]
     return {
         "ratio": round(achieved / total, 4) if total else 0.0,
+        "narrative_ratio": (
+            round(narrative_achieved / narrative_total, 4)
+            if narrative_total
+            else None
+        ),
+        "template_weight_share": (
+            round(template_weight / total, 4) if total else 0.0
+        ),
+        "narrative_count": narrative_count,
         "achieved": round(achieved, 3),
         "total": round(total, 3),
         "counts": counts,
