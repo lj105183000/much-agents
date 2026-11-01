@@ -33,6 +33,13 @@ def test_bid_run_schema_does_not_store_profile_content() -> None:
     assert "draft_markdown" in state_columns
     assert "profile" not in state_columns
 
+    version_columns = set(
+        Base.metadata.tables["bid_section_versions"].columns.keys()
+    )
+    assert {"markdown", "content_sha256", "outline_revision"} <= version_columns
+    assert "review_summary" in version_columns
+    assert "profile" not in version_columns
+
 
 def test_bid_runs_have_active_document_index() -> None:
     indexes = {

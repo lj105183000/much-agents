@@ -72,6 +72,7 @@ class BidSettings:
     llm_concurrency: int = 2
     use_chroma: bool = True
     profile_max_mb: int = 5
+    section_version_keep: int = 50
     figures_enabled: bool = True
     figures_max: int = 4
     figures_use_llm: bool = True
@@ -124,6 +125,9 @@ class BidSettings:
             llm_concurrency=_int(env, "BID_LLM_CONCURRENCY", 2, minimum=1),
             use_chroma=_bool(env, "BID_USE_CHROMA", True),
             profile_max_mb=_int(env, "BID_PROFILE_MAX_MB", 5, minimum=1),
+            section_version_keep=_int(
+                env, "BID_SECTION_VERSION_KEEP", 50, minimum=1
+            ),
             figures_enabled=_bool(env, "BID_FIGURES_ENABLED", True),
             figures_max=_int(env, "BID_FIGURES_MAX", 4, minimum=0),
             figures_use_llm=_bool(env, "BID_FIGURES_USE_LLM", True),

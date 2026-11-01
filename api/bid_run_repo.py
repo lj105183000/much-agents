@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from src.bidding.content_hash import compute_section_content_sha256
@@ -27,6 +27,40 @@ from .database import (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _review_summary(review: Any, issues: Any) -> str | None:
+    if isinstance(review, dict):
+        verdict = str(review.get("verdict") or "unknown")
+        issue_count = len(review.get("issues") or [])
+        warning_count = len(review.get("warnings") or [])
+        return (
+            f"verdict={verdict}; issues={issue_count}; "
+            f"warnings={warning_count}"
+        )[:1000]
+    if isinstance(issues, list) and issues:
+        return f"manual; issues={len(issues)}"
+    return None
+
+
+async def _prune_section_versions(
+    session: Any,
+    run_id: str,
+    section_id: str,
+    *,
+    keep: int,
+    latest_version: int,
+) -> None:
+    cutoff = int(latest_version) - max(1, int(keep))
+    if cutoff <= 0:
+        return
+    await session.execute(
+        delete(BidSectionVersionRow).where(
+            BidSectionVersionRow.run_id == run_id,
+            BidSectionVersionRow.section_id == section_id,
+            BidSectionVersionRow.version <= cutoff,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +162,8 @@ class SectionVersionRecord:
     source: str
     markdown: str
     content_sha256: str
+    outline_revision: int | None
+    review_summary: str | None
     created_by: str | None
     created_by_name: str | None
     created_at: datetime
@@ -236,6 +272,8 @@ def _version_record(row: BidSectionVersionRow) -> SectionVersionRecord:
         source=row.source or "generated",
         markdown=row.markdown,
         content_sha256=row.content_sha256,
+        outline_revision=row.outline_revision,
+        review_summary=row.review_summary,
         created_by=row.created_by,
         created_by_name=row.created_by_name,
         created_at=row.created_at,
@@ -463,8 +501,11 @@ class BidRunRepository:
         markdown: str,
         *,
         source: str = "generated",
+        outline_revision: int | None = None,
+        review_summary: str | None = None,
         created_by: str | None = None,
         created_by_name: str | None = None,
+        version_keep: int = 50,
     ) -> SectionVersionRecord:
         text = (markdown or "").strip()
         if not text:
@@ -506,12 +547,21 @@ class BidRunRepository:
                     source=(source or "generated")[:16],
                     markdown=text,
                     content_sha256=digest,
+                    outline_revision=outline_revision,
+                    review_summary=review_summary,
                     created_by=created_by,
                     created_by_name=created_by_name,
                     created_at=now,
                 )
                 session.add(row)
                 await session.flush()
+                await _prune_section_versions(
+                    session,
+                    run_id,
+                    section_id,
+                    keep=version_keep,
+                    latest_version=int(row.version),
+                )
                 await session.refresh(row)
                 return _version_record(row)
 
@@ -981,6 +1031,7 @@ class BidRunRepository:
         expected_final_sha256: str | None = None,
         version_actor_id: str | None = None,
         version_actor_name: str | None = None,
+        version_keep: int = 50,
         **fields: Any,
     ) -> bool:
         allowed = {
@@ -1067,18 +1118,47 @@ class BidRunRepository:
                                 BidSectionVersionRow.section_id == section_id,
                             )
                         )
+                        new_version = int(max_version or 0) + 1
+                        outline_revision = await session.scalar(
+                            select(BidRunRow.revision).where(
+                                BidRunRow.id == run_id
+                            )
+                        )
+                        if "review" in values:
+                            review_value = values["review"]
+                        else:
+                            review_value = (
+                                row.review if row is not None else None
+                            )
+                        issue_value = (
+                            values.get("issues")
+                            if "issues" in values
+                            else (row.issues if row is not None else None)
+                        )
                         session.add(
                             BidSectionVersionRow(
                                 run_id=run_id,
                                 section_id=section_id,
-                                version=int(max_version or 0) + 1,
+                                version=new_version,
                                 source=source,
                                 markdown=markdown,
                                 content_sha256=digest,
+                                outline_revision=outline_revision,
+                                review_summary=_review_summary(
+                                    review_value, issue_value
+                                ),
                                 created_by=version_actor_id,
                                 created_by_name=version_actor_name,
                                 created_at=now,
                             )
+                        )
+                        await session.flush()
+                        await _prune_section_versions(
+                            session,
+                            run_id,
+                            section_id,
+                            keep=version_keep,
+                            latest_version=new_version,
                         )
                 return True
 
