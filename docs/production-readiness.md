@@ -22,6 +22,7 @@
 - 供应链：MinIO/Chroma/Postgres/Redis 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
 - L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
 - 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单，供专家确认评分因素、候选点和关键事实。
+- 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Grafana、5 条告警规则和 Grafana 数据源；Grafana 仅绑定 `127.0.0.1:3000`。
 
 **迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
 
@@ -324,7 +325,7 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 推荐组合：**Prometheus + Alertmanager + 结构化 JSON 日志 + 简单看板**。暂不上 OpenTelemetry Collector、Jaeger/Tempo、Sentry 全套 APM。
 
 - API 暴露 `/metrics`，只在内网/受控路径可访问，不经公网 Nginx 暴露。
-- Prometheus + Alertmanager 以 Compose profile 运行，不发布主机端口；告警走邮件/企业微信/钉钉 webhook。
+- Prometheus + Grafana 以 `monitoring` Compose profile 运行；Grafana 仅绑定 `127.0.0.1:3000`。告警规则由 Prometheus 评估，Alertmanager/邮件/企业微信/钉钉通知渠道仍需按环境接入。
 - 日志统一 JSON 到 stdout，由 Docker `json-file` 收集；单机不强制上 Loki/ELK，必要时再加。
 - 关键业务指标同时写 Prometheus 和 PostgreSQL：Prometheus 用于告警，PostgreSQL 用于跨 run 分析。
 
