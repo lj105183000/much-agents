@@ -1,4 +1,8 @@
-import type { BidOutlineResponse, BidRunDetail } from '../api/types'
+import type {
+  BidOutlineResponse,
+  BidRunDetail,
+  BidRunEventSnapshot,
+} from '../api/types'
 import { usePermissions } from '../hooks/usePermissions'
 import { formatDate, stageLabel } from '../lib/format'
 import {
@@ -14,6 +18,7 @@ import { Icon } from './icons'
 interface BidRunWorkspaceProps {
   run: BidRunDetail
   outline: BidOutlineResponse | null
+  live?: BidRunEventSnapshot | null
   busy: boolean
   onGenerate: (sectionIds?: string[]) => void
   onResume: () => void
@@ -69,6 +74,7 @@ function sectionStatus(status: string) {
 export function BidRunWorkspace({
   run,
   outline,
+  live = null,
   busy,
   onGenerate,
   onResume,
@@ -82,16 +88,28 @@ export function BidRunWorkspace({
   const { canWrite } = usePermissions()
   const info = runStatus(run.status)
   const active = ['queued', 'generating', 'assembling'].includes(run.status)
+  const liveActive = active ? live : null
+  const counts = liveActive?.counts ?? run.counts
+  const percent =
+    liveActive?.job?.percent ?? liveActive?.percent ?? run.percent
+  const stage = liveActive?.job?.stage ?? liveActive?.stage ?? run.stage
+  const message = liveActive?.job?.message ?? liveActive?.message ?? run.message
+  const liveStatuses = new Map(
+    (liveActive?.sections ?? []).map((section) => [
+      section.section_id,
+      section.status,
+    ]),
+  )
   const narratives =
     outline?.sections.filter((section) => section.kind === 'narrative') ?? []
   const failedIds = narratives
     .filter((section) => section.status === 'failed')
     .map((section) => section.section_id)
-  const canGenerate = run.counts.pending > 0 || run.counts.failed > 0
+  const canGenerate = counts.pending > 0 || counts.failed > 0
   const allFinal =
-    run.counts.selected > 0 &&
-    run.counts.final === run.counts.selected &&
-    run.counts.failed === 0
+    counts.selected > 0 &&
+    counts.final === counts.selected &&
+    counts.failed === 0
   const tone =
     run.status === 'failed'
       ? 'red'
@@ -113,6 +131,7 @@ export function BidRunWorkspace({
                 ) : null}
                 {info.label}
               </Badge>
+              {liveActive ? <Badge tone="cyan">实时</Badge> : null}
               <Button variant="ghost" size="sm" onClick={onRefresh} loading={busy}>
                 <Icon name="refresh" className="h-3.5 w-3.5" />
                 刷新
@@ -126,25 +145,25 @@ export function BidRunWorkspace({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-slate-100">
-              {run.stage ? stageLabel(run.stage) : info.label}
+              {stage ? stageLabel(stage) : info.label}
             </p>
             <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-500">
-              {run.message || '—'} · 更新于 {formatDate(run.updated_at)}
+              {message || '—'} · 更新于 {formatDate(run.updated_at)}
             </p>
           </div>
           <p className="text-2xl font-semibold tracking-tight text-slate-100">
-            {Math.round(run.percent)}%
+            {Math.round(percent)}%
           </p>
         </div>
-        <ProgressBar percent={run.percent} tone={tone} />
+        <ProgressBar percent={percent} tone={tone} />
 
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="已选正文" value={run.counts.selected} />
-          <Stat label="已完成" value={run.counts.final} />
-          <Stat label="待生成" value={run.counts.pending} />
+          <Stat label="已选正文" value={counts.selected} />
+          <Stat label="已完成" value={counts.final} />
+          <Stat label="待生成" value={counts.pending} />
           <Stat
             label="失败"
-            value={run.counts.failed}
+            value={counts.failed}
             hint={run.gate_status ? `门禁 ${run.gate_status}` : undefined}
           />
         </div>
@@ -236,7 +255,9 @@ export function BidRunWorkspace({
         {narratives.length ? (
           <ul className="divide-y divide-slate-800/80 rounded-xl border border-slate-800">
             {narratives.map((section) => {
-              const status = sectionStatus(section.status)
+              const status = sectionStatus(
+                liveStatuses.get(section.section_id) ?? section.status,
+              )
               return (
                 <li
                   key={section.section_id}

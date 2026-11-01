@@ -9,6 +9,10 @@ import type {
   BidApprovalRequest,
   BidApprovalResponse,
   BidCitationsResponse,
+  BidCommentCreateInput,
+  BidCommentListResponse,
+  BidCommentUpdateInput,
+  BidCommentView,
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
@@ -27,6 +31,7 @@ import type {
   BidRequest,
   BidRunCreatedResponse,
   BidRunDetail,
+  BidRunEventSnapshot,
   BidRunListResponse,
   BidSectionDetail,
   BidSectionUpdateRequest,
@@ -41,6 +46,7 @@ import type {
   JobCreatedResponse,
   JobStatusResponse,
   ParseUploadOptions,
+  ProjectMemberBriefListResponse,
   SearchRequest,
   SearchResponse,
 } from './types'
@@ -334,6 +340,109 @@ export async function downloadArtifact(
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
+}
+
+interface ParsedSseEvent {
+  event: string
+  data: string
+}
+
+function parseSseBlock(block: string): ParsedSseEvent | null {
+  let event = 'message'
+  const data: string[] = []
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
+    if (!line || line.startsWith(':')) continue
+    const colon = line.indexOf(':')
+    const field = colon === -1 ? line : line.slice(0, colon)
+    const value =
+      colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '')
+    if (field === 'event') event = value
+    else if (field === 'data') data.push(value)
+  }
+  if (!data.length) return null
+  return { event, data: data.join('\n') }
+}
+
+export interface BidRunEventStreamOptions {
+  signal?: AbortSignal
+  onSnapshot: (snapshot: BidRunEventSnapshot) => void
+}
+
+/**
+ * Consume the bid-run SSE endpoint with a normal authenticated fetch.
+ *
+ * ``EventSource`` cannot attach an Authorization header, and putting the token
+ * in the URL is forbidden. The promise settles when the stream closes; callers
+ * abort via ``signal`` and reconnect with their own backoff.
+ */
+export async function streamBidRunEvents(
+  runId: string,
+  options: BidRunEventStreamOptions,
+): Promise<void> {
+  const path = `/api/bid-runs/${encodeURIComponent(runId)}/events`
+  assertTrustedAbsoluteTarget(path)
+  const generation = tokenGeneration
+  let response: Response
+  try {
+    response = await fetch(
+      apiUrl(path),
+      withAuth(path, {
+        signal: options.signal,
+        headers: { Accept: 'text/event-stream' },
+      }),
+    )
+  } catch (caught) {
+    if (options.signal?.aborted) throw caught
+    throw new ApiError(0, '无法连接实时进度流')
+  }
+  if (!response.ok) {
+    if (response.status === 401) notifyUnauthorized(path, generation)
+    let detail: unknown = response.statusText
+    try {
+      const body = (await response.json()) as Record<string, unknown>
+      detail = body.detail ?? body
+    } catch {
+      // Keep the HTTP status text when the body is not JSON.
+    }
+    throw new ApiError(
+      response.status,
+      formatDetail(detail) || response.statusText,
+    )
+  }
+  if (!response.body) {
+    throw new ApiError(0, '实时进度流不可用')
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let separator = buffer.indexOf('\n\n')
+      while (separator >= 0) {
+        const block = buffer.slice(0, separator)
+        buffer = buffer.slice(separator + 2)
+        const parsed = parseSseBlock(block)
+        if (parsed?.event === 'snapshot') {
+          try {
+            options.onSnapshot(
+              JSON.parse(parsed.data) as BidRunEventSnapshot,
+            )
+          } catch {
+            // Ignore a malformed frame; the next snapshot will recover.
+          }
+        } else if (parsed?.event === 'error') {
+          throw new ApiError(0, '实时进度流暂时不可用')
+        }
+        separator = buffer.indexOf('\n\n')
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function artifactPath(source: ArtifactSource): string {
@@ -643,6 +752,52 @@ export const api = {
   ): Promise<BidApprovalListResponse> {
     return request<BidApprovalListResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/approvals?limit=${limit}`,
+    )
+  },
+
+  listProjectMembers(): Promise<ProjectMemberBriefListResponse> {
+    return request<ProjectMemberBriefListResponse>('/api/project-members')
+  },
+
+  listBidComments(
+    runId: string,
+    options: { status?: 'open' | 'resolved'; sectionId?: string } = {},
+  ): Promise<BidCommentListResponse> {
+    const query = new URLSearchParams()
+    if (options.status) query.set('status', options.status)
+    if (options.sectionId) query.set('section_id', options.sectionId)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<BidCommentListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments${suffix}`,
+    )
+  },
+
+  createBidComment(
+    runId: string,
+    payload: BidCommentCreateInput,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  updateBidComment(
+    runId: string,
+    commentId: string,
+    payload: BidCommentUpdateInput,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
   },
 
