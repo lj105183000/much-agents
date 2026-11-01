@@ -12,6 +12,7 @@ from src.bidding.plan import build_content_plan
 from src.bidding.profile import BidderProfile
 from src.bidding.staged import (
     _filter_review_issues,
+    _merge_attachment_evidence,
     _quote_in_markdown,
     build_retrieval_snapshot,
     generate_sections,
@@ -236,6 +237,33 @@ def test_stale_review_issues_are_dropped_after_revision() -> None:
 
     assert [issue.message for issue in kept] == ["current", "general"]
     assert _quote_in_markdown("", "任意正文") is False
+
+
+def test_attachment_evidence_is_merged_first_and_deduped() -> None:
+    main = [
+        Evidence(chunk_id="main", text="main evidence", doc_id="d"),
+        Evidence(chunk_id="att", text="duplicate", doc_id="d"),
+    ]
+    attachment = [
+        Evidence(
+            chunk_id="att",
+            text="BOQ evidence",
+            doc_id="d",
+            section_path="附件：boq.csv",
+        ),
+        Evidence(
+            chunk_id="other",
+            text="not an attachment",
+            doc_id="d",
+            section_path="第四卷",
+        ),
+    ]
+
+    merged = _merge_attachment_evidence(main, attachment, 1000)
+
+    assert [item.chunk_id for item in merged] == ["att", "main"]
+    assert merged[0].text == "BOQ evidence"
+    assert _merge_attachment_evidence(main, [], 1000) == main
 
 
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:

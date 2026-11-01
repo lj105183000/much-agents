@@ -167,6 +167,7 @@ def run_ingest(
     store: ChromaStore | None = None,
     embedder: ZhipuEmbedder | None = None,
     collection: str | None = None,
+    prune: bool = True,
 ) -> dict:
     if not chunks:
         raise IngestError("no chunks to ingest")
@@ -180,7 +181,9 @@ def run_ingest(
         raise IngestError("embedding count does not match chunk count")
     before = store.existing_ids(doc_id)
     written = store.upsert_chunks(chunks, vectors)
-    deleted = store.prune_stale(doc_id, {chunk.id for chunk in chunks})
+    deleted = (
+        store.prune_stale(doc_id, {chunk.id for chunk in chunks}) if prune else 0
+    )
     collection_name = (
         getattr(store.ensure_collection(), "name", None)
         or collection

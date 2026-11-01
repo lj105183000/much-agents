@@ -161,7 +161,31 @@ def build_retrieval_snapshot(
     }
 
 
+_ATTACHMENT_QUERY = (
+    "工程量清单 项目编码 技术参数 设计参数 施工图纸 管径 水压试验 "
+    "回填压实度 沟槽支护"
+)
+
 _ISSUE_NOISE_RE = re.compile(r"[*`#>\s]+")
+
+
+def _merge_attachment_evidence(
+    main: list[Evidence],
+    attachment: list[Evidence],
+    max_chars: int,
+) -> list[Evidence]:
+    """Put attachment hits first, deduplicate, and enforce the budget."""
+
+    hits = [
+        item
+        for item in attachment
+        if item.section_path.startswith("附件：")
+    ]
+    if not hits:
+        return truncate_evidence(main, max_chars)
+    seen = {item.chunk_id for item in hits}
+    merged = hits + [item for item in main if item.chunk_id not in seen]
+    return truncate_evidence(merged, max_chars)
 
 
 def _quote_in_markdown(quote: str, markdown: str) -> bool:
@@ -318,6 +342,24 @@ async def _run_section(
                 settings.retrieval_top_k,
             )
             provider_warnings: list[str] = []
+            if any(
+                item.section_path.startswith("附件：") for item in context.chunks
+            ):
+                attachment_evidence, attachment_warning = await _retrieve(
+                    retriever,
+                    _ATTACHMENT_QUERY,
+                    context.doc_id,
+                    settings.retrieval_top_k,
+                )
+                evidence = _merge_attachment_evidence(
+                    evidence,
+                    attachment_evidence,
+                    settings.max_evidence_chars,
+                )
+                if attachment_warning:
+                    provider_warnings.append(
+                        f"附件证据检索失败：{attachment_warning}"
+                    )
             if evidence_provider is not None:
                 try:
                     external, provider_warnings = await evidence_provider(
