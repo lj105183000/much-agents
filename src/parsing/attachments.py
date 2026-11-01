@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import logging
 import re
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,10 +37,19 @@ SUPPORTED_SUFFIXES = (
 
 _DEFAULT_CHUNK_SIZE = 1200
 _DEFAULT_OVERLAP = 150
+_MAX_PDF_PAGES = 200
+_MAX_ATTACHMENT_CHARS = 500_000
+_MAX_ATTACHMENT_ROWS = 20_000
+_MAX_XLSX_ENTRIES = 2_000
+_MAX_XLSX_UNCOMPRESSED = 100 * 1024 * 1024
 
 
 class AttachmentError(ValueError):
-    """Raised when an attachment cannot be parsed or appended."""
+    """Raised when an attachment cannot be parsed, validated or appended."""
+
+    def __init__(self, detail: str, status_code: int = 400) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
 
 
 def _sha256(path: Path) -> str:
@@ -47,6 +58,92 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _read_text(path: Path) -> str:
+    data = path.read_bytes()
+    if b"\x00" in data:
+        raise AttachmentError("binary content is not allowed in text attachments", 415)
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise AttachmentError(
+        "attachment is not valid UTF-8 or GB18030 text", 415
+    )
+
+
+def _validate_xlsx(path: Path) -> None:
+    try:
+        if not zipfile.is_zipfile(path):
+            raise AttachmentError("not a valid XLSX (zip) file", 415)
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if len(infos) > _MAX_XLSX_ENTRIES:
+                raise AttachmentError(
+                    f"XLSX has {len(infos)} entries; limit {_MAX_XLSX_ENTRIES}",
+                    413,
+                )
+            uncompressed = sum(info.file_size for info in infos)
+            if uncompressed > _MAX_XLSX_UNCOMPRESSED:
+                raise AttachmentError(
+                    "XLSX uncompressed size exceeds the limit", 413
+                )
+            if "xl/workbook.xml" not in archive.namelist():
+                raise AttachmentError("not a valid XLSX workbook", 415)
+    except zipfile.BadZipFile as exc:
+        raise AttachmentError("not a valid XLSX (zip) file", 415) from exc
+
+
+def validate_attachment_file(
+    path: str | Path,
+    *,
+    max_pdf_pages: int = _MAX_PDF_PAGES,
+) -> None:
+    """Validate attachment structure before parsing.
+
+    Rejects renamed binaries, encrypted/oversized PDFs, zip-bomb XLSX files
+    and non-text CSV/TXT/MD content.  The parser repeats the cheap limits so
+    direct CLI use is protected as well.
+    """
+
+    source = Path(path)
+    if not source.is_file():
+        raise AttachmentError(f"attachment not found: {source}")
+    suffix = source.suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        supported = ", ".join(sorted(SUPPORTED_SUFFIXES))
+        raise AttachmentError(
+            f"unsupported attachment type {suffix or '(none)'}; supported: {supported}",
+            415,
+        )
+    if suffix in PDF_SUFFIXES:
+        try:
+            import pymupdf
+        except ImportError as exc:  # pragma: no cover - dependency is pinned
+            raise AttachmentError("PyMuPDF is required to validate PDFs", 503) from exc
+        try:
+            document = pymupdf.open(source)
+        except Exception as exc:  # noqa: BLE001 - PyMuPDF errors vary
+            raise AttachmentError("uploaded file is not a valid PDF", 400) from exc
+        try:
+            if getattr(document, "needs_pass", False):
+                raise AttachmentError("encrypted PDFs are not accepted", 400)
+            pages = int(getattr(document, "page_count", 0) or 0)
+            if pages <= 0:
+                raise AttachmentError("uploaded PDF has no pages", 400)
+            if max_pdf_pages > 0 and pages > max_pdf_pages:
+                raise AttachmentError(
+                    f"PDF has {pages} pages; the limit is {max_pdf_pages}",
+                    413,
+                )
+        finally:
+            document.close()
+    elif suffix in XLSX_SUFFIXES:
+        _validate_xlsx(source)
+    else:
+        _read_text(source)
 
 
 def _split_text(text: str, size: int, overlap: int) -> list[str]:
@@ -74,6 +171,7 @@ def _pdf_units(
     size: int,
     overlap: int,
     use_tables: bool,
+    max_pages: int = _MAX_PDF_PAGES,
 ) -> tuple[list[tuple[str, int, int, str]], int, list[str]]:
     try:
         import pymupdf
@@ -84,7 +182,15 @@ def _pdf_units(
     warnings: list[str] = []
     document = pymupdf.open(path)
     try:
+        if getattr(document, "needs_pass", False):
+            raise AttachmentError("encrypted PDFs are not accepted", 400)
         pages = document.page_count
+        if pages <= 0:
+            raise AttachmentError("uploaded PDF has no pages", 400)
+        if max_pages > 0 and pages > max_pages:
+            raise AttachmentError(
+                f"PDF has {pages} pages; the limit is {max_pages}", 413
+            )
         for index, page in enumerate(document, start=1):
             text = (page.get_text("text") or "").strip()
             table_text = ""
@@ -125,9 +231,16 @@ def _csv_units(
     *,
     size: int,
     overlap: int,
+    max_rows: int = _MAX_ATTACHMENT_ROWS,
 ) -> tuple[list[tuple[str, int, int, str]], int, list[str]]:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.reader(handle))
+    text = _read_text(path)
+    rows: list[list[str]] = []
+    for row in csv.reader(io.StringIO(text)):
+        rows.append(row)
+        if len(rows) > max_rows:
+            raise AttachmentError(
+                f"CSV has more than {max_rows} rows; split the file", 413
+            )
     lines = [
         " | ".join(cell.strip() for cell in row)
         for row in rows
@@ -146,6 +259,7 @@ def _xlsx_units(
     *,
     size: int,
     overlap: int,
+    max_rows: int = _MAX_ATTACHMENT_ROWS,
 ) -> tuple[list[tuple[str, int, int, str]], int, list[str]]:
     try:
         import openpyxl
@@ -154,12 +268,20 @@ def _xlsx_units(
             "openpyxl is required to parse XLSX attachments"
         ) from exc
 
+    _validate_xlsx(path)
     units: list[tuple[str, int, int, str]] = []
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         for sheet in workbook.worksheets:
             lines = [f"[工作表] {sheet.title}"]
+            row_count = 0
             for row in sheet.iter_rows(values_only=True):
+                row_count += 1
+                if row_count > max_rows:
+                    raise AttachmentError(
+                        f"XLSX has more than {max_rows} rows; split the file",
+                        413,
+                    )
                 cells = [
                     str(cell).strip() if cell is not None else ""
                     for cell in row
@@ -179,7 +301,7 @@ def _text_units(
     size: int,
     overlap: int,
 ) -> tuple[list[tuple[str, int, int, str]], int, list[str]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _read_text(path)
     units = [
         (piece, 1, 1, "text")
         for piece in _split_text(text, size, overlap)
@@ -234,18 +356,15 @@ def build_attachment_chunks(
     overlap: int = _DEFAULT_OVERLAP,
     use_tables: bool = True,
     ocr_parser: Any | None = None,
+    max_pages: int = _MAX_PDF_PAGES,
+    max_chars: int = _MAX_ATTACHMENT_CHARS,
+    max_rows: int = _MAX_ATTACHMENT_ROWS,
 ) -> tuple[list[Chunk], dict[str, Any]]:
     """Build chunks for one attachment without touching the parsed document."""
 
     source = Path(path)
-    if not source.is_file():
-        raise AttachmentError(f"attachment not found: {source}")
+    validate_attachment_file(source, max_pdf_pages=max_pages)
     suffix = source.suffix.lower()
-    if suffix not in SUPPORTED_SUFFIXES:
-        supported = ", ".join(sorted(SUPPORTED_SUFFIXES))
-        raise AttachmentError(
-            f"unsupported attachment type {suffix or '(none)'}; supported: {supported}"
-        )
     size = max(200, int(chunk_size))
     overlap_value = max(0, min(int(overlap), size // 3))
     sha256 = _sha256(source)
@@ -258,6 +377,7 @@ def build_attachment_chunks(
             size=size,
             overlap=overlap_value,
             use_tables=use_tables,
+            max_pages=max_pages,
         )
         parser = "pymupdf"
         if ocr_parser is not None and warnings:
@@ -285,12 +405,12 @@ def build_attachment_chunks(
                 )
     elif suffix in TABLE_SUFFIXES:
         units, pages, warnings = _csv_units(
-            source, size=size, overlap=overlap_value
+            source, size=size, overlap=overlap_value, max_rows=max_rows
         )
         parser = "csv"
     elif suffix in XLSX_SUFFIXES:
         units, pages, warnings = _xlsx_units(
-            source, size=size, overlap=overlap_value
+            source, size=size, overlap=overlap_value, max_rows=max_rows
         )
         parser = "xlsx"
     else:
@@ -303,6 +423,12 @@ def build_attachment_chunks(
         raise AttachmentError(
             "attachment produced no text chunks"
             + (" (OCR required)" if warnings else "")
+        )
+    total_chars = sum(len(text) for text, *_ in units)
+    if max_chars > 0 and total_chars > max_chars:
+        raise AttachmentError(
+            f"attachment text has {total_chars} characters; limit {max_chars}",
+            413,
         )
 
     chunks: list[Chunk] = []
@@ -344,6 +470,7 @@ def build_attachment_chunks(
         "chunk_count": len(chunks),
         "pages": pages,
         "parser": parser,
+        "char_count": total_chars,
         "warnings": warnings,
         "attached_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -653,4 +780,5 @@ __all__ = [
     "build_attachment_chunks",
     "detach_evidence",
     "list_attachments",
+    "validate_attachment_file",
 ]

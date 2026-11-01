@@ -18,6 +18,7 @@ from src.parsing.attachments import (
     attach_evidence,
     detach_evidence,
     list_attachments,
+    validate_attachment_file,
 )
 from src.parsing.config import Settings
 from src.parsing.docid import safe_stem
@@ -659,6 +660,15 @@ class AttachmentService:
                 self.api_settings.max_upload_bytes,
                 require_pdf=False,
             )
+            try:
+                validate_attachment_file(
+                    destination,
+                    max_pdf_pages=self.api_settings.max_pdf_pages,
+                )
+            except AttachmentError as exc:
+                raise UploadError(
+                    getattr(exc, "status_code", 400), str(exc)
+                ) from exc
             if is_remote(self.storage):
                 assert self.storage is not None
                 try:
