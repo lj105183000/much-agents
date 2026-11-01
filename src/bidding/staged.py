@@ -19,6 +19,7 @@ from .checks import AllowedFacts, redact_unsupported
 from .config import BidSettings
 from .context import TenderContext
 from .llm import ChatClient
+from .llm_usage import MeteredChatClient, usage_scope
 from .models import (
     Evidence,
     OutlineSection,
@@ -66,6 +67,7 @@ class StagedSectionOutcome:
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
     llm_calls: int = 0
+    usage: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -397,6 +399,10 @@ async def generate_sections(
     section_ids: list[str] | None = None,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    run_id: str = "",
+    job_id: str = "",
+    request_id: str = "",
+    project_id: str = "",
 ) -> StagedRunOutcome:
     requested = set(section_ids or [])
     candidates = [
@@ -410,9 +416,16 @@ async def generate_sections(
     if not candidates:
         return StagedRunOutcome()
 
-    writer = WriterAgent(llm, settings)
-    reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
-    reviser = ReviserAgent(llm, allowed, settings)
+    writer = WriterAgent(MeteredChatClient(llm, operation="writer"), settings)
+    reviewer = ReviewerAgent(
+        MeteredChatClient(llm, operation="reviewer"),
+        allowed,
+        settings,
+        context.facts,
+    )
+    reviser = ReviserAgent(
+        MeteredChatClient(llm, operation="reviser"), allowed, settings
+    )
     semaphore = asyncio.Semaphore(max(1, int(settings.llm_concurrency)))
     total = len(candidates)
     completed = 0
@@ -420,24 +433,44 @@ async def generate_sections(
 
     async def run_one(section: OutlineSection) -> StagedSectionOutcome:
         nonlocal cancelled
-        result = await _run_section(
-            section=section,
-            context=context,
-            brief=brief,
-            content_plan=content_plans.get(section.id),
-            writing_focus=writing_focus.get(section.id, ""),
-            attempt=int(existing_attempt.get(section.id, 0)) + 1,
-            settings=settings,
-            writer=writer,
-            reviewer=reviewer,
-            reviser=reviser,
-            retriever=retriever,
-            allowed=allowed,
-            hooks=hooks,
-            semaphore=semaphore,
-            evidence_provider=evidence_provider,
-            company_name=company_name,
-        )
+        with usage_scope(
+            run_id=run_id,
+            job_id=job_id,
+            request_id=request_id,
+            project_id=project_id,
+            section_id=section.id,
+        ) as scope:
+            result = await _run_section(
+                section=section,
+                context=context,
+                brief=brief,
+                content_plan=content_plans.get(section.id),
+                writing_focus=writing_focus.get(section.id, ""),
+                attempt=int(existing_attempt.get(section.id, 0)) + 1,
+                settings=settings,
+                writer=writer,
+                reviewer=reviewer,
+                reviser=reviser,
+                retriever=retriever,
+                allowed=allowed,
+                hooks=hooks,
+                semaphore=semaphore,
+                evidence_provider=evidence_provider,
+                company_name=company_name,
+            )
+        result.usage = [record.to_dict() for record in scope.records]
+        result.llm_calls = len(scope.records)
+        if result.status in ("final", "failed"):
+            try:
+                await hooks.update_section(
+                    section.id, llm_calls=result.llm_calls
+                )
+            except Exception:  # noqa: BLE001 - usage must not drop a section
+                logger.warning(
+                    "could not persist actual llm_calls for %s",
+                    section.id,
+                    exc_info=True,
+                )
         if result.status == "pending":
             cancelled = True
         return result

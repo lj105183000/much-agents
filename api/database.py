@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
@@ -357,6 +358,100 @@ class BidSectionStateRow(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class LlmCallLogRow(Base):
+    __tablename__ = "llm_call_log"
+    __table_args__ = (
+        Index("ix_llm_call_log_run_ts", "run_id", "ts"),
+        Index("ix_llm_call_log_project_ts", "project_id", "ts"),
+        Index("ix_llm_call_log_status_ts", "status", "ts"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'deepseek'")
+    )
+    model_requested: Mapped[str | None] = mapped_column(String(64))
+    model_actual: Mapped[str | None] = mapped_column(String(64))
+    operation: Mapped[str | None] = mapped_column(String(32))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_cny: Mapped[float | None] = mapped_column(Float)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    finish_reason: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ok'")
+    )
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    temperature: Mapped[float | None] = mapped_column(Float)
+    max_tokens: Mapped[int | None] = mapped_column(Integer)
+    json_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    system_fingerprint: Mapped[str | None] = mapped_column(String(128))
+
+
+class RunUsageRow(Base):
+    __tablename__ = "run_usage"
+
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    llm_calls: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    total_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    cost_cny: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
+    retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    fallback_calls: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    duration_ms: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

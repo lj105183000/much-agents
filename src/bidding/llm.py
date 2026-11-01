@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Protocol
@@ -61,6 +62,17 @@ def _base_settings(settings: Any) -> Any:
     return getattr(settings, "base", settings)
 
 
+def _as_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _escape_control_chars(text: str) -> str:
     """Escape raw newlines/tabs that some models emit inside JSON strings."""
     output: list[str] = []
@@ -109,7 +121,20 @@ class DeepSeekChatClient:
         self.client = client
         self._semaphore = threading.Semaphore(max(1, int(concurrency)))
         self._call_lock = threading.Lock()
+        self._local = threading.local()
         self.calls = 0
+        fallback = getattr(self.settings, "deepseek_allow_fallback", None)
+        if fallback is None:
+            fallback = os.environ.get("DEEPSEEK_ALLOW_FALLBACK", "true")
+        self.allow_fallback = _as_bool(fallback, default=True)
+
+    @property
+    def last_usage(self) -> dict[str, Any] | None:
+        return getattr(self._local, "usage", None)
+
+    @last_usage.setter
+    def last_usage(self, value: dict[str, Any] | None) -> None:
+        self._local.usage = value
 
     def complete(
         self,
@@ -125,15 +150,18 @@ class DeepSeekChatClient:
             {"role": "user", "content": user},
         ]
         models = [self.settings.deepseek_model]
-        if self.settings.deepseek_model != "deepseek-chat":
+        if self.allow_fallback and self.settings.deepseek_model != "deepseek-chat":
             models.append("deepseek-chat")
         attempts = max(1, int(getattr(self.settings, "deepseek_max_retries", 3)))
         last_error: Exception | None = None
+        attempts_made = 0
+        self.last_usage = None
 
         for model in models:
             model_failed = False
             for use_json in ((True, False) if json_mode else (False,)):
                 for attempt in range(attempts):
+                    attempts_made += 1
                     try:
                         kwargs: dict[str, Any] = {
                             "model": model,
@@ -147,7 +175,36 @@ class DeepSeekChatClient:
                             self.calls += 1
                         with self._semaphore:
                             response = self.client.chat.completions.create(**kwargs)
-                        return response.choices[0].message.content or ""
+                        choice = (
+                            response.choices[0]
+                            if getattr(response, "choices", None)
+                            else None
+                        )
+                        usage = getattr(response, "usage", None)
+                        finish_reason = getattr(choice, "finish_reason", None)
+                        self.last_usage = {
+                            "status": "ok",
+                            "model_requested": models[0],
+                            "model_actual": getattr(response, "model", None) or model,
+                            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                            "completion_tokens": getattr(
+                                usage, "completion_tokens", None
+                            ),
+                            "total_tokens": getattr(usage, "total_tokens", None),
+                            "retry_count": max(0, attempts_made - 1),
+                            "fallback": model != models[0],
+                            "finish_reason": finish_reason,
+                            "system_fingerprint": getattr(
+                                response, "system_fingerprint", None
+                            ),
+                        }
+                        if finish_reason == "length":
+                            logger.warning(
+                                "DeepSeek output truncated: model=%s", model
+                            )
+                        return (
+                            choice.message.content if choice is not None else ""
+                        ) or ""
                     except TypeError as exc:
                         last_error = exc
                         break
@@ -162,6 +219,13 @@ class DeepSeekChatClient:
                             time.sleep(min(2 ** attempt, 4))
                             continue
                         break
+        self.last_usage = {
+            "status": "error",
+            "model_requested": models[0],
+            "model_actual": None,
+            "retry_count": max(0, attempts_made - 1),
+            "fallback": False,
+        }
         raise BidLLMError(f"DeepSeek completion failed: {last_error}")
 
     def complete_json(self, *, system: str, user: str, **kwargs: Any) -> Any:
@@ -173,15 +237,3 @@ class DeepSeekChatClient:
                 return loads_tolerant(_escape_control_chars(text))
             except Exception as exc:  # noqa: BLE001
                 raise BidLLMError(f"LLM did not return valid JSON: {exc}") from exc
-
-
-class MeteredChatClient:
-    def __init__(self, inner: ChatClient) -> None:
-        self.inner = inner
-        self._lock = threading.Lock()
-        self.calls = 0
-
-    def complete(self, **kwargs: Any) -> str:
-        with self._lock:
-            self.calls += 1
-        return self.inner.complete(**kwargs)

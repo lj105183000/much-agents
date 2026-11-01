@@ -311,7 +311,22 @@ async def execute_staged_bid_job(
             section_ids=section_ids or None,
             evidence_provider=evidence_provider,
             company_name=company_name,
+            run_id=run_id,
+            job_id=job.job_id,
+            request_id=str(payload.get("request_id") or ""),
+            project_id=run.project_id,
         )
+        usage_records = [
+            record for item in outcome.outcomes for record in item.usage
+        ]
+        if usage_records:
+            try:
+                await repo.add_llm_usage(
+                    run_id, usage_records, project_id=run.project_id
+                )
+            except Exception:  # noqa: BLE001 - ledger must not lose the run
+                logger.warning("could not persist LLM usage", exc_info=True)
+                warnings.append("LLM usage ledger write failed")
         warnings = list(
             dict.fromkeys(
                 [

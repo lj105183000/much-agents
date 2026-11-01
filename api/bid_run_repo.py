@@ -9,7 +9,13 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from .database import BidOutlineSectionRow, BidRunRow, BidSectionStateRow
+from .database import (
+    BidOutlineSectionRow,
+    BidRunRow,
+    BidSectionStateRow,
+    LlmCallLogRow,
+    RunUsageRow,
+)
 
 
 def _now() -> datetime:
@@ -509,6 +515,104 @@ class BidRunRepository:
             async with session.begin():
                 result = await session.execute(statement)
                 return bool(result.rowcount)
+
+    async def add_llm_usage(
+        self,
+        run_id: str,
+        records: list[dict[str, Any]],
+        *,
+        project_id: str,
+    ) -> int:
+        """Persist LLM call metadata and fold it into the per-run aggregate."""
+
+        if not records:
+            return 0
+        allowed = {
+            "ts",
+            "request_id",
+            "project_id",
+            "run_id",
+            "section_id",
+            "job_id",
+            "provider",
+            "model_requested",
+            "model_actual",
+            "operation",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cost_cny",
+            "latency_ms",
+            "retry_count",
+            "fallback",
+            "finish_reason",
+            "status",
+            "error_type",
+            "temperature",
+            "max_tokens",
+            "json_mode",
+            "system_fingerprint",
+        }
+        rows: list[LlmCallLogRow] = []
+        totals = {
+            "llm_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_cny": 0.0,
+            "retries": 0,
+            "fallback_calls": 0,
+            "duration_ms": 0,
+        }
+        for raw in records:
+            data = {key: value for key, value in raw.items() if key in allowed}
+            data["run_id"] = data.get("run_id") or run_id
+            data["project_id"] = data.get("project_id") or project_id
+            ts = data.get("ts")
+            if isinstance(ts, str):
+                try:
+                    data["ts"] = datetime.fromisoformat(ts)
+                except ValueError:
+                    data.pop("ts", None)
+            rows.append(LlmCallLogRow(**data))
+            totals["llm_calls"] += 1
+            totals["prompt_tokens"] += int(data.get("prompt_tokens") or 0)
+            totals["completion_tokens"] += int(data.get("completion_tokens") or 0)
+            totals["total_tokens"] += int(data.get("total_tokens") or 0)
+            totals["cost_cny"] += float(data.get("cost_cny") or 0)
+            totals["retries"] += int(data.get("retry_count") or 0)
+            totals["fallback_calls"] += 1 if data.get("fallback") else 0
+            totals["duration_ms"] += int(data.get("latency_ms") or 0)
+
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add_all(rows)
+                usage = await session.get(RunUsageRow, run_id)
+                if usage is None:
+                    usage = RunUsageRow(
+                        run_id=run_id,
+                        project_id=project_id,
+                        llm_calls=totals["llm_calls"],
+                        prompt_tokens=totals["prompt_tokens"],
+                        completion_tokens=totals["completion_tokens"],
+                        total_tokens=totals["total_tokens"],
+                        cost_cny=totals["cost_cny"],
+                        retries=totals["retries"],
+                        fallback_calls=totals["fallback_calls"],
+                        duration_ms=totals["duration_ms"],
+                    )
+                    session.add(usage)
+                else:
+                    usage.llm_calls += totals["llm_calls"]
+                    usage.prompt_tokens += totals["prompt_tokens"]
+                    usage.completion_tokens += totals["completion_tokens"]
+                    usage.total_tokens += totals["total_tokens"]
+                    usage.cost_cny = float(usage.cost_cny or 0) + totals["cost_cny"]
+                    usage.retries += totals["retries"]
+                    usage.fallback_calls += totals["fallback_calls"]
+                    usage.duration_ms += totals["duration_ms"]
+                    usage.updated_at = _now()
+        return len(rows)
 
     async def update_section(
         self,
