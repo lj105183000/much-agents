@@ -17,6 +17,7 @@ from api.bid_run_repo import (
     BidRunRecord,
     OutlineSectionRecord,
     SectionStateRecord,
+    SectionVersionRecord,
 )
 from api.companies import CompanyError, CompanyRecord
 from api.config import ApiSettings
@@ -710,6 +711,7 @@ class FakeBidRunRepository:
         self.sections: dict[str, list[OutlineSectionRecord]] = {}
         self.states: dict[str, list[SectionStateRecord]] = {}
         self.approvals: dict[str, list[BidApprovalRecord]] = {}
+        self.versions: dict[str, list[SectionVersionRecord]] = {}
         self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
@@ -820,6 +822,68 @@ class FakeBidRunRepository:
                 state
                 for state in self.states.get(run_id, [])
                 if state.section_id == section_id
+            ),
+            None,
+        )
+
+    def _section_versions(
+        self, run_id: str, section_id: str
+    ) -> list[SectionVersionRecord]:
+        return self.versions.setdefault(f"{run_id}:{section_id}", [])
+
+    async def add_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        markdown: str,
+        *,
+        source: str = "generated",
+        created_by: str | None = None,
+        created_by_name: str | None = None,
+    ) -> SectionVersionRecord:
+        text = (markdown or "").strip()
+        if not text:
+            raise ValueError("section version markdown must not be empty")
+        records = self._section_versions(run_id, section_id)
+        if records and (records[-1].markdown or "").strip() == text:
+            return records[-1]
+        version = len(records) + 1
+        record = SectionVersionRecord(
+            id=version,
+            run_id=run_id,
+            section_id=section_id,
+            version=version,
+            source=(source or "generated")[:16],
+            markdown=text,
+            content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            created_by=created_by,
+            created_by_name=created_by_name,
+            created_at=datetime.now(timezone.utc),
+        )
+        records.append(record)
+        return record
+
+    async def list_section_versions(
+        self,
+        run_id: str,
+        section_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[SectionVersionRecord]:
+        records = self._section_versions(run_id, section_id)
+        return list(reversed(records))[: max(1, min(int(limit), 100))]
+
+    async def get_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+    ) -> SectionVersionRecord | None:
+        return next(
+            (
+                record
+                for record in self._section_versions(run_id, section_id)
+                if record.id == version_id
             ),
             None,
         )
@@ -974,6 +1038,8 @@ class FakeBidRunRepository:
         *,
         expected_status: str | None = None,
         expected_token: str | None = None,
+        version_actor_id: str | None = None,
+        version_actor_name: str | None = None,
         **fields: Any,
     ) -> bool:
         states = self.states.get(run_id, [])
@@ -990,6 +1056,20 @@ class FakeBidRunRepository:
                     return False
                 found = True
                 updated.append(replace(state, **fields))
+                markdown = (fields.get("final_markdown") or "").strip()
+                if markdown and markdown != (state.final_markdown or "").strip():
+                    await self.add_section_version(
+                        run_id,
+                        section_id,
+                        markdown,
+                        source=(
+                            fields.get("final_source")
+                            or state.final_source
+                            or "generated"
+                        ),
+                        created_by=version_actor_id,
+                        created_by_name=version_actor_name,
+                    )
             else:
                 updated.append(state)
         if not found:

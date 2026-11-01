@@ -22,8 +22,10 @@ interface BidGatePanelProps {
   onApprove: (reason: string, override: boolean) => void
   onReject: (reason: string) => void
   exporting: boolean
+  exportingPdf: boolean
   exportError: string | null
   onExport: (force: boolean) => void
+  onExportPdf: (force: boolean) => void
 }
 
 const GATE_TONE = {
@@ -89,8 +91,10 @@ export function BidGatePanel({
   onApprove,
   onReject,
   exporting,
+  exportingPdf,
   exportError,
   onExport,
+  onExportPdf,
 }: BidGatePanelProps) {
   const { canManage, canReview, isAdmin } = usePermissions()
   const [reason, setReason] = useState('')
@@ -391,33 +395,55 @@ export function BidGatePanel({
           <div className="flex flex-wrap items-center justify-end gap-2">
             {!canManage ? (
               <p className="text-[11px] text-slate-500">
-                导出 DOCX 需要投标经理或管理员权限；你仍可在下方产物面板直接下载文件。
+                导出 DOCX/PDF 需要投标经理或管理员权限；你仍可在下方产物面板直接下载文件。
               </p>
             ) : gate.status === 'block' ? (
               isAdmin ? (
-                <Button
-                  variant="danger"
-                  size="sm"
-                  loading={exporting}
-                  onClick={() => onExport(true)}
-                >
-                  <Icon name="alert" className="h-3.5 w-3.5" />
-                  强制导出 DOCX
-                </Button>
+                <>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={exporting}
+                    onClick={() => onExport(true)}
+                  >
+                    <Icon name="alert" className="h-3.5 w-3.5" />
+                    强制导出 DOCX
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={exportingPdf}
+                    onClick={() => onExportPdf(true)}
+                  >
+                    <Icon name="alert" className="h-3.5 w-3.5" />
+                    强制导出 PDF
+                  </Button>
+                </>
               ) : (
                 <p className="text-[11px] text-amber-200/80">
                   门禁已阻止导出；强制导出仅限管理员。
                 </p>
               )
             ) : (
-              <Button
-                size="sm"
-                loading={exporting}
-                onClick={() => onExport(false)}
-              >
-                <Icon name="download" className="h-3.5 w-3.5" />
-                导出 DOCX
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  loading={exporting}
+                  onClick={() => onExport(false)}
+                >
+                  <Icon name="download" className="h-3.5 w-3.5" />
+                  导出 DOCX
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={exportingPdf}
+                  onClick={() => onExportPdf(false)}
+                >
+                  <Icon name="download" className="h-3.5 w-3.5" />
+                  导出 PDF
+                </Button>
+              </>
             )}
           </div>
         </div>

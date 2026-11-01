@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ from src.bidding.fix_plan import generate_fix_plan
 from src.bidding.gate import evaluate_gate
 from src.bidding.llm import DeepSeekChatClient
 from src.bidding.models import BidOutline
+from src.bidding.pdf_export import PdfExportError, convert_docx_to_pdf
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
 from src.bidding.provenance import build_provenance
@@ -497,7 +499,13 @@ class BidRunService:
     ) -> None:
         """Remove derived reports/figures that no longer match the run."""
         run_dir = self._run_dir(run)
-        for name in ("compliance.json", "consistency.json", "gate.json", "report.json"):
+        for name in (
+            "compliance.json",
+            "consistency.json",
+            "gate.json",
+            "report.json",
+            "bid.pdf",
+        ):
             try:
                 (run_dir / name).unlink()
             except FileNotFoundError:
@@ -1158,6 +1166,163 @@ class BidRunService:
         )
 
     @staticmethod
+    def _version_payload(record: Any) -> dict[str, Any]:
+        return {
+            "id": int(record.id),
+            "version": int(record.version),
+            "source": record.source,
+            "content_sha256": record.content_sha256,
+            "char_count": len(record.markdown or ""),
+            "created_by": record.created_by,
+            "created_by_name": record.created_by_name,
+            "created_at": record.created_at.isoformat(),
+        }
+
+    async def list_section_versions(
+        self,
+        run_id: str,
+        section_id: str,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        state = await repo.get_state(run_id, section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        records = await repo.list_section_versions(
+            run_id, section_id, limit=limit
+        )
+        if not records and (state.final_markdown or "").strip():
+            record = await repo.add_section_version(
+                run_id,
+                section_id,
+                state.final_markdown or "",
+                source=state.final_source or "current",
+            )
+            records = [record]
+        return {
+            "run_id": run_id,
+            "section_id": section_id,
+            "versions": [self._version_payload(record) for record in records],
+        }
+
+    async def get_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        return {
+            **self._version_payload(record),
+            "run_id": run_id,
+            "section_id": section_id,
+            "markdown": record.markdown,
+        }
+
+    async def diff_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        *,
+        against_version_id: int | None = None,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        target = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if target is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        if against_version_id is not None:
+            against = await repo.get_section_version(
+                run_id, section_id, against_version_id
+            )
+            if against is None:
+                raise BidRunError(
+                    404, f"unknown section version: {against_version_id}"
+                )
+            from_label = f"版本 {against.version}"
+            from_markdown = against.markdown
+            from_sha = against.content_sha256
+        else:
+            state = await repo.get_state(run_id, section_id)
+            if state is None or not (state.final_markdown or "").strip():
+                raise BidRunError(
+                    409, "current section has no final markdown to compare"
+                )
+            from_label = "当前正文"
+            from_markdown = (state.final_markdown or "").strip()
+            from_sha = hashlib.sha256(
+                from_markdown.encode("utf-8")
+            ).hexdigest()
+        diff = list(
+            difflib.unified_diff(
+                from_markdown.splitlines(),
+                target.markdown.splitlines(),
+                fromfile=from_label,
+                tofile=f"版本 {target.version}",
+                lineterm="",
+            )
+        )
+        return {
+            "run_id": run_id,
+            "section_id": section_id,
+            "version_id": int(target.id),
+            "against_version_id": (
+                int(against_version_id)
+                if against_version_id is not None
+                else None
+            ),
+            "from_label": from_label,
+            "to_label": f"版本 {target.version}",
+            "from_sha256": from_sha,
+            "to_sha256": target.content_sha256,
+            "changed": target.content_sha256 != from_sha,
+            "diff": "\n".join(diff),
+        }
+
+    async def restore_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
+    ) -> Any:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        return await self.edit_section(
+            run_id,
+            section_id,
+            BidSectionUpdateRequest(markdown=record.markdown),
+            actor_id=actor_id,
+            actor_name=actor_name,
+        )
+
+    @staticmethod
     def _require_editable_section(
         records: list[OutlineSectionRecord],
         section_id: str,
@@ -1202,6 +1367,9 @@ class BidRunService:
         run_id: str,
         section_id: str,
         payload: BidSectionUpdateRequest,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> BidSectionDetail:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1243,6 +1411,8 @@ class BidRunService:
             revision=None,
             error=None,
             finished_at=_now(),
+            version_actor_id=actor_id,
+            version_actor_name=actor_name,
         )
         if not updated:
             raise BidRunError(409, "section changed; reload and try again")
@@ -1580,6 +1750,9 @@ class BidRunService:
         self,
         run_id: str,
         payload: BidFixApplyRequest,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> BidSectionDetail:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1607,6 +1780,8 @@ class BidRunService:
             run_id,
             payload.section_id,
             BidSectionUpdateRequest(markdown=updated),
+            actor_id=actor_id,
+            actor_name=actor_name,
         )
 
     @staticmethod
@@ -2213,6 +2388,68 @@ class BidRunService:
         if not target.is_file():
             raise BidRunError(409, "bid.docx is not available; assemble the run first")
         return ExportTarget(path=target, key=f"{prefix}/bid.docx")
+
+    async def export_pdf(
+        self,
+        run_id: str,
+        *,
+        force: bool = False,
+    ) -> ExportTarget:
+        """Export the assembled DOCX as PDF through headless LibreOffice."""
+
+        docx_target = await self.export(run_id, force=force)
+        run_dir = docx_target.path.parent
+        prefix = docx_target.key.rsplit("/", 1)[0]
+        pdf_path = run_dir / "bid.pdf"
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    self.storage.ensure_files,
+                    prefix,
+                    run_dir,
+                    ("bid.pdf",),
+                    required=False,
+                )
+            except StorageError as exc:
+                raise BidRunError(503, "object storage is unavailable") from exc
+        needs_conversion = True
+        if pdf_path.is_file():
+            try:
+                valid = False
+                with pdf_path.open("rb") as handle:
+                    valid = handle.read(5) == b"%PDF-"
+                needs_conversion = (
+                    not valid
+                    or pdf_path.stat().st_mtime
+                    <= docx_target.path.stat().st_mtime
+                )
+            except OSError:
+                needs_conversion = True
+        if needs_conversion:
+            try:
+                await asyncio.to_thread(
+                    convert_docx_to_pdf,
+                    docx_target.path,
+                    pdf_path,
+                )
+            except PdfExportError as exc:
+                raise BidRunError(503, str(exc)) from exc
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/bid.pdf",
+                        pdf_path,
+                    )
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+        if not pdf_path.is_file():
+            raise BidRunError(409, "bid.pdf is not available")
+        return ExportTarget(path=pdf_path, key=f"{prefix}/bid.pdf")
 
 
 __all__ = [

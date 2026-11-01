@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -14,6 +15,7 @@ from .database import (
     BidOutlineSectionRow,
     BidRunRow,
     BidSectionStateRow,
+    BidSectionVersionRow,
     LlmCallLogRow,
     PromptRegistryRow,
     RetrievalSnapshotRow,
@@ -115,6 +117,20 @@ class SectionStateRecord:
     last_heartbeat_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SectionVersionRecord:
+    id: int
+    run_id: str
+    section_id: str
+    version: int
+    source: str
+    markdown: str
+    content_sha256: str
+    created_by: str | None
+    created_by_name: str | None
+    created_at: datetime
+
+
 def _run_record(row: BidRunRow) -> BidRunRecord:
     return BidRunRecord(
         run_id=row.id,
@@ -205,6 +221,21 @@ def _approval_record(row: BidApprovalRow) -> BidApprovalRecord:
         reason=row.reason or "",
         override=bool(row.override),
         expires_at=row.expires_at,
+        created_at=row.created_at,
+    )
+
+
+def _version_record(row: BidSectionVersionRow) -> SectionVersionRecord:
+    return SectionVersionRecord(
+        id=int(row.id),
+        run_id=row.run_id,
+        section_id=row.section_id,
+        version=int(row.version),
+        source=row.source or "generated",
+        markdown=row.markdown,
+        content_sha256=row.content_sha256,
+        created_by=row.created_by,
+        created_by_name=row.created_by_name,
         created_at=row.created_at,
     )
 
@@ -422,6 +453,100 @@ class BidRunRepository:
         async with self._session_factory() as session:
             row = (await session.execute(statement)).scalar_one_or_none()
             return _state_record(row) if row is not None else None
+
+    async def add_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        markdown: str,
+        *,
+        source: str = "generated",
+        created_by: str | None = None,
+        created_by_name: str | None = None,
+    ) -> SectionVersionRecord:
+        text = (markdown or "").strip()
+        if not text:
+            raise ValueError("section version markdown must not be empty")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        now = _now()
+        async with self._session_factory() as session:
+            async with session.begin():
+                # Serialize against update_section() via the state row so two
+                # writers cannot allocate the same version number.
+                await session.execute(
+                    select(BidSectionStateRow)
+                    .where(
+                        BidSectionStateRow.run_id == run_id,
+                        BidSectionStateRow.section_id == section_id,
+                    )
+                    .with_for_update()
+                )
+                latest = await session.execute(
+                    select(BidSectionVersionRow)
+                    .where(
+                        BidSectionVersionRow.run_id == run_id,
+                        BidSectionVersionRow.section_id == section_id,
+                    )
+                    .order_by(BidSectionVersionRow.version.desc())
+                    .limit(1)
+                    .with_for_update()
+                )
+                latest_row = latest.scalar_one_or_none()
+                if (
+                    latest_row is not None
+                    and (latest_row.markdown or "").strip() == text
+                ):
+                    return _version_record(latest_row)
+                row = BidSectionVersionRow(
+                    run_id=run_id,
+                    section_id=section_id,
+                    version=int(latest_row.version if latest_row else 0) + 1,
+                    source=(source or "generated")[:16],
+                    markdown=text,
+                    content_sha256=digest,
+                    created_by=created_by,
+                    created_by_name=created_by_name,
+                    created_at=now,
+                )
+                session.add(row)
+                await session.flush()
+                await session.refresh(row)
+                return _version_record(row)
+
+    async def list_section_versions(
+        self,
+        run_id: str,
+        section_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[SectionVersionRecord]:
+        statement = (
+            select(BidSectionVersionRow)
+            .where(
+                BidSectionVersionRow.run_id == run_id,
+                BidSectionVersionRow.section_id == section_id,
+            )
+            .order_by(BidSectionVersionRow.version.desc())
+            .limit(max(1, min(int(limit), 100)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+            return [_version_record(row) for row in rows]
+
+    async def get_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+    ) -> SectionVersionRecord | None:
+        statement = select(BidSectionVersionRow).where(
+            BidSectionVersionRow.id == version_id,
+            BidSectionVersionRow.run_id == run_id,
+            BidSectionVersionRow.section_id == section_id,
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            return _version_record(row) if row is not None else None
 
     async def update_outline(
         self,
@@ -851,6 +976,8 @@ class BidRunRepository:
         *,
         expected_status: str | None = None,
         expected_token: str | None = None,
+        version_actor_id: str | None = None,
+        version_actor_name: str | None = None,
         **fields: Any,
     ) -> bool:
         allowed = {
@@ -891,8 +1018,60 @@ class BidRunRepository:
         statement = statement.values(**values)
         async with self._session_factory() as session:
             async with session.begin():
+                previous = ""
+                previous_source: str | None = None
+                if "final_markdown" in values:
+                    current = await session.execute(
+                        select(BidSectionStateRow)
+                        .where(
+                            BidSectionStateRow.run_id == run_id,
+                            BidSectionStateRow.section_id == section_id,
+                        )
+                        .with_for_update()
+                    )
+                    row = current.scalar_one_or_none()
+                    # Read the pre-update values before executing the UPDATE:
+                    # an ORM-enabled UPDATE may synchronize ``row`` in place.
+                    previous = (
+                        (row.final_markdown if row is not None else "") or ""
+                    ).strip()
+                    previous_source = (
+                        row.final_source if row is not None else None
+                    )
                 result = await session.execute(statement)
-                return bool(result.rowcount)
+                if not result.rowcount:
+                    return False
+                if "final_markdown" in values:
+                    markdown = (values.get("final_markdown") or "").strip()
+                    if markdown and markdown != previous:
+                        source = str(
+                            values.get("final_source")
+                            or previous_source
+                            or "generated"
+                        )[:16]
+                        digest = hashlib.sha256(
+                            markdown.encode("utf-8")
+                        ).hexdigest()
+                        max_version = await session.scalar(
+                            select(func.max(BidSectionVersionRow.version)).where(
+                                BidSectionVersionRow.run_id == run_id,
+                                BidSectionVersionRow.section_id == section_id,
+                            )
+                        )
+                        session.add(
+                            BidSectionVersionRow(
+                                run_id=run_id,
+                                section_id=section_id,
+                                version=int(max_version or 0) + 1,
+                                source=source,
+                                markdown=markdown,
+                                content_sha256=digest,
+                                created_by=version_actor_id,
+                                created_by_name=version_actor_name,
+                                created_at=now,
+                            )
+                        )
+                return True
 
     async def reset_for_resume(self, run_id: str) -> BidRunRecord | None:
         now = _now()
@@ -1009,4 +1188,5 @@ __all__ = [
     "BidRunRepository",
     "OutlineSectionRecord",
     "SectionStateRecord",
+    "SectionVersionRecord",
 ]

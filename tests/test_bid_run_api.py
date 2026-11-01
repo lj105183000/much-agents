@@ -420,6 +420,69 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert detail["gate_status"] == gate["status"]
 
 
+def test_bid_run_pdf_export_uses_converter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def fake_convert(docx_path, pdf_path, **kwargs):
+        Path(pdf_path).write_bytes(b"%PDF-1.4\n% fake pdf\n")
+        return Path(pdf_path)
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_pdf", fake_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/pdf?force=true&reason=test"
+        )
+        assert exported.status_code == 200, exported.text
+        assert exported.content.startswith(b"%PDF-")
+        assert exported.headers["content-type"].startswith("application/pdf")
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "bid.pdf").is_file()
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "修改后正文，需要重新导出。"},
+        )
+        assert edited.status_code == 200, edited.text
+        assert not (run_dir / "bid.pdf").is_file()
+
+
+def test_bid_run_pdf_export_reports_converter_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.bidding.errors import PdfExportError
+
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def failing_convert(docx_path, pdf_path, **kwargs):
+        raise PdfExportError("LibreOffice is not installed")
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_pdf", failing_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/pdf?force=true&reason=test"
+        )
+        assert exported.status_code == 503
+        assert "LibreOffice" in exported.json()["detail"]
+
+
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(
         tmp_path, require_approval=True
@@ -484,6 +547,72 @@ def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
         assert history_after["approvals"][0]["status"] == "rejected"
         assert history_after["approvals"][0]["reason"] == "需重写"
         assert len(history_after["approvals"]) >= 2
+
+
+def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        section_id = "narr-06-01"
+        _mark_section_final(repo, run_id)
+
+        listing = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        )
+        assert listing.status_code == 200, listing.text
+        versions = listing.json()["versions"]
+        assert len(versions) == 1
+        version = versions[0]
+        assert version["source"] == "draft"
+        assert version["content_sha256"]
+
+        detail = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["markdown"].startswith("本工程施工组织设计")
+
+        same = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/diff"
+        )
+        assert same.status_code == 200, same.text
+        assert same.json()["changed"] is False
+
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/{section_id}",
+            json={"markdown": "人工修改后的第二版正文。"},
+        )
+        assert edited.status_code == 200, edited.text
+        versions_after_edit = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        ).json()["versions"]
+        assert len(versions_after_edit) == 2
+        assert versions_after_edit[0]["source"] == "manual"
+        assert versions_after_edit[0]["created_by"] == "local"
+        assert versions_after_edit[0]["created_by_name"] == "本地模式"
+
+        diff = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/diff"
+        )
+        assert diff.status_code == 200, diff.text
+        assert diff.json()["changed"] is True
+        assert "人工修改后的第二版正文" in diff.json()["diff"]
+
+        restored = client.post(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore"
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["final_markdown"].startswith("本工程施工组织设计")
+        versions_after_restore = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        ).json()["versions"]
+        assert len(versions_after_restore) == 3
+        assert versions_after_restore[0]["source"] == "manual"
+        assert versions_after_restore[0]["created_by_name"] == "本地模式"
 
 
 def test_force_override_is_valid_for_24_hours(tmp_path: Path) -> None:
@@ -1158,6 +1287,11 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
         assert detail["final_source"] == "manual"
         assert "错误建设有限公司" not in detail["final_markdown"]
         assert "测试建设有限公司" in detail["final_markdown"]
+        versions = client.get(
+            f"/api/bid-runs/{run_id}/sections/{detail['section_id']}/versions"
+        ).json()["versions"]
+        assert versions[0]["source"] == "manual"
+        assert versions[0]["created_by_name"] == "本地模式"
         run = repo.runs[run_id]
         assert run.status == "paused"
         assert run.stage == "edited"

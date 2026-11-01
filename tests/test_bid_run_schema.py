@@ -9,6 +9,7 @@ def test_bid_run_tables_are_registered() -> None:
         "bid_runs",
         "bid_outline_sections",
         "bid_section_states",
+        "bid_section_versions",
     }
 
 

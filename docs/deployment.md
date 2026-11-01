@@ -46,6 +46,7 @@
 - `openssl`（生成自签证书）与 `bash`。
 - 至少 4 GB 内存、20 GB 可用磁盘（含镜像、Postgres、MinIO、Chroma）。
 - 部署机可访问模型 API（DeepSeek/智谱/MinerU）；完全离线时这些功能会降级，见第 11 节。
+- 可选：Headless LibreOffice（`soffice`/`libreoffice`，或设置 `SOFFICE_PATH`）用于 PDF 导出；未安装时 DOCX 导出不受影响，PDF 导出返回 503。
 
 ## 3. 首次部署
 
@@ -343,6 +344,7 @@ docker compose -f docker-compose.prod.yml config
 - 单机 Compose，无 HA/多副本；Postgres/Redis/MinIO 故障会导致服务不可用。
 - `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前固定 digest 的 `chromadb/chroma` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
 - 没有内置 Prometheus/Grafana 栈；API 暴露受保护的 `/api/metrics`，需自行部署抓取与告警。Celery beat 与 `deploy/systemd/much-agents-backup.timer` 分别负责 stale reaper 与每日备份。
+- PDF 导出在 API 进程内同步调用 Headless LibreOffice；生产镜像默认未安装 LibreOffice，需要在 `api` 镜像/主机安装并确保 `soffice` 可执行（或设置 `SOFFICE_PATH`）。PDF 与 DOCX 使用同一份组装结果，转换失败不会影响 DOCX 导出。
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。

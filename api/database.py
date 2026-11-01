@@ -370,6 +370,50 @@ class BidSectionStateRow(Base):
     )
 
 
+class BidSectionVersionRow(Base):
+    __tablename__ = "bid_section_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "section_id",
+            "version",
+            name="uq_bid_section_versions_run_section_version",
+        ),
+        Index(
+            "ix_bid_section_versions_run_section",
+            "run_id",
+            "section_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'generated'")
+    )
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(36))
+    created_by_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class LlmCallLogRow(Base):
     __tablename__ = "llm_call_log"
     __table_args__ = (
