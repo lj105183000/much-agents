@@ -86,6 +86,7 @@ from .schemas import (
     AuditVerifyResponse,
     AuthMeResponse,
     AuthUser,
+    BidApprovalListResponse,
     BidApprovalRequest,
     BidApprovalResponse,
     BidComplianceResponse,
@@ -1261,6 +1262,20 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidApprovalResponse:
         return BidApprovalResponse(**await service.get_approval(run_id))
+
+    @router.get(
+        "/bid-runs/{run_id}/approvals",
+        response_model=BidApprovalListResponse,
+    )
+    async def list_bid_run_approvals(
+        run_id: str,
+        limit: int = Query(20, ge=1, le=50),
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidApprovalListResponse:
+        return BidApprovalListResponse(
+            **await service.list_approvals(run_id, limit=limit)
+        )
 
     @router.post(
         "/bid-runs/{run_id}/approve",

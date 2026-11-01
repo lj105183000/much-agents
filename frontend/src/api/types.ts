@@ -354,6 +354,7 @@ export interface BidRunSummary {
   revision: number
   job_id: string | null
   gate_status: 'pass' | 'warn' | 'block' | null
+  content_sha256: string | null
   warnings: string[]
   error: string | null
   created_at: string
@@ -611,7 +612,14 @@ export interface BidApprovalResponse {
   approved_by_name: string | null
   reason: string
   override: boolean
+  expires_at: string | null
   created_at: string | null
+}
+
+export interface BidApprovalListResponse {
+  run_id: string
+  current_content_sha256: string | null
+  approvals: BidApprovalResponse[]
 }
 
 export interface BidGateResponse {

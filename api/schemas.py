@@ -97,6 +97,7 @@ class BidRunSummary(BaseModel):
     revision: int = 0
     job_id: str | None = None
     gate_status: str | None = None
+    content_sha256: str | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
     created_at: datetime
@@ -249,7 +250,14 @@ class BidApprovalResponse(BaseModel):
     approved_by_name: str | None = None
     reason: str = ""
     override: bool = False
+    expires_at: str | None = None
     created_at: str | None = None
+
+
+class BidApprovalListResponse(BaseModel):
+    run_id: str
+    current_content_sha256: str | None = None
+    approvals: list[BidApprovalResponse] = Field(default_factory=list)
 
 
 class BidFigureView(BaseModel):

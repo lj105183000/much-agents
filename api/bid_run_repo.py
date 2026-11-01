@@ -376,6 +376,24 @@ class BidRunRepository:
             row = (await session.execute(statement)).scalar_one_or_none()
             return _approval_record(row) if row is not None else None
 
+    async def list_approvals(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[BidApprovalRecord]:
+        statement = (
+            select(BidApprovalRow)
+            .where(BidApprovalRow.run_id == run_id)
+            .order_by(
+                BidApprovalRow.created_at.desc(), BidApprovalRow.id.desc()
+            )
+            .limit(max(1, min(int(limit), 50)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+            return [_approval_record(row) for row in rows]
+
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         statement = (
             select(BidOutlineSectionRow)

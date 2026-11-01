@@ -5,6 +5,7 @@ import type {
   ArtifactSource,
   AttachmentDeleteResponse,
   AttachmentListResponse,
+  BidApprovalListResponse,
   BidApprovalRequest,
   BidApprovalResponse,
   BidComplianceResponse,
@@ -580,6 +581,15 @@ export const api = {
   getBidApproval(runId: string): Promise<BidApprovalResponse> {
     return request<BidApprovalResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/approval`,
+    )
+  },
+
+  listBidApprovals(
+    runId: string,
+    limit = 20,
+  ): Promise<BidApprovalListResponse> {
+    return request<BidApprovalListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approvals?limit=${limit}`,
     )
   },
 

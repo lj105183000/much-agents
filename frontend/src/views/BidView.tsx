@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
+  BidApprovalListResponse,
   BidApprovalResponse,
   BidGateResponse,
   BidOutlineResponse,
@@ -99,6 +100,8 @@ export function BidView({
   const [gateLoading, setGateLoading] = useState(false)
   const [gateError, setGateError] = useState<string | null>(null)
   const [approval, setApproval] = useState<BidApprovalResponse | null>(null)
+  const [approvalHistory, setApprovalHistory] =
+    useState<BidApprovalListResponse | null>(null)
   const [approvalLoading, setApprovalLoading] = useState(false)
   const [approvalBusy, setApprovalBusy] = useState(false)
   const [approvalError, setApprovalError] = useState<string | null>(null)
@@ -115,7 +118,7 @@ export function BidView({
   const [sectionActionError, setSectionActionError] = useState<string | null>(
     null,
   )
-  const { canWrite, canManage } = usePermissions()
+  const { canWrite } = usePermissions()
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
@@ -217,21 +220,25 @@ export function BidView({
   useEffect(() => {
     if (!runId || !run?.gate_status) {
       setApproval(null)
+      setApprovalHistory(null)
       return
     }
     let cancelled = false
     setApprovalLoading(true)
     setApprovalError(null)
-    api
-      .getBidApproval(runId)
-      .then((response) => {
-        if (!cancelled) setApproval(response)
+    Promise.all([api.getBidApproval(runId), api.listBidApprovals(runId)])
+      .then(([response, history]) => {
+        if (!cancelled) {
+          setApproval(response)
+          setApprovalHistory(history)
+        }
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
           setApprovalError(
             caught instanceof ApiError ? caught.message : '审批状态读取失败',
           )
+          setApprovalHistory(null)
         }
       })
       .finally(() => {
@@ -240,7 +247,7 @@ export function BidView({
     return () => {
       cancelled = true
     }
-  }, [runId, run?.gate_status])
+  }, [runId, run?.gate_status, run?.content_sha256])
 
   useEffect(() => {
     if (runStatus === 'assembled') {
@@ -457,21 +464,14 @@ export function BidView({
     }
   }
 
-  const approveRun = async () => {
+  const approveRun = async (reason: string, override: boolean) => {
     if (!runId) return
-    const reason = window.prompt('审批意见（可选）', '') ?? ''
-    const override = canManage && gate?.status === 'block'
-    if (
-      override &&
-      !window.confirm('门禁仍为阻止状态，确定以 override 方式审批吗？')
-    ) {
-      return
-    }
     setApprovalBusy(true)
     setApprovalError(null)
     try {
       const result = await api.approveBidRun(runId, { reason, override })
       setApproval(result)
+      setApprovalHistory(await api.listBidApprovals(runId))
       setNotice('已通过审批')
     } catch (caught) {
       setApprovalError(
@@ -482,14 +482,14 @@ export function BidView({
     }
   }
 
-  const rejectRun = async () => {
+  const rejectRun = async (reason: string) => {
     if (!runId) return
-    const reason = window.prompt('驳回原因', '') ?? ''
     setApprovalBusy(true)
     setApprovalError(null)
     try {
       const result = await api.rejectBidRun(runId, { reason })
       setApproval(result)
+      setApprovalHistory(await api.listBidApprovals(runId))
       setNotice('已驳回')
     } catch (caught) {
       setApprovalError(
@@ -935,11 +935,15 @@ export function BidView({
               loading={gateLoading}
               error={gateError}
               approval={approval}
+              approvalHistory={approvalHistory}
+              currentContentSha256={run?.content_sha256 ?? null}
               approvalLoading={approvalLoading}
               approvalBusy={approvalBusy}
               approvalError={approvalError}
-              onApprove={() => void approveRun()}
-              onReject={() => void rejectRun()}
+              onApprove={(reason, override) =>
+                void approveRun(reason, override)
+              }
+              onReject={(reason) => void rejectRun(reason)}
               exporting={exporting}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}
