@@ -46,6 +46,8 @@
 
 **生产价格表配置（2026-11-01）**：`deploy/env.production` 已设置 `LLM_PRICE_TABLE`（`deepseek-flash`/`deepseek-chat` 公开列表价估算：¥0.001/1k 输入、¥0.002/1k 输出，`effective_from=2026-08-16`）；`load_price_table` 在未配置时只告警一次，成本为 null/0，避免静默免费。该值为公开估算，上线前必须替换为实际合同价并核对 `effective_from`。
 
+**P0 本地复核（2026-11-01）**：重启 `start.bat` 管理的 API/Celery/Chroma/Vite 后，`/api/live`、`/api/ready` 均为 200，OpenAPI 已包含 `documents/{doc_id}/attachments` 路由，未认证访问返回 401；Vite/Nginx 均 200，生产 `dist` 已包含附件面板。生产 Compose 用 `docker-compose --env-file deploy/env.production -f docker-compose.prod.yml config --quiet` 校验通过，镜像全部 pin，`ENVIRONMENT=production` fail-fast 通过；`deploy/nginx/certs` 仍是 `CN=localhost` 自签证书，真实 DNS/CA 验收仍需外部环境。附件 API 经 Celery parse 队列 + MinIO 实测：上传 202 → job succeeded → 列表/删除 200，`storage_synced=true`；测试后主文档恢复 266 chunks、无 `attachments.json`。`LLM_PRICE_TABLE` 已写入生产 env（公开列表价估算，待合同价替换）。
+
 **迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
 
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
