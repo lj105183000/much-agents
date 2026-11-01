@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pymupdf
 import pytest
@@ -13,6 +14,8 @@ from src.parsing.attachments import (
     append_attachment_chunks,
     attach_evidence,
     build_attachment_chunks,
+    detach_evidence,
+    list_attachments,
 )
 from src.parsing.config import Settings
 
@@ -64,6 +67,124 @@ def _pdf(path: Path) -> Path:
     document.save(path)
     document.close()
     return path
+
+
+def _blank_pdf(path: Path) -> Path:
+    document = pymupdf.open()
+    document.new_page()
+    document.save(path)
+    document.close()
+    return path
+
+
+class _FakeOCR:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, str]] = []
+
+    def parse(self, pdf_path: Path, doc_id: str, **kwargs):
+        self.calls.append((pdf_path, doc_id))
+        return SimpleNamespace(
+            page_count=1,
+            content_list=[
+                SimpleNamespace(
+                    type="table",
+                    text="",
+                    table_body="项目编码 | 010101001 | DN200",
+                    page=1,
+                )
+            ],
+            markdown="",
+        )
+
+
+def test_ocr_fallback_for_scanned_pdf(tmp_path: Path) -> None:
+    path = _blank_pdf(tmp_path / "scanned.pdf")
+    parser = _FakeOCR()
+
+    chunks, meta = build_attachment_chunks(
+        DOC_ID,
+        path,
+        chunk_size=1000,
+        ocr_parser=parser,
+    )
+
+    assert chunks
+    assert "010101001" in "\n".join(chunk.text for chunk in chunks)
+    assert meta["parser"] == "mineru"
+    assert any("MinerU OCR fallback" in item for item in meta["warnings"])
+    assert parser.calls
+
+
+def test_scanned_pdf_without_ocr_raises(tmp_path: Path) -> None:
+    path = _blank_pdf(tmp_path / "scanned.pdf")
+    with pytest.raises(AttachmentError):
+        build_attachment_chunks(DOC_ID, path)
+
+
+def test_detach_removes_attachment_and_keeps_main(
+    tmp_path: Path, settings: Settings
+) -> None:
+    parsed = _parsed_doc(settings)
+    path = _csv(tmp_path / "boq.csv")
+    result = attach_evidence(
+        DOC_ID, path, settings, ingest=False, sync_storage=False
+    )
+    assert len(list_attachments(DOC_ID, settings)["attachments"]) == 1
+
+    detached = detach_evidence(
+        DOC_ID,
+        result["attachment_id"],
+        settings,
+        sync_storage=False,
+        delete_chroma=False,
+    )
+
+    assert detached["removed_chunks"] == result["chunk_count"]
+    assert detached["remaining_attachments"] == 0
+    payloads = [
+        json.loads(line)
+        for line in (parsed / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [item["id"] for item in payloads] == [MAIN_CHUNK["id"]]
+    assert list_attachments(DOC_ID, settings)["attachments"] == []
+
+
+def test_detach_deletes_chroma_vectors(
+    tmp_path: Path, settings: Settings
+) -> None:
+    _parsed_doc(settings)
+    path = _csv(tmp_path / "boq.csv")
+    result = attach_evidence(
+        DOC_ID, path, settings, ingest=False, sync_storage=False
+    )
+
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete(self, ids):
+            self.deleted.extend(ids)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.collection = FakeCollection()
+
+        def ensure_collection(self, name=None):
+            return self.collection
+
+    store = FakeStore()
+    detached = detach_evidence(
+        DOC_ID,
+        result["attachment_id"],
+        settings,
+        sync_storage=False,
+        delete_chroma=True,
+        store=store,
+    )
+
+    assert detached["chroma_deleted"] == result["chunk_count"]
+    assert len(store.collection.deleted) == result["chunk_count"]
 
 
 def test_csv_attachment_chunks(tmp_path: Path) -> None:

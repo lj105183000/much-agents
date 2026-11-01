@@ -1,32 +1,49 @@
-"""Attach a BOQ/evidence PDF, CSV or text file to a parsed tender document.
+"""Attach, list or remove BOQ/evidence files for a parsed tender document.
 
 Usage:
     uv run python -m scripts.attach_evidence --doc-id <doc_id> --file <path>
-    uv run python -m scripts.attach_evidence --doc-id <doc_id> --file <path> --no-ingest
+    uv run python -m scripts.attach_evidence --doc-id <doc_id> --list
+    uv run python -m scripts.attach_evidence --doc-id <doc_id> --remove <attachment_id>
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
-from src.parsing.attachments import AttachmentError, attach_evidence
+from src.parsing.attachments import (
+    AttachmentError,
+    attach_evidence,
+    detach_evidence,
+    list_attachments,
+)
 from src.parsing.config import Settings
 from src.parsing.logging_utils import configure_logging, configure_stdio
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Attach a BOQ/evidence PDF, CSV or text file to a parsed document."
+        description="Attach, list or remove BOQ/evidence files for a parsed document."
     )
     parser.add_argument("--doc-id", required=True, help="Existing parsed document id")
-    parser.add_argument("--file", required=True, help="Attachment path (PDF/CSV/TXT/MD)")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--file", help="Attachment path (PDF/CSV/TXT/MD)")
+    action.add_argument("--list", action="store_true", help="List attachments")
+    action.add_argument(
+        "--remove",
+        metavar="ATTACHMENT_ID",
+        help="Remove one attachment and its chunks/vectors",
+    )
     parser.add_argument(
         "--no-ingest",
         action="store_true",
         help="Only append to chunks.jsonl; do not call Chroma/Zhipu",
+    )
+    parser.add_argument(
+        "--no-ocr",
+        action="store_true",
+        help="Do not fall back to MinerU for scanned PDF pages",
     )
     parser.add_argument(
         "--collection",
@@ -38,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not upload chunks.jsonl/attachments.json to MinIO",
     )
+    parser.add_argument(
+        "--no-chroma-delete",
+        action="store_true",
+        help="With --remove, keep vectors in Chroma",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -48,14 +70,27 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging("INFO", verbose=args.verbose)
     settings = Settings.from_env()
     try:
-        result = attach_evidence(
-            args.doc_id,
-            Path(args.file),
-            settings,
-            ingest=not args.no_ingest,
-            collection=args.collection,
-            sync_storage=not args.no_storage_sync,
-        )
+        if args.list:
+            result = list_attachments(args.doc_id, settings)
+        elif args.remove:
+            result = detach_evidence(
+                args.doc_id,
+                args.remove,
+                settings,
+                collection=args.collection,
+                sync_storage=not args.no_storage_sync,
+                delete_chroma=not args.no_chroma_delete,
+            )
+        else:
+            result = attach_evidence(
+                args.doc_id,
+                Path(args.file),
+                settings,
+                ingest=not args.no_ingest,
+                collection=args.collection,
+                sync_storage=not args.no_storage_sync,
+                allow_ocr=not args.no_ocr,
+            )
     except AttachmentError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 2
