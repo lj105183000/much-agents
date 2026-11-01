@@ -21,7 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from src.bidding.pdf_export import find_soffice
 from src.parsing.artifacts import read_json
@@ -70,6 +70,7 @@ from .projects import (
     DEFAULT_PROJECT_ID,
     MemberRecord,
     ProjectContext,
+    ProjectError,
     ProjectRecord,
     ProjectService,
     get_project_service,
@@ -94,6 +95,11 @@ from .schemas import (
     BidApprovalListResponse,
     BidApprovalRequest,
     BidApprovalResponse,
+    BidCommentCreateRequest,
+    BidCommentListResponse,
+    BidCommentMention,
+    BidCommentUpdateRequest,
+    BidCommentView,
     BidComplianceResponse,
     BidConsistencyResponse,
     BidCreatedResponse,
@@ -131,6 +137,8 @@ from .schemas import (
     PasswordResetRequest,
     ProjectCreateRequest,
     ProjectListResponse,
+    ProjectMemberBrief,
+    ProjectMemberBriefListResponse,
     ProjectMemberListResponse,
     ProjectMemberSummary,
     ProjectMemberUpsertRequest,
@@ -145,6 +153,7 @@ from .schemas import (
 )
 from .search import SearchError, SearchService
 from .service import AttachmentService, ParseService
+from .sse import bid_run_event_stream
 from .streaming import stored_artifact_response
 
 logger = logging.getLogger(__name__)
@@ -271,6 +280,25 @@ def _member_summary(record: MemberRecord) -> ProjectMemberSummary:
         role=record.role,
         created_at=record.created_at,
     )
+
+
+async def _comment_member_map(
+    projects: ProjectService,
+    context: ProjectContext,
+) -> dict[str, MemberRecord] | None:
+    """Project members eligible for mentions/assignments.
+
+    ``None`` means the project registry is unavailable (for example local
+    development without PostgreSQL); callers may still create unassigned
+    comments, but must reject mentions/assignments with 503.
+    """
+    try:
+        records = await projects.list_members(context.project_id)
+    except ProjectError as exc:
+        if exc.status_code == 503:
+            return None
+        raise
+    return {record.user_id: record for record in records}
 
 
 async def _audit(
@@ -1286,6 +1314,216 @@ def build_router() -> APIRouter:
     ) -> BidApprovalListResponse:
         return BidApprovalListResponse(
             **await service.list_approvals(run_id, limit=limit)
+        )
+
+    @router.get(
+        "/project-members",
+        response_model=ProjectMemberBriefListResponse,
+    )
+    async def list_project_member_briefs(
+        context: ProjectContext = Depends(require_project_read),
+        projects: ProjectService = Depends(get_project_service),
+    ) -> ProjectMemberBriefListResponse:
+        members = await _comment_member_map(projects, context)
+        records = sorted(
+            (members or {}).values(), key=lambda record: record.username
+        )
+        return ProjectMemberBriefListResponse(
+            members=[
+                ProjectMemberBrief(
+                    user_id=record.user_id,
+                    username=record.username,
+                    display_name=record.display_name,
+                    role=record.role,
+                )
+                for record in records
+            ]
+        )
+
+    @router.get(
+        "/bid-runs/{run_id}/comments",
+        response_model=BidCommentListResponse,
+    )
+    async def list_bid_run_comments(
+        run_id: str,
+        status_value: str | None = Query(
+            default=None,
+            alias="status",
+            pattern=r"^(open|resolved)$",
+        ),
+        section_id: str | None = Query(default=None, max_length=64),
+        limit: int = Query(200, ge=1, le=500),
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentListResponse:
+        return await service.list_comments(
+            run_id,
+            status=status_value,
+            section_id=section_id,
+            limit=limit,
+        )
+
+    @router.post(
+        "/bid-runs/{run_id}/comments",
+        status_code=status.HTTP_201_CREATED,
+        response_model=BidCommentView,
+    )
+    async def create_bid_run_comment(
+        run_id: str,
+        payload: BidCommentCreateRequest,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        projects: ProjectService = Depends(get_project_service),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentView:
+        assignee_id = (payload.assignee_id or "").strip() or None
+        needs_members = bool(payload.mentions) or assignee_id is not None
+        members = (
+            await _comment_member_map(projects, context) if needs_members else None
+        )
+        mentions: list[BidCommentMention] = []
+        seen: set[str] = set()
+        for raw in payload.mentions:
+            user_id = (raw or "").strip()
+            if not user_id or user_id in seen:
+                continue
+            if members is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="project member directory is unavailable",
+                )
+            member = members.get(user_id)
+            if member is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="mentions must be project members",
+                )
+            seen.add(user_id)
+            mentions.append(
+                BidCommentMention(
+                    user_id=member.user_id,
+                    display_name=member.display_name,
+                )
+            )
+
+        assignee_name = None
+        if assignee_id is not None:
+            if members is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="project member directory is unavailable",
+                )
+            member = members.get(assignee_id)
+            if member is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="assignee must be a project member",
+                )
+            assignee_name = member.display_name
+        normalized = payload.model_copy(update={"assignee_id": assignee_id})
+
+        result = await service.create_comment(
+            run_id,
+            normalized,
+            author_id=user.id,
+            author_name=user.display_name or user.username,
+            mentions=mentions,
+            assignee_name=assignee_name,
+        )
+        await _audit(
+            request,
+            "bid_run.comment.create",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": result.comment_id,
+                "section_id": result.section_id,
+                "assignee_id": result.assignee_id,
+                "mention_count": len(result.mentions),
+            },
+        )
+        return result
+
+    @router.patch(
+        "/bid-runs/{run_id}/comments/{comment_id}",
+        response_model=BidCommentView,
+    )
+    async def update_bid_run_comment(
+        run_id: str,
+        comment_id: str,
+        payload: BidCommentUpdateRequest,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        projects: ProjectService = Depends(get_project_service),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentView:
+        set_assignee = "assignee_id" in payload.model_fields_set
+        assignee_name: str | None = None
+        normalized = payload
+        if set_assignee:
+            assignee_id = (payload.assignee_id or "").strip() or None
+            if assignee_id is not None:
+                members = await _comment_member_map(projects, context)
+                if members is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="project member directory is unavailable",
+                    )
+                member = members.get(assignee_id)
+                if member is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="assignee must be a project member",
+                    )
+                assignee_name = member.display_name
+            normalized = payload.model_copy(update={"assignee_id": assignee_id})
+
+        result = await service.update_comment(
+            run_id,
+            comment_id,
+            normalized,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            is_admin=user.role == "admin",
+            assignee_name=assignee_name,
+            set_assignee=set_assignee,
+        )
+        await _audit(
+            request,
+            "bid_run.comment.update",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": result.comment_id,
+                "status": result.status,
+                "assignee_id": result.assignee_id,
+                "changed_fields": sorted(payload.model_fields_set),
+            },
+        )
+        return result
+
+    @router.get("/bid-runs/{run_id}/events")
+    async def stream_bid_run_events(
+        run_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> StreamingResponse:
+        async def snapshot() -> dict[str, Any]:
+            payload = await service.event_snapshot(run_id)
+            return payload.model_dump(mode="json")
+
+        return StreamingResponse(
+            bid_run_event_stream(snapshot),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
     @router.post(

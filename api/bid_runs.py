@@ -82,6 +82,7 @@ from .bid_run_mapping import (
     outputs_from_states,
 )
 from .bid_run_repo import (
+    BidCommentRecord,
     BidRunRecord,
     BidRunRepository,
     OutlineSectionRecord,
@@ -91,6 +92,11 @@ from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
 from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
+    BidCommentCreateRequest,
+    BidCommentListResponse,
+    BidCommentMention,
+    BidCommentUpdateRequest,
+    BidCommentView,
     BidComplianceResponse,
     BidConsistencyResponse,
     BidFixApplyRequest,
@@ -110,6 +116,9 @@ from .schemas import (
     BidRunCounts,
     BidRunCreatedResponse,
     BidRunDetail,
+    BidRunEventJob,
+    BidRunEventSection,
+    BidRunEventSnapshot,
     BidRunListResponse,
     BidRunSummary,
     BidSectionDetail,
@@ -814,6 +823,241 @@ class BidRunService:
         sections = await repo.get_outline(run_id)
         states = await repo.get_states(run_id)
         return _outline_response(run, sections, states)
+
+    # ---- review comments, mentions, and assignments -------------------
+
+    @staticmethod
+    def _comment_payload(
+        record: BidCommentRecord,
+        section_title: str | None,
+    ) -> BidCommentView:
+        mentions: list[BidCommentMention] = []
+        for item in record.mentions:
+            if not isinstance(item, dict):
+                continue
+            user_id = str(item.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            mentions.append(
+                BidCommentMention(
+                    user_id=user_id,
+                    display_name=str(item.get("display_name") or ""),
+                )
+            )
+        return BidCommentView(
+            comment_id=record.comment_id,
+            run_id=record.run_id,
+            section_id=record.section_id,
+            section_title=section_title,
+            author_id=record.author_id,
+            author_name=record.author_name,
+            body=record.body,
+            mentions=mentions,
+            assignee_id=record.assignee_id,
+            assignee_name=record.assignee_name,
+            status="resolved" if record.status == "resolved" else "open",
+            resolved_by=record.resolved_by,
+            resolved_by_name=record.resolved_by_name,
+            resolved_at=record.resolved_at,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    async def list_comments(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> BidCommentListResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if status is not None and status not in {"open", "resolved"}:
+            raise BidRunError(422, f"unknown comment status: {status}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        records = await repo.list_comments(
+            run_id,
+            status=status,
+            section_id=section_id,
+            limit=limit,
+        )
+        return BidCommentListResponse(
+            run_id=run_id,
+            comments=[
+                self._comment_payload(record, titles.get(record.section_id or ""))
+                for record in records
+            ],
+        )
+
+    async def create_comment(
+        self,
+        run_id: str,
+        payload: BidCommentCreateRequest,
+        *,
+        author_id: str | None,
+        author_name: str,
+        mentions: list[BidCommentMention],
+        assignee_name: str | None,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        body = payload.body.strip()
+        if not body:
+            raise BidRunError(422, "comment body must not be blank")
+        if len(body) > 4000:
+            raise BidRunError(422, "comment body is too long")
+
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        section_id = (payload.section_id or "").strip() or None
+        if section_id is not None and section_id not in titles:
+            raise BidRunError(422, f"unknown outline section: {section_id}")
+
+        deduped: list[BidCommentMention] = []
+        seen: set[str] = set()
+        for mention in mentions:
+            if mention.user_id in seen:
+                continue
+            seen.add(mention.user_id)
+            deduped.append(mention)
+
+        record = await repo.add_comment(
+            comment_id=str(uuid4()),
+            project_id=run.project_id,
+            run_id=run_id,
+            section_id=section_id,
+            author_id=author_id,
+            author_name=author_name,
+            body=body,
+            mentions=[mention.model_dump() for mention in deduped],
+            assignee_id=payload.assignee_id,
+            assignee_name=assignee_name,
+        )
+        return self._comment_payload(record, titles.get(section_id or ""))
+
+    async def update_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        payload: BidCommentUpdateRequest,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+        is_admin: bool,
+        assignee_name: str | None = None,
+        set_assignee: bool = False,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+
+        fields = payload.model_fields_set
+        if not fields:
+            raise BidRunError(422, "no comment fields to update")
+        values: dict[str, Any] = {}
+
+        if "body" in fields:
+            if not is_admin and actor_id != record.author_id:
+                raise BidRunError(403, "only the author can edit a comment")
+            body = (payload.body or "").strip()
+            if not body:
+                raise BidRunError(422, "comment body must not be blank")
+            values["body"] = body
+
+        if "assignee_id" in fields:
+            values["assignee_id"] = payload.assignee_id
+            if set_assignee:
+                values["assignee_name"] = assignee_name
+
+        if "status" in fields:
+            if payload.status is None:
+                raise BidRunError(422, "comment status cannot be null")
+            if payload.status == "resolved":
+                values["status"] = "resolved"
+                values["resolved_by"] = actor_id
+                values["resolved_by_name"] = actor_name
+                values["resolved_at"] = datetime.now(timezone.utc)
+            else:
+                values["status"] = "open"
+                values["resolved_by"] = None
+                values["resolved_by_name"] = None
+                values["resolved_at"] = None
+
+        updated = await repo.update_comment(run_id, comment_id, **values)
+        if updated is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        return self._comment_payload(
+            updated, titles.get(updated.section_id or "")
+        )
+
+    async def event_snapshot(self, run_id: str) -> BidRunEventSnapshot:
+        """Compact live snapshot used by the SSE progress stream."""
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        sections = await repo.get_outline(run_id)
+        states = await repo.get_states(run_id)
+        state_by_id = _state_map(states)
+
+        job: BidRunEventJob | None = None
+        if run.job_id and self.store is not None:
+            try:
+                view = self.store.get_view(run.job_id)
+            except Exception:  # noqa: BLE001 - progress is best-effort
+                view = None
+            if view:
+                job = BidRunEventJob(
+                    job_id=str(view.get("job_id") or run.job_id),
+                    status=str(view.get("status") or ""),
+                    stage=view.get("stage"),
+                    percent=int(view.get("percent") or 0),
+                    message=view.get("message"),
+                    exit_code=view.get("exit_code"),
+                    error=view.get("error"),
+                    started_at=view.get("started_at"),
+                    finished_at=view.get("finished_at"),
+                )
+
+        return BidRunEventSnapshot(
+            run_id=run_id,
+            status=run.status,
+            stage=run.stage,
+            percent=int(run.percent or 0),
+            message=run.message,
+            gate_status=run.gate_status,
+            content_sha256=run.content_sha256,
+            revision=int(run.revision or 0),
+            updated_at=run.updated_at,
+            counts=_counts(sections, states),
+            sections=[
+                BidRunEventSection(
+                    section_id=section.section_id,
+                    title=section.title,
+                    status=(
+                        state_by_id[section.section_id].status
+                        if section.section_id in state_by_id
+                        else "pending"
+                    ),
+                )
+                for section in sections
+            ],
+            job=job,
+            server_time=datetime.now(timezone.utc),
+            terminal=run.status not in ACTIVE_RUN_STATUSES,
+        )
 
     async def patch_outline(
         self,
