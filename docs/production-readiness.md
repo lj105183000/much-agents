@@ -20,14 +20,15 @@
 - 审批 API：`POST .../approve|reject`、`GET .../approval`，审批绑定内容哈希；`BID_REQUIRE_APPROVAL` 控制导出；迁移 `0009`。
 - DOCX 质量：导出补 TOC 域、页脚 PAGE 域、表格重复表头；门禁消费 TOC/页码/字体/表格/DPI 检查。
 - 供应链：MinIO/Chroma/Postgres/Redis 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
+- L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
 
-**基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。
+**基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
 
 仍待实施（按优先级）：
 
 - 审批 UI、force override 的 24 小时有效期与角色细化（当前审批 API 已可用，force 为每次导出显式传入）。
 - Cosign 镜像签名（Trivy 扫描与 SBOM 已在 CI 中，初始为 report-only）。
-- L1 5–10 份评测集的人工复核、L2 judge 校准、夜间真实模型回归。
+- L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具与夜间 workflow 骨架已落地）。
 - 检索快照、prompt registry 完整落地、MinerU/Embedding 配额、PITR。
 
 ## 0. 摘要

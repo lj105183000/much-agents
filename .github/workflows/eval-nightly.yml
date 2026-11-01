@@ -1,0 +1,46 @@
+name: eval-nightly
+
+# Opt-in regression on a self-hosted runner that has the private eval dataset:
+#   EVAL_DATA_DIR, EVAL_BIDS_DIR, EVAL_BASELINE
+# and repository secrets DEEPSEEK_API_KEY/ZHIPU_API_KEY.
+# Enable with repository variable EVAL_NIGHTLY_ENABLED=true.
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    if: ${{ vars.EVAL_NIGHTLY_ENABLED == 'true' }}
+    runs-on: [self-hosted, eval]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - name: Generate one small run per eval case
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+        run: |
+          uv run python -m scripts.eval_generate \
+            --data-dir "$EVAL_DATA_DIR" \
+            --bids-dir "$EVAL_BIDS_DIR" \
+            --max-sections 1
+      - name: Compare against baseline
+        run: |
+          uv run python -m scripts.eval_regression \
+            --data-dir "$EVAL_DATA_DIR" \
+            --bids-dir "$EVAL_BIDS_DIR" \
+            --baseline "$EVAL_BASELINE" \
+            --output "$RUNNER_TEMP/regression.json"
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-regression
+          path: ${{ runner.temp }}/regression.json

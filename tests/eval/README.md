@@ -47,6 +47,32 @@ The builder only copies already-parsed artifacts and generates draft labels from
 5. Keep `must_cover_points.json` and any human section samples in the private
    directory only.
 
+## L2 judge and calibration
+
+The judge is blinded and uncalibrated by default. Run it on one section:
+
+```bash
+uv run python -m scripts.eval_judge --input section.json --output judge.json
+```
+
+Compare judge labels with human labels before using it as a release gate:
+
+```bash
+uv run python -m scripts.eval_calibrate --input pairs.json
+```
+
+`pairs.json` is `[["pass","pass"],["revise","pass"],...]` or a list of
+`{"human": "...", "judge": "..."}` objects. Require agreement ≥80% or
+Cohen's kappa ≥0.6 before treating the judge as a gate.
+
+## Nightly regression
+
+`.github/workflows/eval-nightly.yml` is disabled unless the repository variable
+`EVAL_NIGHTLY_ENABLED=true` and a self-hosted runner provides
+`EVAL_DATA_DIR`, `EVAL_BIDS_DIR`, `EVAL_BASELINE`, plus the model secrets.
+It runs `scripts.eval_generate` (one section per case), then
+`scripts.eval_regression` against the baseline.
+
 ## Privacy rules
 
 - Never commit `profile.json`, real company names, phone numbers, certificate
