@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from src.parsing.artifacts import read_json
 
-from src.observability.metrics import READY_CHECKS
+from src.observability.metrics import QUEUE_DEPTH, READY_CHECKS
 
 from .metrics import metrics_authorized, metrics_response
 from .artifacts import (
@@ -451,6 +451,16 @@ def build_router() -> APIRouter:
             settings, request.headers.get("authorization", "")
         ):
             raise HTTPException(status_code=403)
+        store = request.app.state.job_store
+        depth = getattr(store, "queue_depth", None)
+        if request.app.state.task_backend == "celery" and callable(depth):
+            for queue in ("parse", "bid", "maintenance"):
+                try:
+                    QUEUE_DEPTH.set(int(depth(queue)), queue=queue)
+                except Exception:  # noqa: BLE001 - metrics must not fail requests
+                    logger.warning(
+                        "could not read queue depth for %s", queue, exc_info=True
+                    )
         return metrics_response()
 
     @public_router.get("/health", response_model=HealthResponse)

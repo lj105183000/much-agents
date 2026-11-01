@@ -72,6 +72,11 @@ class RedisJobStore(JobStoreProtocol):
     ) -> "RedisJobStore":
         return cls.from_settings(ApiSettings.from_env(env_file=env_file, env=env))
 
+    def queue_depth(self, queue: str) -> int:
+        """Return the pending Celery queue length (0 when the key is absent)."""
+
+        return int(self._client.llen(queue) or 0)
+
     def push_dlq(
         self,
         *,

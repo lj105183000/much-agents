@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from api.redis_jobs import RedisJobStore
 from src.observability.metrics import (
     Gauge,
     Histogram,
@@ -91,3 +92,13 @@ def test_metrics_can_be_disabled(tmp_path: Path) -> None:
     app = _app(tmp_path, METRICS_ENABLED="false")
     with TestClient(app) as client:
         assert client.get("/api/metrics").status_code == 404
+
+
+def test_queue_depth_reads_redis_list_length() -> None:
+    class Client:
+        def llen(self, queue: str) -> int:
+            return 3 if queue == "bid" else 0
+
+    store = RedisJobStore(Client())  # type: ignore[arg-type]
+    assert store.queue_depth("bid") == 3
+    assert store.queue_depth("parse") == 0
