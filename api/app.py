@@ -207,6 +207,7 @@ def create_app(
         store=store,
         dispatch=bid_dispatcher.dispatch,
         max_attempts=api_settings.bid_run_max_attempts,
+        section_max_attempts=api_settings.bid_section_max_attempts,
         stale_seconds=api_settings.bid_run_stale_seconds,
         storage=storage,
     )

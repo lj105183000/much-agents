@@ -90,6 +90,7 @@ class ApiSettings:
     celery_worker_pool: str = "solo"
     job_ttl_seconds: int = 24 * 3600
     bid_run_max_attempts: int = 2
+    bid_section_max_attempts: int = 2
     bid_run_stale_seconds: int = 900
     auth_enabled: bool = True
     auth_session_ttl_hours: int = 12
@@ -225,6 +226,7 @@ class ApiSettings:
             celery_worker_pool=_str(env, "CELERY_WORKER_POOL", "solo"),
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
             bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
+            bid_section_max_attempts=_int(env, "BID_SECTION_MAX_ATTEMPTS", 2),
             bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
             auth_enabled=_bool(env, "AUTH_ENABLED", True),
             auth_session_ttl_hours=_int(env, "AUTH_SESSION_TTL_HOURS", 12),

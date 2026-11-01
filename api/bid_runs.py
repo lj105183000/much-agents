@@ -341,6 +341,7 @@ class BidRunService:
         store: JobStoreProtocol | None = None,
         dispatch: Callable[[Job], None] | None = None,
         max_attempts: int = 2,
+        section_max_attempts: int = 2,
         stale_seconds: int = 900,
         llm_factory: Callable[[], Any] | None = None,
         storage: Storage | None = None,
@@ -351,6 +352,7 @@ class BidRunService:
         self.store = store
         self.dispatch = dispatch
         self.max_attempts = max(1, int(max_attempts))
+        self.section_max_attempts = max(1, int(section_max_attempts))
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
         self.storage = storage
@@ -995,6 +997,17 @@ class BidRunService:
         ]
         if not generated_ids:
             raise BidRunError(422, "all selected narrative sections are already final")
+        exhausted_sections = [
+            section_id
+            for section_id in generated_ids
+            if states.get(section_id) is not None
+            and states[section_id].attempt >= self.section_max_attempts
+        ]
+        if exhausted_sections:
+            raise BidRunError(
+                409,
+                f"section has reached the maximum attempts: {exhausted_sections[0]}",
+            )
 
         await self._ensure_run_profile(run)
         await self._ensure_document(run.doc_id)
@@ -1260,6 +1273,8 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid run: {run_id}")
         if run.status in ACTIVE_RUN_STATUSES:
             raise BidRunError(409, "cannot regenerate a section while the run is active")
+        if run.attempt >= self.max_attempts:
+            raise BidRunError(409, "bid run has reached the maximum attempts")
         records = await repo.get_outline(run_id)
         self._require_editable_section(records, section_id)
         state = await repo.get_state(run_id, section_id)
@@ -1267,6 +1282,8 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid section: {section_id}")
         if state.status != "final":
             raise BidRunError(409, "only a final section can be regenerated")
+        if state.attempt >= self.section_max_attempts:
+            raise BidRunError(409, "section has reached the maximum attempts")
         prior = state
 
         updated = await repo.update_section(
@@ -1289,7 +1306,6 @@ class BidRunService:
             stage="edited",
             percent=run.percent,
             message="section regeneration requested",
-            attempt=0,
             gate_status=None,
             gate=None,
             finished_at=None,
@@ -1334,7 +1350,6 @@ class BidRunService:
                 stage="edited",
                 percent=run.percent,
                 message="section regeneration requested; retry",
-                attempt=0,
                 gate_status=None,
                 gate=None,
                 finished_at=None,
