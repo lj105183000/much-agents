@@ -469,6 +469,47 @@ def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
         )
 
 
+def test_force_override_is_valid_for_24_hours(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(
+        tmp_path, require_approval=True
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        repo.runs[run_id] = replace(
+            repo.runs[run_id],
+            gate_status="block",
+            gate={"status": "block", "checks": []},
+        )
+        service = app.state.bid_run_service
+        override = asyncio.run(
+            service.record_force_override(
+                run_id,
+                reason="客户要求先出稿",
+                actor_id="admin-1",
+                actor_name="管理员",
+            )
+        )
+        assert override is not None
+        assert override["override"] is True
+        assert override["created_at"]
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 200
+
+        expired = replace(
+            repo.approvals[run_id][-1],
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+        repo.approvals[run_id][-1] = expired
+        blocked = client.post(f"/api/bid-runs/{run_id}/export")
+        assert blocked.status_code == 409
+
+
 def test_bid_run_figures_api_and_regeneration(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(tmp_path)
     with TestClient(app) as client:

@@ -1370,6 +1370,18 @@ def build_router() -> APIRouter:
             if not projects.has_permission(context, "manage"):
                 raise HTTPException(status_code=403, detail="permission denied")
         target = await service.export(run_id, force=force)
+        if force:
+            try:
+                await service.record_force_override(
+                    run_id,
+                    reason=(reason or "").strip(),
+                    actor_id=user.id,
+                    actor_name=user.display_name or user.username,
+                )
+            except Exception:  # noqa: BLE001 - export already succeeded
+                logger.warning(
+                    "could not record forced-export override", exc_info=True
+                )
         storage = _remote_storage(request)
         info = None
         if storage is not None:

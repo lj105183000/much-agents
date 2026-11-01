@@ -9,7 +9,7 @@ import logging
 import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
@@ -2066,6 +2066,35 @@ class BidRunService:
         record = await repo.latest_approval(run_id)
         return self._approval_payload(record, run_id=run_id)
 
+    async def record_force_override(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+        actor_id: str,
+        actor_name: str,
+        hours: int = 24,
+    ) -> dict[str, Any] | None:
+        """Record a 24-hour force-export override for the current content."""
+
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None or not run.content_sha256:
+            return None
+        now = datetime.now(timezone.utc)
+        record = await repo.add_approval(
+            run_id,
+            status="approved",
+            content_sha256=run.content_sha256,
+            gate_status=run.gate_status,
+            approved_by=actor_id,
+            approved_by_name=actor_name,
+            reason=f"forced export: {reason}".strip(),
+            override=True,
+            expires_at=now + timedelta(hours=max(1, int(hours))),
+        )
+        return self._approval_payload(record, run_id=run_id)
+
     async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -2074,10 +2103,20 @@ class BidRunService:
         if not run.gate:
             raise BidRunError(409, "gate is not available; assemble the run first")
         if run.gate_status == "block" and not force:
-            raise BidRunError(
-                409,
-                "export is blocked by the gate; use force=true to override",
+            approval = await repo.latest_approval(run_id)
+            now = datetime.now(timezone.utc)
+            valid_override = (
+                approval is not None
+                and approval.status == "approved"
+                and approval.override
+                and approval.content_sha256 == (run.content_sha256 or "")
+                and (approval.expires_at is None or approval.expires_at > now)
             )
+            if not valid_override:
+                raise BidRunError(
+                    409,
+                    "export is blocked by the gate; use force=true to override",
+                )
         run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
         if run.content_sha256:
             current_sha256 = compute_run_content_sha256(
@@ -2093,10 +2132,17 @@ class BidRunService:
                 )
         if self.require_approval and not force:
             approval = await repo.latest_approval(run_id)
+            now = datetime.now(timezone.utc)
+            expired = (
+                approval is not None
+                and approval.expires_at is not None
+                and approval.expires_at <= now
+            )
             if (
                 approval is None
                 or approval.status != "approved"
                 or approval.content_sha256 != run.content_sha256
+                or expired
             ):
                 raise BidRunError(
                     409,
