@@ -767,6 +767,83 @@ export interface BidGateResponse {
   consistency_summary: BidConsistencySummary | null
 }
 
+export interface BidCommentMention {
+  user_id: string
+  display_name: string
+}
+
+export interface BidCommentView {
+  comment_id: string
+  run_id: string
+  section_id: string | null
+  section_title: string | null
+  author_id: string | null
+  author_name: string
+  body: string
+  mentions: BidCommentMention[]
+  assignee_id: string | null
+  assignee_name: string | null
+  status: 'open' | 'resolved'
+  resolved_by: string | null
+  resolved_by_name: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface BidCommentListResponse {
+  run_id: string
+  comments: BidCommentView[]
+}
+
+export interface BidCommentCreateInput {
+  body: string
+  section_id?: string | null
+  mentions?: string[]
+  assignee_id?: string | null
+}
+
+export interface BidCommentUpdateInput {
+  body?: string
+  status?: 'open' | 'resolved'
+  assignee_id?: string | null
+}
+
+export interface BidRunEventSection {
+  section_id: string
+  title: string
+  status: string
+}
+
+export interface BidRunEventJob {
+  job_id: string
+  status: string
+  stage: string | null
+  percent: number
+  message: string | null
+  exit_code: number | null
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface BidRunEventSnapshot {
+  run_id: string
+  status: BidRunStatus
+  stage: string | null
+  percent: number
+  message: string | null
+  gate_status: 'pass' | 'warn' | 'block' | null
+  content_sha256: string | null
+  revision: number
+  updated_at: string
+  counts: BidRunCounts
+  sections: BidRunEventSection[]
+  job: BidRunEventJob | null
+  server_time: string
+  terminal: boolean
+}
+
 export type BidFigureKind =
   | 'org_chart'
   | 'process_flow'
@@ -843,6 +920,17 @@ export interface ProjectMemberSummary {
 
 export interface ProjectMemberListResponse {
   members: ProjectMemberSummary[]
+}
+
+export interface ProjectMemberBrief {
+  user_id: string
+  username: string
+  display_name: string
+  role: ProjectRole
+}
+
+export interface ProjectMemberBriefListResponse {
+  members: ProjectMemberBrief[]
 }
 
 export interface AuditEventSummary {

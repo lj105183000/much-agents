@@ -11,7 +11,9 @@ import type {
 } from '../api/types'
 import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
+import { useBidRunEvents } from '../hooks/useBidRunEvents'
 import { usePermissions } from '../hooks/usePermissions'
+import { BidCommentsPanel } from '../components/BidCommentsPanel'
 import { BidCompliancePanel } from '../components/BidCompliancePanel'
 import { BidCoveragePanel } from '../components/BidCoveragePanel'
 import { BidFiguresPanel } from '../components/BidFiguresPanel'
@@ -129,6 +131,16 @@ export function BidView({
   const selected = documents.find((document) => document.doc_id === docId)
   const runStatus = run?.status
   const active = run ? ACTIVE_STATUSES.has(run.status) : false
+  const live = useBidRunEvents(runId, apiBase, active)
+
+  useEffect(() => {
+    if (!runId || !live.snapshot || live.snapshot.status === runStatus) {
+      return
+    }
+    // The stream can observe a terminal/queued transition before the 2s poll.
+    bidRun.refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, live.snapshot?.status, runStatus])
 
   const loadCompany = async (id: string) => {
     if (!id) {
@@ -990,6 +1002,7 @@ export function BidView({
             <BidRunWorkspace
               run={run}
               outline={bidRun.outline ?? outlineDraft}
+              live={live.snapshot}
               busy={
                 actionBusy ||
                 savingOutline ||
@@ -1004,6 +1017,14 @@ export function BidView({
               onPreview={(sectionId) => void openSection(sectionId, false)}
               onEdit={(sectionId) => void openSection(sectionId, true)}
               onRegenerate={(sectionId) => void regenerateSection(sectionId)}
+            />
+          ) : null}
+
+          {run ? (
+            <BidCommentsPanel
+              key={run.run_id}
+              runId={run.run_id}
+              outline={bidRun.outline ?? outlineDraft}
             />
           ) : null}
 
