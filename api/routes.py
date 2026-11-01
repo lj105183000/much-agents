@@ -1171,9 +1171,18 @@ def build_router() -> APIRouter:
         payload: BidApprovalRequest | None = None,
         context: ProjectContext = Depends(require_run_review),
         user: UserContext = Depends(require_user),
+        projects: ProjectService = Depends(get_project_service),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidApprovalResponse:
         body = payload or BidApprovalRequest()
+        if body.override:
+            if not can_manage(user):
+                raise HTTPException(
+                    status_code=403,
+                    detail="approval override requires bid manager permission",
+                )
+            if not projects.has_permission(context, "manage"):
+                raise HTTPException(status_code=403, detail="permission denied")
         result = await service.approve(
             run_id,
             actor_id=user.id,

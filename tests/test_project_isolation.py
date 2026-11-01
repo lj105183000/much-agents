@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -208,6 +208,37 @@ def create_run(
     )
     assert response.status_code == 201, response.text
     return response.json()["run_id"]
+
+
+def test_approval_override_requires_project_manage(tmp_path: Path) -> None:
+    harness = build_harness(tmp_path)
+    with TestClient(harness.app) as client:
+        alice = harness.login_headers(client, "alice", PROJECT_A)
+        carol = harness.login_headers(client, "carol", PROJECT_A)
+        admin = harness.login_headers(client, "admin", PROJECT_A)
+        run_id = create_run(client, alice, "doc-1")
+        harness.bid_runs.runs[run_id] = replace(
+            harness.bid_runs.runs[run_id],
+            status="assembled",
+            gate={"status": "block", "checks": []},
+            gate_status="block",
+            content_sha256="drill-sha",
+        )
+
+        denied = client.post(
+            f"/api/bid-runs/{run_id}/approve",
+            headers=carol,
+            json={"override": True},
+        )
+        assert denied.status_code == 403
+
+        allowed = client.post(
+            f"/api/bid-runs/{run_id}/approve",
+            headers=admin,
+            json={"override": True, "reason": "客户要求"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["override"] is True
 
 
 def test_project_header_is_required_and_non_members_get_404(
