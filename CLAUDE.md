@@ -45,6 +45,7 @@ uv run python -m scripts.worker_healthcheck parse                             # 
 uv run python -m scripts.baseline_metrics                                    # 从已有 parsed/bids 产物生成 L0 离线基线
 uv run python -m scripts.eval_dataset build --all                            # 构建私有评测集到 eval-data/（gitignored）
 uv run python -m scripts.eval_dataset validate                               # 校验评测集结构并提示待人工标注项
+uv run python -m scripts.eval_review                                         # 导出人工复核 Markdown 清单到 eval-data/reviews/
 uv run python -m scripts.eval_judge --input section.json                      # 对单节运行盲评 LLM-as-judge
 uv run python -m scripts.eval_calibrate --input pairs.json                    # judge 与人工标签的一致率/kappa
 uv run python -m scripts.eval_generate --dry-run                              # 打印夜间样本生成命令

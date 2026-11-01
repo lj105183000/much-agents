@@ -47,6 +47,16 @@ The builder only copies already-parsed artifacts and generates draft labels from
 5. Keep `must_cover_points.json` and any human section samples in the private
    directory only.
 
+## Human review checklist
+
+```bash
+uv run python -m scripts.eval_review
+```
+
+Writes `eval-data/reviews/<case_id>.md` with factors, candidate points and key
+facts as checkboxes. Reviewers should edit the labels and set
+`must_cover_points.json` to `reviewed`; the checklist itself is not a label.
+
 ## L2 judge and calibration
 
 The judge is blinded and uncalibrated by default. Run it on one section:
