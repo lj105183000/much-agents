@@ -15,6 +15,7 @@ from .database import (
     BidRunRow,
     BidSectionStateRow,
     LlmCallLogRow,
+    RetrievalSnapshotRow,
     RunUsageRow,
 )
 
@@ -617,6 +618,42 @@ class BidRunRepository:
             async with session.begin():
                 result = await session.execute(statement)
                 return bool(result.rowcount)
+
+    async def add_retrieval_snapshots(
+        self,
+        run_id: str,
+        records: list[dict[str, Any]],
+        *,
+        project_id: str,
+    ) -> int:
+        if not records:
+            return 0
+        allowed = {
+            "section_id",
+            "query_text",
+            "query_sha256",
+            "mode",
+            "top_k",
+            "hits",
+            "evidence_chars",
+            "trace_key",
+        }
+        rows = []
+        for raw in records:
+            data = {key: value for key, value in raw.items() if key in allowed}
+            data["run_id"] = run_id
+            data["project_id"] = project_id
+            data["mode"] = str(data.get("mode") or "unknown")[:16]
+            data["query_text"] = str(data.get("query_text") or "")
+            data["query_sha256"] = str(data.get("query_sha256") or "")
+            data["top_k"] = int(data.get("top_k") or 0)
+            data["hits"] = list(data.get("hits") or [])
+            data["evidence_chars"] = int(data.get("evidence_chars") or 0)
+            rows.append(RetrievalSnapshotRow(**data))
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add_all(rows)
+        return len(rows)
 
     async def add_llm_usage(
         self,

@@ -337,6 +337,21 @@ async def execute_staged_bid_job(
             except Exception:  # noqa: BLE001 - ledger must not lose the run
                 logger.warning("could not persist LLM usage", exc_info=True)
                 warnings.append("LLM usage ledger write failed")
+        retrieval_records = [
+            {"section_id": item.section_id, **item.retrieval}
+            for item in outcome.outcomes
+            if isinstance(item.retrieval, dict)
+        ]
+        if retrieval_records:
+            try:
+                await repo.add_retrieval_snapshots(
+                    run_id, retrieval_records, project_id=run.project_id
+                )
+            except Exception:  # noqa: BLE001 - snapshots are best-effort
+                logger.warning(
+                    "could not persist retrieval snapshots", exc_info=True
+                )
+                warnings.append("retrieval snapshot write failed")
         warnings = list(
             dict.fromkeys(
                 [

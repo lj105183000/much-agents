@@ -10,7 +10,7 @@ from src.bidding.models import Evidence
 from src.bidding.outline import build_outline
 from src.bidding.plan import build_content_plan
 from src.bidding.profile import BidderProfile
-from src.bidding.staged import generate_sections
+from src.bidding.staged import build_retrieval_snapshot, generate_sections
 from tests.fakes import FakeChatClient, FakeRetriever, make_bid_settings, write_parsed_fixture
 
 
@@ -78,6 +78,34 @@ def test_generate_sections_checkpoints_each_stage(tmp_path: Path) -> None:
     assert statuses.count("final") == 2
     assert any("【本节编写计划】" in call["user"] for call in llm.calls)
     assert any("【编写重点】" in call["user"] for call in llm.calls)
+    retrieval = result.outcomes[0].retrieval
+    assert retrieval is not None
+    assert retrieval["query_text"]
+    assert retrieval["hits"]
+    assert "text" not in retrieval["hits"][0]
+    assert len(retrieval["hits"][0]["text_sha256"]) == 64
+
+
+def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
+    evidence = [
+        Evidence(
+            chunk_id="c1",
+            text="招标文件证据",
+            page_start=1,
+            page_end=2,
+            section_path="第一章",
+            score=0.9,
+        )
+    ]
+    snapshot = build_retrieval_snapshot("查询", evidence, None, 6)
+    assert snapshot["mode"] == "semantic"
+    assert snapshot["evidence_chars"] == len("招标文件证据")
+    assert "text" not in snapshot["hits"][0]
+
+    keyword = build_retrieval_snapshot(
+        "查询", evidence, "Chroma disabled; used keyword retrieval", 6
+    )
+    assert keyword["mode"] == "keyword"
 
 
 def test_generate_sections_skips_final_and_resumes_failed(tmp_path: Path) -> None:
