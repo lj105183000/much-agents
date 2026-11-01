@@ -15,6 +15,8 @@ from src.bidding.outline import build_brief
 from src.bidding.profile import BidderProfile
 from src.bidding.retrieval import build_retriever
 from src.bidding.staged import generate_sections
+from src.observability.logging import get_request_id, set_job_context
+from src.observability.metrics import RUN_DURATION, RUNS
 from src.mcp_client.config import McpClientConfig
 from src.mcp_client.manager import (
     McpClientManager,
@@ -169,6 +171,8 @@ async def execute_staged_bid_job(
 ) -> None:
     payload = job.payload or {}
     run_id = str(payload.get("run_id") or "")
+    request_id = str(payload.get("request_id") or get_request_id())
+    set_job_context(job_id=job.job_id, run_id=run_id)
     generation_token = str(payload.get("generation_token") or "")
     section_ids = [
         str(item) for item in (payload.get("section_ids") or []) if item
@@ -209,6 +213,11 @@ async def execute_staged_bid_job(
                 exit_code=3,
             )
             return
+        set_job_context(
+            job_id=job.job_id,
+            run_id=run_id,
+            project_id=run.project_id,
+        )
 
         run_dir = bid_settings.bids_dir / run.doc_id / run.run_id
         if is_remote(storage):
@@ -313,7 +322,7 @@ async def execute_staged_bid_job(
             company_name=company_name,
             run_id=run_id,
             job_id=job.job_id,
-            request_id=str(payload.get("request_id") or ""),
+            request_id=request_id,
             project_id=run.project_id,
         )
         usage_records = [
@@ -418,6 +427,9 @@ async def execute_staged_bid_job(
                 error=None,
                 finished_at=None,
             )
+        elapsed = max(0.0, (_now() - run.created_at).total_seconds())
+        RUNS.inc(status=status)
+        RUN_DURATION.observe(elapsed, status=status)
         summary = _summary(
             run,
             selected=selected_count,

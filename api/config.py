@@ -93,6 +93,8 @@ class ApiSettings:
     bid_section_max_attempts: int = 2
     bid_run_stale_seconds: int = 900
     readiness_strict: bool = False
+    metrics_enabled: bool = True
+    metrics_token: str = ""
     auth_enabled: bool = True
     auth_session_ttl_hours: int = 12
     auth_login_max_failures: int = 5
@@ -235,6 +237,8 @@ class ApiSettings:
                 _str(env, "ENVIRONMENT", "development").strip().lower()
                 == "production",
             ),
+            metrics_enabled=_bool(env, "METRICS_ENABLED", True),
+            metrics_token=_str(env, "METRICS_TOKEN", ""),
             auth_enabled=_bool(env, "AUTH_ENABLED", True),
             auth_session_ttl_hours=_int(env, "AUTH_SESSION_TTL_HOURS", 12),
             auth_login_max_failures=_int(env, "AUTH_LOGIN_MAX_FAILURES", 5),

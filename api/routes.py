@@ -25,6 +25,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from src.parsing.artifacts import read_json
 
+from src.observability.metrics import READY_CHECKS
+
+from .metrics import metrics_authorized, metrics_response
 from .artifacts import (
     ArtifactError,
     artifact_content_type,
@@ -417,6 +420,8 @@ def build_router() -> APIRouter:
             except Exception:  # noqa: BLE001 - readiness reports status
                 checks["chroma"] = False
 
+        for component, value in checks.items():
+            READY_CHECKS.set(1 if value else 0, component=component)
         core_ready = all(
             value for name, value in checks.items() if name != "chroma"
         )
@@ -434,6 +439,17 @@ def build_router() -> APIRouter:
             (status_code, payload),
         )
         return JSONResponse(status_code=status_code, content=payload)
+
+    @public_router.get("/metrics")
+    async def metrics(request: Request) -> Response:
+        settings = request.app.state.api_settings
+        if not bool(getattr(settings, "metrics_enabled", True)):
+            raise HTTPException(status_code=404)
+        if not metrics_authorized(
+            settings, request.headers.get("authorization", "")
+        ):
+            raise HTTPException(status_code=403)
+        return metrics_response()
 
     @public_router.get("/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:

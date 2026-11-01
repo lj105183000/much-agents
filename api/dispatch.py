@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from src.observability.logging import get_request_id, request_id_var
+
 from .jobs import Job
 from .runner import JobRunner
 from .service import UploadError
@@ -19,7 +21,16 @@ class LocalDispatcher:
         self.executor = executor
 
     def dispatch(self, job: Job) -> None:
-        self.runner.submit(job.job_id, lambda: self.executor(job))
+        request_id = get_request_id()
+
+        def run() -> None:
+            token = request_id_var.set(request_id)
+            try:
+                self.executor(job)
+            finally:
+                request_id_var.reset(token)
+
+        self.runner.submit(job.job_id, run)
 
 
 class CeleryDispatcher:
@@ -35,6 +46,10 @@ class CeleryDispatcher:
         self.queue = queue
 
     def dispatch(self, job: Job) -> None:
+        headers = {}
+        request_id = get_request_id()
+        if request_id:
+            headers["request_id"] = request_id
         try:
             self.app.send_task(
                 self.task_name,
@@ -42,6 +57,7 @@ class CeleryDispatcher:
                 task_id=job.job_id,
                 queue=self.queue,
                 ignore_result=True,
+                headers=headers or None,
             )
         except Exception as exc:  # noqa: BLE001 - broker errors vary by transport
             logger.exception("failed to enqueue job %s", job.job_id)

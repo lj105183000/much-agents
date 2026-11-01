@@ -371,6 +371,7 @@ class FakeCeleryApp:
         task_id: str | None = None,
         queue: str | None = None,
         ignore_result: bool | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         if self.error is not None:
             raise self.error
@@ -381,6 +382,7 @@ class FakeCeleryApp:
                 "task_id": task_id,
                 "queue": queue,
                 "ignore_result": ignore_result,
+                "headers": headers,
             }
         )
 

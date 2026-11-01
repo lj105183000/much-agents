@@ -3,11 +3,34 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.signals import task_postrun, task_prerun, worker_process_init
 
+from src.observability.logging import configure_logging, request_id_var
 from src.parsing.logging_utils import configure_stdio
 
 from .config import ApiSettings
 from .task_names import PARSE_QUEUE
+
+
+def _install_task_context_signals() -> None:
+    @task_prerun.connect
+    def _set_task_context(task=None, **_kwargs):  # type: ignore[no-untyped-def]
+        headers = getattr(getattr(task, "request", None), "headers", None) or {}
+        token = request_id_var.set(str(headers.get("request_id") or ""))
+        if task is not None:
+            setattr(task.request, "_much_agents_request_token", token)
+
+    @task_postrun.connect
+    def _reset_task_context(task=None, **_kwargs):  # type: ignore[no-untyped-def]
+        request = getattr(task, "request", None)
+        token = getattr(request, "_much_agents_request_token", None)
+        if token is not None:
+            request_id_var.reset(token)
+            setattr(task.request, "_much_agents_request_token", None)
+
+    @worker_process_init.connect
+    def _configure_worker_logging(**_kwargs):  # type: ignore[no-untyped-def]
+        configure_logging(force=True)
 
 
 def create_celery_app(settings: ApiSettings) -> Celery:
@@ -45,4 +68,6 @@ def create_celery_app(settings: ApiSettings) -> Celery:
 
 
 configure_stdio()
+configure_logging()
+_install_task_context_signals()
 celery_app = create_celery_app(ApiSettings.from_env())

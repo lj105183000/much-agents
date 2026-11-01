@@ -40,6 +40,7 @@ from .auth import (
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
 from .bids import BidService, execute_bid_job
+from .metrics import install_metrics
 from .companies import CompanyService
 from .config import ApiSettings
 from .db import Database
@@ -307,6 +308,7 @@ def create_app(
         max_age=600,
     )
     install_request_context(app, audit_service)
+    install_metrics(app)
 
     @app.exception_handler(UploadError)
     async def handle_upload_error(_request: Request, exc: UploadError) -> JSONResponse:
