@@ -1185,6 +1185,8 @@ class BidRunService:
             "source": record.source,
             "content_sha256": record.content_sha256,
             "char_count": len(record.markdown or ""),
+            "outline_revision": record.outline_revision,
+            "review_summary": record.review_summary,
             "created_by": record.created_by,
             "created_by_name": record.created_by_name,
             "created_at": record.created_at.isoformat(),
@@ -1213,6 +1215,8 @@ class BidRunService:
                 section_id,
                 state.final_markdown or "",
                 source=state.final_source or "current",
+                outline_revision=run.revision,
+                version_keep=self.bid_settings.section_version_keep,
             )
             records = [record]
         return {
@@ -1430,6 +1434,7 @@ class BidRunService:
             finished_at=_now(),
             version_actor_id=actor_id,
             version_actor_name=actor_name,
+            version_keep=self.bid_settings.section_version_keep,
         )
         if not updated:
             raise BidRunError(409, "section changed; reload and try again")

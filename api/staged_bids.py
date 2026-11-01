@@ -56,12 +56,14 @@ class _RunHooks:
     job_id: str
     run_id: str
     generation_token: str
+    version_keep: int = 50
 
     async def update_section(self, section_id: str, **fields: Any) -> None:
         updated = await self.repo.update_section(
             self.run_id,
             section_id,
             expected_token=self.generation_token,
+            version_keep=self.version_keep,
             **fields,
         )
         if not updated:
@@ -286,6 +288,7 @@ async def execute_staged_bid_job(
             job_id=job.job_id,
             run_id=run_id,
             generation_token=generation_token,
+            version_keep=bid_settings.section_version_keep,
         )
         await repo.update_run(
             run_id,

@@ -405,6 +405,8 @@ class BidSectionVersionRow(Base):
     )
     markdown: Mapped[str] = mapped_column(Text, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    outline_revision: Mapped[int | None] = mapped_column(Integer)
+    review_summary: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str | None] = mapped_column(String(36))
     created_by_name: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(

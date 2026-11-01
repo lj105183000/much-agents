@@ -474,6 +474,8 @@ export interface BidSectionVersion {
   source: string
   content_sha256: string
   char_count: number
+  outline_revision: number | null
+  review_summary: string | null
   created_by: string | null
   created_by_name: string | null
   created_at: string

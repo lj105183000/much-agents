@@ -232,6 +232,8 @@ class BidSectionVersionView(BaseModel):
     source: str
     content_sha256: str
     char_count: int = 0
+    outline_revision: int | None = None
+    review_summary: str | None = None
     created_by: str | None = None
     created_by_name: str | None = None
     created_at: str

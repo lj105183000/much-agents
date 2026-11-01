@@ -583,6 +583,7 @@ def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
         version = versions[0]
         assert version["source"] == "draft"
         assert version["content_sha256"]
+        assert version["outline_revision"] == 0
 
         detail = client.get(
             f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}"

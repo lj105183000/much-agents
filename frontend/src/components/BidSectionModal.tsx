@@ -396,8 +396,22 @@ export function BidSectionModal({
                         {VERSION_SOURCE_LABEL[version.source] ?? version.source}
                       </span>
                       <span>{version.char_count} 字</span>
+                      {version.outline_revision !== null ? (
+                        <span>大纲 r{version.outline_revision}</span>
+                      ) : null}
                       {version.created_by_name ? (
                         <span>· {version.created_by_name}</span>
+                      ) : null}
+                      {version.review_summary ? (
+                        <span
+                          className="text-slate-500"
+                          title={version.review_summary}
+                        >
+                          ·{' '}
+                          {version.review_summary.length > 40
+                            ? `${version.review_summary.slice(0, 40)}…`
+                            : version.review_summary}
+                        </span>
                       ) : null}
                       <span>
                         {new Date(version.created_at).toLocaleString('zh-CN')}

@@ -838,8 +838,11 @@ class FakeBidRunRepository:
         markdown: str,
         *,
         source: str = "generated",
+        outline_revision: int | None = None,
+        review_summary: str | None = None,
         created_by: str | None = None,
         created_by_name: str | None = None,
+        version_keep: int = 50,
     ) -> SectionVersionRecord:
         text = (markdown or "").strip()
         if not text:
@@ -847,7 +850,7 @@ class FakeBidRunRepository:
         records = self._section_versions(run_id, section_id)
         if records and (records[-1].markdown or "").strip() == text:
             return records[-1]
-        version = len(records) + 1
+        version = records[-1].version + 1 if records else 1
         record = SectionVersionRecord(
             id=version,
             run_id=run_id,
@@ -856,11 +859,16 @@ class FakeBidRunRepository:
             source=(source or "generated")[:16],
             markdown=text,
             content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            outline_revision=outline_revision,
+            review_summary=review_summary,
             created_by=created_by,
             created_by_name=created_by_name,
             created_at=datetime.now(timezone.utc),
         )
         records.append(record)
+        keep = max(1, int(version_keep))
+        if len(records) > keep:
+            del records[: len(records) - keep]
         return record
 
     async def list_section_versions(
@@ -1041,6 +1049,7 @@ class FakeBidRunRepository:
         expected_final_sha256: str | None = None,
         version_actor_id: str | None = None,
         version_actor_name: str | None = None,
+        version_keep: int = 50,
         **fields: Any,
     ) -> bool:
         states = self.states.get(run_id, [])
@@ -1065,6 +1074,18 @@ class FakeBidRunRepository:
                 updated.append(replace(state, **fields))
                 markdown = (fields.get("final_markdown") or "").strip()
                 if markdown and markdown != (state.final_markdown or "").strip():
+                    review_value = fields.get("review", state.review)
+                    issue_value = fields.get("issues", state.issues)
+                    summary = None
+                    if isinstance(review_value, dict):
+                        summary = (
+                            f"verdict={review_value.get('verdict') or 'unknown'}; "
+                            f"issues={len(review_value.get('issues') or [])}; "
+                            f"warnings={len(review_value.get('warnings') or [])}"
+                        )
+                    elif issue_value:
+                        summary = f"manual; issues={len(issue_value)}"
+                    run = self.runs.get(run_id)
                     await self.add_section_version(
                         run_id,
                         section_id,
@@ -1074,8 +1095,13 @@ class FakeBidRunRepository:
                             or state.final_source
                             or "generated"
                         ),
+                        outline_revision=(
+                            run.revision if run is not None else None
+                        ),
+                        review_summary=summary,
                         created_by=version_actor_id,
                         created_by_name=version_actor_name,
+                        version_keep=version_keep,
                     )
             else:
                 updated.append(state)
