@@ -42,6 +42,7 @@ _MAX_ATTACHMENT_CHARS = 500_000
 _MAX_ATTACHMENT_ROWS = 20_000
 _MAX_XLSX_ENTRIES = 2_000
 _MAX_XLSX_UNCOMPRESSED = 100 * 1024 * 1024
+_MAX_TEXT_BYTES = 20 * 1024 * 1024
 
 
 class AttachmentError(ValueError):
@@ -62,6 +63,11 @@ def _sha256(path: Path) -> str:
 
 def _read_text(path: Path) -> str:
     data = path.read_bytes()
+    if len(data) > _MAX_TEXT_BYTES:
+        raise AttachmentError(
+            f"text attachment is {len(data)} bytes; limit {_MAX_TEXT_BYTES}",
+            413,
+        )
     if b"\x00" in data:
         raise AttachmentError("binary content is not allowed in text attachments", 415)
     for encoding in ("utf-8-sig", "gb18030"):

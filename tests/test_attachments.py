@@ -242,6 +242,21 @@ def test_csv_attachment_supports_gbk(tmp_path: Path) -> None:
     assert any("010101001" in chunk.text for chunk in chunks)
 
 
+def test_text_attachment_rejects_oversized_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import src.parsing.attachments as attachments
+
+    monkeypatch.setattr(attachments, "_MAX_TEXT_BYTES", 3)
+    path = tmp_path / "big.csv"
+    path.write_bytes(b"abcd")
+
+    with pytest.raises(AttachmentError) as exc:
+        build_attachment_chunks(DOC_ID, path)
+
+    assert exc.value.status_code == 413
+
+
 def test_csv_attachment_rejects_binary(tmp_path: Path) -> None:
     path = tmp_path / "binary.csv"
     path.write_bytes(b"\x00\x01\x02")
