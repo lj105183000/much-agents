@@ -5,13 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import shutil
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from fastapi import UploadFile
 
+from src.parsing.attachments import (
+    AttachmentError,
+    attach_evidence,
+    detach_evidence,
+    list_attachments,
+)
 from src.parsing.config import Settings
 from src.parsing.docid import safe_stem
 from src.parsing.errors import (
@@ -30,7 +37,7 @@ from src.parsing.errors import (
 from src.parsing.models import ParseOptions, ParseResult
 from src.storage.base import Storage
 from src.storage.errors import StorageError
-from src.storage.hydration import is_remote, sync_document
+from src.storage.hydration import ensure_document_cached, is_remote, sync_document
 from src.storage.keys import inbox_key
 
 from .config import ApiSettings
@@ -110,6 +117,32 @@ def sanitize_pdf_filename(filename: str | None) -> str:
     return f"{stem}.pdf"
 
 
+ALLOWED_ATTACHMENT_SUFFIXES = {
+    ".pdf",
+    ".csv",
+    ".xlsx",
+    ".xlsm",
+    ".txt",
+    ".md",
+    ".markdown",
+}
+
+
+def sanitize_attachment_filename(filename: str | None) -> str:
+    raw = (filename or "").replace("\\", "/").strip()
+    base = raw.rsplit("/", 1)[-1].strip()
+    if not base:
+        raise UploadError(400, "missing attachment filename")
+    suffix = Path(base).suffix.lower()
+    if suffix not in ALLOWED_ATTACHMENT_SUFFIXES:
+        supported = ", ".join(sorted(ALLOWED_ATTACHMENT_SUFFIXES))
+        raise UploadError(
+            415, f"unsupported attachment type: {suffix or '(none)'}; supported: {supported}"
+        )
+    stem = safe_stem(base)[:80].strip(" .-") or "attachment"
+    return f"{stem}{suffix}"
+
+
 def validate_content_type(content_type: str | None) -> None:
     if not content_type:
         return
@@ -123,6 +156,8 @@ async def save_upload(
     destination: Path,
     max_bytes: int,
     chunk_size: int = 1024 * 1024,
+    *,
+    require_pdf: bool = True,
 ) -> tuple[int, str]:
     """Stream the upload to disk; return (size, sha256 hex)."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +182,7 @@ async def save_upload(
 
     if size == 0:
         raise UploadError(400, "uploaded file is empty")
-    if not head.startswith(b"%PDF-"):
+    if require_pdf and not head.startswith(b"%PDF-"):
         raise UploadError(415, "uploaded file is not a PDF")
     return size, digest.hexdigest()
 
@@ -198,6 +233,129 @@ def _hydrate_parse_source(
     return local_dir / "source.pdf"
 
 
+def _hydrate_attachment_source(
+    job: Job,
+    parse_settings: Settings,
+    storage: Storage,
+) -> Path:
+    """Materialise an uploaded attachment from object storage."""
+
+    local_dir = parse_settings.upload_dir / "inbox" / job.job_id
+    prefix = f"inbox/{job.job_id}"
+    storage.ensure_files(prefix, local_dir, (job.filename,), required=True)
+    return local_dir / job.filename
+
+
+def execute_attach_job(
+    job: Job,
+    *,
+    store: JobStoreProtocol,
+    parse_settings: Settings,
+    storage: Storage | None = None,
+    attach_func: Callable[..., dict[str, Any]] | None = None,
+) -> None:
+    """Run one attachment job. Shared by the local dispatcher and Celery."""
+
+    source_path = Path(job.source_path) if job.source_path else None
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            source_path = _hydrate_attachment_source(job, parse_settings, storage)
+        except StorageError as exc:
+            logger.warning("could not hydrate attachment for %s: %s", job.job_id, exc)
+            _mark_failed(
+                store,
+                job.job_id,
+                error="uploaded attachment is unavailable in object storage",
+                exit_code=EXIT_INPUT,
+            )
+            return
+
+    if source_path is None or not source_path.is_file():
+        _mark_failed(
+            store,
+            job.job_id,
+            error="uploaded attachment is missing",
+            exit_code=EXIT_INPUT,
+        )
+        return
+
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            ensure_document_cached(storage, parse_settings.parsed_dir, job.doc_id)
+        except Exception as exc:  # noqa: BLE001 - doc hydration errors vary
+            logger.warning(
+                "could not hydrate parsed document %s: %s", job.doc_id, exc
+            )
+            _mark_failed(
+                store,
+                job.job_id,
+                error=f"parsed document is unavailable: {exc}",
+                exit_code=EXIT_INPUT,
+            )
+            return
+
+    payload = job.payload or {}
+    allow_ocr = bool(payload.get("ocr", True))
+    try:
+        store.update_progress(job.job_id, "attach", 10, "parsing attachment")
+    except JobStoreError:
+        logger.warning("could not persist attachment progress", exc_info=True)
+
+    func = attach_func or attach_evidence
+    try:
+        result = func(
+            job.doc_id,
+            source_path,
+            parse_settings,
+            ingest=bool(job.ingest),
+            sync_storage=is_remote(storage),
+            allow_ocr=allow_ocr,
+        )
+    except AttachmentError as exc:
+        _mark_failed(store, job.job_id, error=str(exc), exit_code=EXIT_INPUT)
+        return
+    except IngestError as exc:
+        _mark_failed(
+            store,
+            job.job_id,
+            error=str(exc),
+            exit_code=EXIT_SKIPPED if exc.skipped else EXIT_INGEST,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 - never leave a job running
+        logger.exception("attachment job %s crashed", job.job_id)
+        _mark_failed(
+            store,
+            job.job_id,
+            error=f"{type(exc).__name__}: {exc}",
+            exit_code=EXIT_INTERNAL,
+        )
+        return
+
+    summary = dict(result)
+    summary.pop("attachments_path", None)
+    summary["file"] = job.filename
+    try:
+        store.update_progress(job.job_id, "attach", 100, "attachment ready")
+        store.mark_succeeded(job.job_id, summary)
+    except JobStoreError:
+        logger.exception(
+            "could not persist terminal state for attachment job %s", job.job_id
+        )
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            storage.delete(f"inbox/{job.job_id}/{job.filename}")
+        except StorageError:
+            logger.warning(
+                "could not remove inbox attachment for job %s",
+                job.job_id,
+                exc_info=True,
+            )
+
+
 def execute_parse_job(
     job_id: str,
     *,
@@ -210,6 +368,14 @@ def execute_parse_job(
     job = store.mark_running(job_id)
     if job is None:
         logger.info("job %s is missing, already claimed, or terminal", job_id)
+        return
+    if job.kind == "attach":
+        execute_attach_job(
+            job,
+            store=store,
+            parse_settings=parse_settings,
+            storage=storage,
+        )
         return
 
     source_path = Path(job.source_path) if job.source_path else None
@@ -450,3 +616,165 @@ class ParseService:
                             job_id,
                             exc_info=True,
                         )
+
+
+class AttachmentService:
+    """Upload attachment files and run the attach job through the parse queue."""
+
+    def __init__(
+        self,
+        *,
+        api_settings: ApiSettings,
+        parse_settings: Settings,
+        store: JobStoreProtocol,
+        dispatch: Callable[[Job], None],
+        storage: Storage | None = None,
+    ) -> None:
+        self.api_settings = api_settings
+        self.parse_settings = parse_settings
+        self.store = store
+        self.dispatch = dispatch
+        self.storage = storage
+
+    async def submit(
+        self,
+        upload: UploadFile,
+        *,
+        doc_id: str,
+        ingest: bool,
+        ocr: bool,
+        project_id: str | None = None,
+        created_by: str | None = None,
+    ) -> Job:
+        filename = sanitize_attachment_filename(upload.filename)
+        job_id = uuid4().hex
+        job_dir = self.api_settings.inbox_dir / job_id
+        destination = job_dir / filename
+        job_dir.mkdir(parents=True, exist_ok=True)
+        upload_complete = False
+        try:
+            await save_upload(
+                upload,
+                destination,
+                self.api_settings.max_upload_bytes,
+                require_pdf=False,
+            )
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"inbox/{job_id}/{filename}",
+                        destination,
+                    )
+                except StorageError as exc:
+                    raise UploadError(
+                        503, "object storage is unavailable"
+                    ) from exc
+            payload: dict[str, Any] = {
+                "ocr": bool(ocr),
+                "ingest": bool(ingest),
+                "attachment": filename,
+            }
+            if project_id:
+                payload["project_id"] = project_id
+            if created_by:
+                payload["created_by"] = created_by
+            try:
+                job = self.store.create(
+                    job_id=job_id,
+                    filename=filename,
+                    doc_id=doc_id,
+                    parser="",
+                    extract=False,
+                    ingest=ingest,
+                    source_path=destination,
+                    kind="attach",
+                    payload=payload,
+                )
+            except JobStoreError as exc:
+                raise UploadError(503, "job store is unavailable") from exc
+            upload_complete = True
+            try:
+                self.dispatch(job)
+            except Exception as exc:
+                _mark_failed(
+                    self.store,
+                    job_id,
+                    error="failed to enqueue attachment job",
+                    exit_code=EXIT_INTERNAL,
+                    only_if_queued=True,
+                )
+                if isinstance(exc, UploadError):
+                    raise
+                raise UploadError(503, "task queue is unavailable") from exc
+            return job
+        except UploadError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise UploadError(503, "job store is unavailable") from exc
+        finally:
+            if not upload_complete:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                if is_remote(self.storage):
+                    assert self.storage is not None
+                    try:
+                        await asyncio.to_thread(
+                            self.storage.delete,
+                            f"inbox/{job_id}/{filename}",
+                        )
+                    except StorageError:
+                        logger.warning(
+                            "could not remove the inbox attachment for job %s",
+                            job_id,
+                            exc_info=True,
+                        )
+
+    async def list(self, doc_id: str) -> dict[str, Any]:
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    ensure_document_cached,
+                    self.storage,
+                    self.parse_settings.parsed_dir,
+                    doc_id,
+                )
+            except StorageError as exc:
+                raise UploadError(
+                    503, "object storage is unavailable"
+                ) from exc
+        return await asyncio.to_thread(
+            list_attachments, doc_id, self.parse_settings
+        )
+
+    async def detach(
+        self,
+        doc_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"att-[0-9a-f]{12}", attachment_id):
+            raise UploadError(400, "invalid attachment id")
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    ensure_document_cached,
+                    self.storage,
+                    self.parse_settings.parsed_dir,
+                    doc_id,
+                )
+            except StorageError as exc:
+                raise UploadError(
+                    503, "object storage is unavailable"
+                ) from exc
+        try:
+            return await asyncio.to_thread(
+                detach_evidence,
+                doc_id,
+                attachment_id,
+                self.parse_settings,
+                sync_storage=is_remote(self.storage),
+            )
+        except AttachmentError as exc:
+            raise UploadError(404, str(exc)) from exc

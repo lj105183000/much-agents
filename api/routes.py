@@ -69,6 +69,7 @@ from .projects import (
     ProjectService,
     get_project_service,
     require_document_read,
+    require_document_write,
     require_project_read,
     require_project_write,
     require_run_document_read,
@@ -78,6 +79,8 @@ from .projects import (
 )
 from .schemas import (
     ArtifactListResponse,
+    AttachmentDeleteResponse,
+    AttachmentListResponse,
     AuditEventSummary,
     AuditListResponse,
     AuditVerifyResponse,
@@ -132,7 +135,7 @@ from .schemas import (
     UserUpdateRequest,
 )
 from .search import SearchError, SearchService
-from .service import ParseService
+from .service import AttachmentService, ParseService
 from .streaming import stored_artifact_response
 
 logger = logging.getLogger(__name__)
@@ -147,6 +150,10 @@ def _remote_storage(request: Request):
 
 def get_service(request: Request) -> ParseService:
     return request.app.state.parse_service
+
+
+def get_attachment_service(request: Request) -> AttachmentService:
+    return request.app.state.attachment_service
 
 
 def get_bid_service(request: Request) -> BidService:
@@ -926,6 +933,100 @@ def build_router() -> APIRouter:
             poll_url=f"/api/jobs/{job.job_id}",
             doc_id=job.doc_id,
             kind="parse",
+        )
+
+    @router.post(
+        "/documents/{doc_id}/attachments",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=JobCreatedResponse,
+    )
+    async def upload_document_attachment(
+        doc_id: str,
+        request: Request,
+        file: UploadFile = File(
+            ..., description="BOQ or supplementary evidence file"
+        ),
+        ingest: bool = Query(True),
+        ocr: bool = Query(True),
+        context: ProjectContext = Depends(require_document_write),
+        service: AttachmentService = Depends(get_attachment_service),
+    ) -> JobCreatedResponse:
+        job = await service.submit(
+            file,
+            doc_id=doc_id,
+            ingest=ingest,
+            ocr=ocr,
+            project_id=context.project_id,
+            created_by=context.user.id,
+        )
+        await _audit(
+            request,
+            "attachment.upload",
+            context=context,
+            resource_type="document",
+            resource_id=doc_id,
+            detail={
+                "job_id": job.job_id,
+                "filename": job.filename,
+                "ocr": bool(ocr),
+                "ingest": bool(ingest),
+            },
+            required=True,
+        )
+        return JobCreatedResponse(
+            job_id=job.job_id,
+            status=job.status,
+            poll_url=f"/api/jobs/{job.job_id}",
+            doc_id=doc_id,
+            kind="attach",
+        )
+
+    @router.get(
+        "/documents/{doc_id}/attachments",
+        response_model=AttachmentListResponse,
+    )
+    async def list_document_attachments(
+        doc_id: str,
+        context: ProjectContext = Depends(require_document_read),
+        service: AttachmentService = Depends(get_attachment_service),
+    ) -> AttachmentListResponse:
+        result = await service.list(doc_id)
+        return AttachmentListResponse(
+            doc_id=doc_id,
+            attachments=list(result.get("attachments") or []),
+        )
+
+    @router.delete(
+        "/documents/{doc_id}/attachments/{attachment_id}",
+        response_model=AttachmentDeleteResponse,
+    )
+    async def delete_document_attachment(
+        doc_id: str,
+        attachment_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_document_write),
+        service: AttachmentService = Depends(get_attachment_service),
+    ) -> AttachmentDeleteResponse:
+        result = await service.detach(doc_id, attachment_id)
+        await _audit(
+            request,
+            "attachment.delete",
+            context=context,
+            resource_type="document",
+            resource_id=doc_id,
+            detail={"attachment_id": attachment_id},
+            required=True,
+        )
+        return AttachmentDeleteResponse(
+            doc_id=doc_id,
+            attachment_id=attachment_id,
+            removed_chunks=int(result.get("removed_chunks") or 0),
+            remaining_attachments=int(
+                result.get("remaining_attachments") or 0
+            ),
+            chroma_deleted=int(result.get("chroma_deleted") or 0),
+            storage_synced=bool(result.get("storage_synced")),
+            warnings=list(result.get("warnings") or []),
         )
 
     @router.post(

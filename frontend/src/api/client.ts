@@ -3,6 +3,8 @@ import type {
   ArtifactInfo,
   ArtifactListResponse,
   ArtifactSource,
+  AttachmentDeleteResponse,
+  AttachmentListResponse,
   BidApprovalRequest,
   BidApprovalResponse,
   BidComplianceResponse,
@@ -376,6 +378,39 @@ export const api = {
 
   listDocuments(): Promise<DocumentListResponse> {
     return request<DocumentListResponse>('/api/documents')
+  },
+
+  uploadAttachment(
+    docId: string,
+    file: File,
+    options: { ingest: boolean; ocr: boolean },
+  ): Promise<JobCreatedResponse> {
+    const query = new URLSearchParams({
+      ingest: String(options.ingest),
+      ocr: String(options.ocr),
+    })
+    const body = new FormData()
+    body.append('file', file)
+    return request<JobCreatedResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments?${query.toString()}`,
+      { method: 'POST', body },
+    )
+  },
+
+  listAttachments(docId: string): Promise<AttachmentListResponse> {
+    return request<AttachmentListResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments`,
+    )
+  },
+
+  deleteAttachment(
+    docId: string,
+    attachmentId: string,
+  ): Promise<AttachmentDeleteResponse> {
+    return request<AttachmentDeleteResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    )
   },
 
   listCompanies(): Promise<CompanyListResponse> {

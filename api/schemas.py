@@ -30,6 +30,32 @@ class JobCreatedResponse(BaseModel):
     kind: JobKind = "parse"
 
 
+class AttachmentSummary(BaseModel):
+    attachment_id: str
+    file_name: str
+    sha256: str
+    chunk_count: int = 0
+    pages: int = 0
+    parser: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    attached_at: str | None = None
+
+
+class AttachmentListResponse(BaseModel):
+    doc_id: str
+    attachments: list[AttachmentSummary] = Field(default_factory=list)
+
+
+class AttachmentDeleteResponse(BaseModel):
+    doc_id: str
+    attachment_id: str
+    removed_chunks: int = 0
+    remaining_attachments: int = 0
+    chroma_deleted: int = 0
+    storage_synced: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
 class BidRequest(BaseModel):
     doc_id: str = Field(min_length=1, max_length=128)
     profile: dict[str, Any] = Field(default_factory=dict)
@@ -352,7 +378,29 @@ class BidSummary(BaseModel):
     error: str | None = None
 
 
-JobResult = Annotated[ParseSummary | BidSummary, Field(discriminator="kind")]
+class AttachmentJobSummary(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    kind: Literal["attach"] = "attach"
+    ok: bool = True
+    doc_id: str | None = None
+    attachment_id: str | None = None
+    file: str | None = None
+    sha256: str | None = None
+    chunk_count: int = 0
+    pages: int = 0
+    parser: str | None = None
+    replaced_chunks: int = 0
+    ingested: int | None = None
+    collection: str | None = None
+    storage_synced: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+JobResult = Annotated[
+    ParseSummary | BidSummary | AttachmentJobSummary,
+    Field(discriminator="kind"),
+]
 
 
 class JobStatusResponse(BaseModel):
