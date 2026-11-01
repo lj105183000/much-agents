@@ -599,6 +599,11 @@ def build_consistency_ledger(
             section = section_meta.get(section_id)
             if section is None or not (markdown or "").strip():
                 continue
+            # The evaluation index is a navigation table of review stages and
+            # criteria ("符合性" etc.), not a bid statement.  Scanning it would
+            # turn those criteria into conflicting fact values.
+            if section.kind == "index":
+                continue
             if section.kind == "narrative" and not section.selected:
                 continue
             raw_items = _occurrences_for(markdown, spec)

@@ -119,6 +119,31 @@ def test_ledger_ignores_table_headers_and_placeholders(tmp_path: Path) -> None:
     assert all(item["value"] != "业主" for item in project["occurrences"])
 
 
+def test_ledger_ignores_evaluation_index_criteria(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "idx-00": (
+            "| 序号 | 评审阶段 | 评审因素 | 评审标准 | 对应章节 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| 1 | 形式评审 | 投标人名称 | 符合性 | 十一、其他资料 |\n"
+            "| 18 | 响应性评审 | 质量要求 | 符合性 | 十一、其他资料 |\n"
+        ),
+        narrative.id: "投标人：测试建设有限公司\n质量要求：合格\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    company = _fact(ledger, "company_name")
+    quality = _fact(ledger, "quality_requirement")
+    assert company["status"] == "consistent"
+    assert quality["status"] == "consistent"
+    assert all(item["section_id"] != "idx-00" for item in company["occurrences"])
+    assert all(item["section_id"] != "idx-00" for item in quality["occurrences"])
+
+
 def test_ledger_reports_missing_canonical_values(tmp_path: Path) -> None:
     planned, _profile, narrative = _inputs(tmp_path)
     ledger = build_consistency_ledger(
