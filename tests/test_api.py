@@ -143,6 +143,7 @@ def test_health(client: TestClient) -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert isinstance(response.json()["pdf_export_available"], bool)
 
 
 def test_upload_and_poll_success(

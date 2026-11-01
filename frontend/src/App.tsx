@@ -211,6 +211,9 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                     initialDocId={selectedDocId}
                     initialCompanyId={selectedCompanyId}
                     initialRunId={selectedRunId}
+                    pdfExportAvailable={
+                      health.health?.pdf_export_available ?? true
+                    }
                     onRunChange={setSelectedRunId}
                     onNavigate={navigate}
                     onActiveJobChange={setActiveJobId}

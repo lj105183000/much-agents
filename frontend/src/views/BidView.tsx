@@ -45,6 +45,7 @@ interface BidViewProps {
   initialDocId: string | null
   initialCompanyId: string | null
   initialRunId: string | null
+  pdfExportAvailable: boolean
   onRunChange: (runId: string | null) => void
   onNavigate: (view: ViewKey) => void
   onActiveJobChange: (jobId: string | null) => void
@@ -73,6 +74,7 @@ export function BidView({
   initialDocId,
   initialCompanyId,
   initialRunId,
+  pdfExportAvailable,
   onRunChange,
   onNavigate,
   onActiveJobChange,
@@ -1021,6 +1023,7 @@ export function BidView({
               onReject={(reason) => void rejectRun(reason)}
               exporting={exporting}
               exportingPdf={exportingPdf}
+              pdfAvailable={pdfExportAvailable}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}
               onExportPdf={(force) => void exportPdf(force)}
