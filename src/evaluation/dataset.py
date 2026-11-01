@@ -321,6 +321,8 @@ def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:
         errors.append("profile.json must never be stored in the eval dataset")
 
     checks: dict[str, Any] = {}
+    factors_reviewed = False
+    points_reviewed = False
     if (labels_dir / "evaluation_factors.json").is_file():
         try:
             payload = _load_json(labels_dir / "evaluation_factors.json")
@@ -330,7 +332,8 @@ def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:
                 errors.append("evaluation_factors.json must contain a factors list")
             else:
                 checks["evaluation_factors"] = len(payload["factors"])
-                if payload.get("status") == "draft":
+                factors_reviewed = payload.get("status") == "reviewed"
+                if not factors_reviewed:
                     warnings.append("evaluation_factors is still draft")
                 for item in payload["factors"]:
                     if not isinstance(item, dict) or not item.get("id"):
@@ -347,7 +350,8 @@ def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:
                 errors.append("must_cover_points.json must contain a points list")
             else:
                 checks["must_cover_points"] = len(points)
-                if payload.get("status") == "draft" or not points:
+                points_reviewed = payload.get("status") == "reviewed" and bool(points)
+                if not points_reviewed:
                     warnings.append(
                         "must_cover_points is empty or draft; human annotation required"
                     )
@@ -358,7 +362,11 @@ def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:
         try:
             manifest = _load_json(labels_dir / "manifest.json")
             if isinstance(manifest, dict):
-                checks["label_status"] = manifest.get("label_status")
+                checks["label_status"] = (
+                    "reviewed"
+                    if factors_reviewed and points_reviewed
+                    else manifest.get("label_status", "draft")
+                )
         except EvalDatasetError as exc:
             errors.append(str(exc))
 
@@ -454,6 +462,42 @@ def seed_must_cover_points(
         "points": len(points),
         "unseeded_factors": len(unseeded),
         "status": "draft",
+    }
+
+
+def mark_reviewed(data_dir: Path, case_id: str) -> dict[str, Any]:
+    """Mark a case reviewed after both factor and point labels are reviewed."""
+
+    labels_dir = data_dir / "labels" / case_id
+    factors = _load_json(labels_dir / "evaluation_factors.json")
+    points = _load_json(labels_dir / "must_cover_points.json")
+    if not isinstance(factors, dict) or factors.get("status") != "reviewed":
+        raise EvalDatasetError(
+            f"{case_id} evaluation_factors.json is not reviewed"
+        )
+    if not isinstance(points, dict) or points.get("status") != "reviewed":
+        raise EvalDatasetError(
+            f"{case_id} must_cover_points.json is not reviewed"
+        )
+    manifest_path = labels_dir / "manifest.json"
+    manifest = _load_json(manifest_path) if manifest_path.is_file() else {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+    manifest.update(
+        {
+            "schema_version": "1.0",
+            "case_id": case_id,
+            "doc_id": manifest.get("doc_id") or case_id,
+            "label_status": "reviewed",
+            "reviewed_at": _now(),
+        }
+    )
+    _write_json(manifest_path, manifest)
+    return {
+        "case_id": case_id,
+        "label_status": "reviewed",
+        "factors": len(factors.get("factors") or []),
+        "points": len(points.get("points") or []),
     }
 
 

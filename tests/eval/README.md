@@ -44,6 +44,8 @@ The builder only copies already-parsed artifacts and generates draft labels from
    Do not assign an overall score; mark whether the point appears, whether facts
    are correct, and whether sections are consistent.
 4. Set `status` to `reviewed` and record the reviewer/date in the file once done.
+5. Run `uv run python -m scripts.eval_dataset mark-reviewed` to sync each
+   `manifest.json` to `reviewed`, then `uv run python -m scripts.eval_dataset validate`.
 5. Keep `must_cover_points.json` and any human section samples in the private
    directory only.
 

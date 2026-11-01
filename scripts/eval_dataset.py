@@ -26,6 +26,7 @@ from src.evaluation.dataset import (  # noqa: E402
     EvalDatasetError,
     build_all,
     list_cases,
+    mark_reviewed,
     seed_must_cover_points,
     validate_case,
 )
@@ -66,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     seed.add_argument("--data-dir", default="eval-data")
     seed.add_argument("--case-id", action="append", default=None)
     seed.add_argument("--overwrite", action="store_true")
+
+    mark = sub.add_parser(
+        "mark-reviewed",
+        help="mark cases reviewed after both label files are reviewed",
+    )
+    mark.add_argument("--data-dir", default="eval-data")
+    mark.add_argument("--case-id", action="append", default=None)
 
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir)
@@ -110,6 +118,16 @@ def main(argv: list[str] | None = None) -> int:
                 results.append(
                     {"case_id": case_id, "ok": False, "error": str(exc)}
                 )
+        _print({"data_dir": str(data_dir), "results": results})
+        return 0 if all("error" not in item for item in results) else 1
+
+    if args.command == "mark-reviewed":
+        results = []
+        for case_id in _case_ids(data_dir, args.case_id):
+            try:
+                results.append(mark_reviewed(data_dir, case_id))
+            except EvalDatasetError as exc:
+                results.append({"case_id": case_id, "error": str(exc)})
         _print({"data_dir": str(data_dir), "results": results})
         return 0 if all("error" not in item for item in results) else 1
 
