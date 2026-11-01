@@ -12,6 +12,7 @@ from .assemble import assemble_bid
 from .checks import AllowedFacts
 from .context import TenderContext
 from .docx_export import markdown_to_docx
+from .docx_quality import check_docx
 from .models import (
     BidAssembly,
     BidOutline,
@@ -154,6 +155,9 @@ def write_staged_outputs(
     if extra_report:
         report.update(extra_report)
     report["docx_images"] = docx.images
+    docx_quality = check_docx(docx.path)
+    report["docx_quality"] = docx_quality
+    atomic_write_json(root / "docx_quality.json", docx_quality)
     if isinstance(report.get("figures"), dict):
         report["figures"]["docx_images"] = docx.images
     if compliance is not None:

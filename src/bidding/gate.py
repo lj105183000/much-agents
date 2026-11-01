@@ -83,6 +83,11 @@ def evaluate_gate(
     figure_failed = int(figure_stats.get("failed") or 0)
     figure_skipped = int(figure_stats.get("skipped") or 0)
     figure_issues = figure_failed + figure_skipped
+    docx_quality = (
+        report.get("docx_quality")
+        if isinstance(report.get("docx_quality"), dict)
+        else None
+    )
 
     checks = [
         _check(
@@ -156,6 +161,23 @@ def evaluate_gate(
                     "were skipped"
                 ),
                 hint="Check the figure panel or complete the missing source facts.",
+            )
+        )
+
+    if docx_quality is not None:
+        docx_failed = [
+            item
+            for item in docx_quality.get("checks") or []
+            if isinstance(item, dict) and item.get("status") == "fail"
+        ]
+        has_block = any(item.get("level") == "block" for item in docx_failed)
+        checks.append(
+            _check(
+                "docx_quality",
+                "block" if has_block else "warn",
+                bool(docx_failed),
+                f"{len(docx_failed)} DOCX quality check(s) failed",
+                hint="Regenerate the DOCX or fix the missing TOC/page/font/image settings.",
             )
         )
 
