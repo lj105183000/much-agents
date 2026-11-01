@@ -50,7 +50,7 @@ from .projects import ProjectError, ProjectRepository, ProjectService
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
 from .search import SearchService
-from .service import ParseService, UploadError
+from .service import AttachmentService, ParseService, UploadError
 from .task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
 
 logger = logging.getLogger(__name__)
@@ -195,6 +195,13 @@ def create_app(
         storage=storage,
         document_registry=project_service,
     )
+    attachment_service = AttachmentService(
+        api_settings=api_settings,
+        parse_settings=parse_settings,
+        store=store,
+        dispatch=dispatcher.dispatch,
+        storage=storage,
+    )
     company_service = company_service or CompanyService(
         api_settings.database_url,
         profile_max_mb=bid_settings.profile_max_mb,
@@ -284,6 +291,7 @@ def create_app(
     app.state.parse_func = parse_func
     app.state.bid_func = bid_func
     app.state.parse_service = parse_service
+    app.state.attachment_service = attachment_service
     app.state.bid_service = bid_service
     app.state.bid_run_service = bid_run_service
     app.state.bid_run_repo = bid_run_repo

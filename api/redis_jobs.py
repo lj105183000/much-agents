@@ -360,7 +360,10 @@ class RedisJobStore(JobStoreProtocol):
             finished_at=self._clock(),
             stage="done",
             percent=100,
-            message="bid completed" if job.kind == "bid" else "parse completed",
+            message={
+                "bid": "bid completed",
+                "attach": "attachment ready",
+            }.get(job.kind, "parse completed"),
             exit_code=0,
             result=summary,
             error=None,

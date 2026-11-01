@@ -1,4 +1,4 @@
-export type JobKind = 'parse' | 'bid'
+export type JobKind = 'parse' | 'bid' | 'attach'
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type ParserChoice = 'auto' | 'mineru' | 'pymupdf'
 export type ViewKey =
@@ -139,7 +139,48 @@ export interface BidSummary {
   error: string | null
 }
 
-export type JobResult = ParseSummary | BidSummary
+export interface AttachmentSummary {
+  attachment_id: string
+  file_name: string
+  sha256: string
+  chunk_count: number
+  pages: number
+  parser: string
+  warnings: string[]
+  attached_at: string | null
+}
+
+export interface AttachmentListResponse {
+  doc_id: string
+  attachments: AttachmentSummary[]
+}
+
+export interface AttachmentDeleteResponse {
+  doc_id: string
+  attachment_id: string
+  removed_chunks: number
+  remaining_attachments: number
+  chroma_deleted: number
+  storage_synced: boolean
+  warnings: string[]
+}
+
+export interface AttachmentJobSummary {
+  kind?: 'attach'
+  ok?: boolean
+  doc_id?: string
+  attachment_id?: string
+  file?: string
+  sha256?: string
+  chunk_count?: number
+  pages?: number
+  parser?: string
+  ingested?: number | null
+  storage_synced?: boolean
+  warnings?: string[]
+}
+
+export type JobResult = ParseSummary | BidSummary | AttachmentJobSummary
 
 export interface JobStatusResponse {
   job_id: string
