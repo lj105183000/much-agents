@@ -143,7 +143,7 @@ npm audit --omit=dev --audit-level=high
 
 ## 状态与未实现项
 
-P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，并新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）。尚未完成：干净 Linux VM 与真实 DNS/CA 验收、远程 CI 结果确认、PDF/DOC 导出、审批流与版本 diff、评论/SSE、Alertmanager 真实通知渠道、前端 E2E 与压测、MCP OAuth 与前端配置 UI、Cosign 签名、L1/L2 评测校准。
+P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）与审批 UI（意见/override/历史/内容哈希提示）。尚未完成：干净 Linux VM 与真实 DNS/CA 验收、远程 CI 结果确认、PDF/DOC 导出、版本 diff/恢复、评论/SSE、Alertmanager 真实通知渠道、前端 E2E 与压测、MCP OAuth 与前端配置 UI、Cosign 签名、L1/L2 评测校准。
 
 ## License
 

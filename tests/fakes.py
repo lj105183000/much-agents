@@ -794,6 +794,15 @@ class FakeBidRunRepository:
         records = self.approvals.get(run_id) or []
         return records[-1] if records else None
 
+    async def list_approvals(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[BidApprovalRecord]:
+        records = self.approvals.get(run_id) or []
+        return list(reversed(records))[: max(1, min(int(limit), 50))]
+
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         return sorted(
             self.sections.get(run_id, []),

@@ -448,6 +448,18 @@ def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
         approval = approved.json()
         assert approval["status"] == "approved"
         assert approval["content_sha256"]
+        history = client.get(f"/api/bid-runs/{run_id}/approvals")
+        assert history.status_code == 200
+        history_body = history.json()
+        assert (
+            history_body["current_content_sha256"]
+            == approval["content_sha256"]
+        )
+        assert history_body["approvals"][0]["status"] == "approved"
+        assert (
+            history_body["approvals"][0]["content_sha256"]
+            == approval["content_sha256"]
+        )
         assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 200
 
         edited = client.patch(
@@ -461,12 +473,17 @@ def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
         assert stale.status_code == 409
         assert "approval" in stale.json()["detail"]
 
-        assert (
-            client.post(
-                f"/api/bid-runs/{run_id}/reject", json={"reason": "需重写"}
-            ).json()["status"]
-            == "rejected"
+        rejected = client.post(
+            f"/api/bid-runs/{run_id}/reject", json={"reason": "需重写"}
         )
+        assert rejected.status_code == 200, rejected.text
+        assert rejected.json()["status"] == "rejected"
+        history_after = client.get(
+            f"/api/bid-runs/{run_id}/approvals"
+        ).json()
+        assert history_after["approvals"][0]["status"] == "rejected"
+        assert history_after["approvals"][0]["reason"] == "需重写"
+        assert len(history_after["approvals"]) >= 2
 
 
 def test_force_override_is_valid_for_24_hours(tmp_path: Path) -> None:

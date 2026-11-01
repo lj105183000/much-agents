@@ -246,6 +246,7 @@ def _summary(
         revision=run.revision,
         job_id=run.job_id,
         gate_status=run.gate_status,
+        content_sha256=run.content_sha256,
         warnings=list(run.warnings),
         error=run.error,
         created_at=run.created_at,
@@ -2008,6 +2009,7 @@ class BidRunService:
                 "approved_by_name": None,
                 "reason": "",
                 "override": False,
+                "expires_at": None,
                 "created_at": None,
             }
         return {
@@ -2019,6 +2021,11 @@ class BidRunService:
             "approved_by_name": record.approved_by_name,
             "reason": record.reason,
             "override": bool(record.override),
+            "expires_at": (
+                record.expires_at.isoformat()
+                if getattr(record, "expires_at", None)
+                else None
+            ),
             "created_at": record.created_at.isoformat(),
         }
 
@@ -2065,6 +2072,28 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid run: {run_id}")
         record = await repo.latest_approval(run_id)
         return self._approval_payload(record, run_id=run_id)
+
+    async def list_approvals(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        records = await repo.list_approvals(
+            run_id, limit=max(1, min(int(limit), 50))
+        )
+        return {
+            "run_id": run_id,
+            "current_content_sha256": run.content_sha256,
+            "approvals": [
+                self._approval_payload(record, run_id=run_id)
+                for record in records
+            ],
+        }
 
     async def record_force_override(
         self,
