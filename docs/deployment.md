@@ -258,10 +258,11 @@ ALLOW_EMPTY_MINIO=1 scripts/restore.sh <dir>        # 仅限确实为空的 buck
 
 ```bash
 # 先设置 GRAFANA_ADMIN_PASSWORD
-docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus grafana
+docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus alertmanager grafana
 ```
 
 - Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
+- Alertmanager 绑定 `127.0.0.1:9093`；`deploy/alertmanager/alertmanager.yml` 默认是一个占位 webhook（`host.docker.internal:9099`），**需要替换为你的 webhook 或 email_configs 后才会真正投递**。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。
 - Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`，并预置 `Much Agents Overview` 看板（5xx、readiness、24h LLM 成本、队列深度、run 状态、LLM 调用状态）。
 - 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（信息级）。
 - `METRICS_TOKEN` 非空时，需要给 Prometheus 增加 `authorization` 配置；默认假设 API 只在内部 Compose 网络可达。
