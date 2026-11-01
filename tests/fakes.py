@@ -1038,6 +1038,7 @@ class FakeBidRunRepository:
         *,
         expected_status: str | None = None,
         expected_token: str | None = None,
+        expected_final_sha256: str | None = None,
         version_actor_id: str | None = None,
         version_actor_name: str | None = None,
         **fields: Any,
@@ -1054,6 +1055,12 @@ class FakeBidRunRepository:
                     and getattr(state, "generation_token", None) != expected_token
                 ):
                     return False
+                if expected_final_sha256 is not None:
+                    current_sha = hashlib.sha256(
+                        (state.final_markdown or "").strip().encode("utf-8")
+                    ).hexdigest()
+                    if current_sha != expected_final_sha256:
+                        return False
                 found = True
                 updated.append(replace(state, **fields))
                 markdown = (fields.get("final_markdown") or "").strip()

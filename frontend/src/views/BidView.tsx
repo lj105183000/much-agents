@@ -573,6 +573,18 @@ export function BidView({
     }
   }
 
+  const refreshPreview = async (sectionId: string) => {
+    if (!runId) return
+    try {
+      setPreview(await api.getBidSection(runId, sectionId))
+      setPreviewError(null)
+    } catch (caught) {
+      setPreviewError(
+        caught instanceof ApiError ? caught.message : '章节读取失败',
+      )
+    }
+  }
+
   const saveSection = async (markdown: string): Promise<boolean> => {
     if (!runId || !preview) return false
     if (outlineDirty) {
@@ -586,6 +598,7 @@ export function BidView({
         runId,
         preview.section_id,
         markdown,
+        preview.content_sha256,
       )
       setPreview(updated)
       setSectionStartEditing(false)
@@ -597,13 +610,26 @@ export function BidView({
       bidRun.refresh()
       return true
     } catch (caught) {
-      setSectionActionError(
-        caught instanceof ApiError ? caught.message : '正文保存失败',
-      )
+      if (caught instanceof ApiError && caught.status === 409) {
+        await refreshPreview(preview.section_id)
+        setSectionActionError(
+          '正文已被其他用户修改，已加载最新内容；请重新应用你的修改。',
+        )
+      } else {
+        setSectionActionError(
+          caught instanceof ApiError ? caught.message : '正文保存失败',
+        )
+      }
       return false
     } finally {
       setSectionSaving(false)
     }
+  }
+
+  const handleSectionConflict = async () => {
+    if (!preview) return
+    await refreshPreview(preview.section_id)
+    setSectionActionError('正文已被其他用户修改，已加载最新内容。')
   }
 
   const handleSectionRestored = (updated: BidSectionDetail) => {
@@ -1049,6 +1075,7 @@ export function BidView({
           if (preview) void regenerateSection(preview.section_id)
         }}
         onRestored={handleSectionRestored}
+        onConflict={handleSectionConflict}
       />
     </div>
   )

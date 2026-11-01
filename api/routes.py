@@ -1742,6 +1742,12 @@ def build_router() -> APIRouter:
         section_id: str,
         version_id: int,
         request: Request,
+        expected_sha256: str = Query(
+            ...,
+            min_length=64,
+            max_length=64,
+            pattern=r"^[0-9a-f]{64}$",
+        ),
         user: UserContext = Depends(require_user),
         context: ProjectContext = Depends(require_run_write),
         service: BidRunService = Depends(get_bid_run_service),
@@ -1750,6 +1756,7 @@ def build_router() -> APIRouter:
             run_id,
             section_id,
             version_id,
+            expected_sha256=expected_sha256,
             actor_id=user.id,
             actor_name=user.display_name or user.username,
         )

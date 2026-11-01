@@ -10,6 +10,8 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from src.bidding.content_hash import compute_section_content_sha256
+
 from .database import (
     BidApprovalRow,
     BidOutlineSectionRow,
@@ -976,6 +978,7 @@ class BidRunRepository:
         *,
         expected_status: str | None = None,
         expected_token: str | None = None,
+        expected_final_sha256: str | None = None,
         version_actor_id: str | None = None,
         version_actor_name: str | None = None,
         **fields: Any,
@@ -1038,6 +1041,12 @@ class BidRunRepository:
                     previous_source = (
                         row.final_source if row is not None else None
                     )
+                    if (
+                        expected_final_sha256 is not None
+                        and compute_section_content_sha256(previous)
+                        != expected_final_sha256
+                    ):
+                        return False
                 result = await session.execute(statement)
                 if not result.rowcount:
                     return False

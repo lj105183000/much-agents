@@ -546,8 +546,12 @@ export const api = {
     runId: string,
     sectionId: string,
     markdown: string,
+    expectedSha256: string,
   ): Promise<BidSectionDetail> {
-    const payload: BidSectionUpdateRequest = { markdown }
+    const payload: BidSectionUpdateRequest = {
+      markdown,
+      expected_sha256: expectedSha256,
+    }
     return request<BidSectionDetail>(
       `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}`,
       {
@@ -594,9 +598,10 @@ export const api = {
     runId: string,
     sectionId: string,
     versionId: number,
+    expectedSha256: string,
   ): Promise<BidSectionDetail> {
     return request<BidSectionDetail>(
-      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/restore`,
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/restore?expected_sha256=${encodeURIComponent(expectedSha256)}`,
       { method: 'POST' },
     )
   },

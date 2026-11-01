@@ -23,6 +23,7 @@ interface BidSectionModalProps {
   onSave: (markdown: string) => Promise<boolean>
   onRegenerate: () => void
   onRestored: (section: BidSectionDetail) => void
+  onConflict: () => void | Promise<void>
 }
 
 const VERSION_SOURCE_LABEL: Record<string, string> = {
@@ -103,6 +104,7 @@ export function BidSectionModal({
   onSave,
   onRegenerate,
   onRestored,
+  onConflict,
 }: BidSectionModalProps) {
   const [editing, setEditing] = useState(
     Boolean(startEditing && section?.status === 'final' && !actionsDisabled),
@@ -202,14 +204,23 @@ export function BidSectionModal({
         section.run_id,
         section.section_id,
         versionId,
+        section.content_sha256,
       )
       onRestored(updated)
       setDiff(null)
       await loadVersions(updated)
     } catch (caught) {
-      setVersionsError(
-        caught instanceof ApiError ? caught.message : '恢复版本失败',
-      )
+      if (caught instanceof ApiError && caught.status === 409) {
+        await onConflict()
+        await loadVersions(section)
+        setVersionsError(
+          '正文已被其他用户修改，已加载最新内容；请重新选择要恢复的版本。',
+        )
+      } else {
+        setVersionsError(
+          caught instanceof ApiError ? caught.message : '恢复版本失败',
+        )
+      }
     } finally {
       setRestoringVersionId(null)
     }

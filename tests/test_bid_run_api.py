@@ -353,6 +353,14 @@ def test_bid_run_generate_validation_and_stale_resume(tmp_path: Path) -> None:
 
 
 
+def _section_sha(client, run_id: str, section_id: str = "narr-06-01") -> str:
+    response = client.get(
+        f"/api/bid-runs/{run_id}/sections/{section_id}"
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["content_sha256"]
+
+
 def _mark_section_final(repo, run_id: str, section_id: str = "narr-06-01") -> None:
     repo.states[run_id] = [
         replace(
@@ -450,7 +458,10 @@ def test_bid_run_pdf_export_uses_converter(
         assert (run_dir / "bid.pdf").is_file()
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "修改后正文，需要重新导出。"},
+            json={
+                "markdown": "修改后正文，需要重新导出。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         assert not (run_dir / "bid.pdf").is_file()
@@ -527,7 +538,10 @@ def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
 
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "人工修改后的正文，用于触发新的内容哈希。"},
+            json={
+                "markdown": "人工修改后的正文，用于触发新的内容哈希。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         reassembled = client.post(f"/api/bid-runs/{run_id}/assemble")
@@ -584,7 +598,12 @@ def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
 
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/{section_id}",
-            json={"markdown": "人工修改后的第二版正文。"},
+            json={
+                "markdown": "人工修改后的第二版正文。",
+                "expected_sha256": _section_sha(
+                    client, run_id, section_id
+                ),
+            },
         )
         assert edited.status_code == 200, edited.text
         versions_after_edit = client.get(
@@ -602,8 +621,15 @@ def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
         assert diff.json()["changed"] is True
         assert "人工修改后的第二版正文" in diff.json()["diff"]
 
+        stale_restore = client.post(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore",
+            params={"expected_sha256": "0" * 64},
+        )
+        assert stale_restore.status_code == 409
+
         restored = client.post(
-            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore"
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore",
+            params={"expected_sha256": _section_sha(client, run_id, section_id)},
         )
         assert restored.status_code == 200, restored.text
         assert restored.json()["final_markdown"].startswith("本工程施工组织设计")
@@ -613,6 +639,44 @@ def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
         assert len(versions_after_restore) == 3
         assert versions_after_restore[0]["source"] == "manual"
         assert versions_after_restore[0]["created_by_name"] == "本地模式"
+
+
+def test_bid_run_section_edit_rejects_stale_content_hash(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        stale_sha = _section_sha(client, run_id)
+
+        first = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "第一版人工正文。", "expected_sha256": stale_sha},
+        )
+        assert first.status_code == 200, first.text
+        current_sha = first.json()["content_sha256"]
+        assert current_sha != stale_sha
+
+        conflict = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "基于旧内容的第二版。", "expected_sha256": stale_sha},
+        )
+        assert conflict.status_code == 409
+        latest = client.get(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01"
+        ).json()
+        assert latest["final_markdown"] == "第一版人工正文。"
+        assert latest["content_sha256"] == current_sha
+        versions = client.get(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/versions"
+        ).json()["versions"]
+        assert len(versions) == 1
+        assert versions[0]["source"] == "manual"
 
 
 def test_force_override_is_valid_for_24_hours(tmp_path: Path) -> None:
@@ -741,7 +805,10 @@ def test_bid_run_edit_invalidates_figures_and_gate(tmp_path: Path) -> None:
 
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "人工修改后的施工组织设计正文。"},
+            json={
+                "markdown": "人工修改后的施工组织设计正文。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         assert not manifest.exists()
@@ -824,7 +891,10 @@ def test_bid_run_manual_section_edit_and_gate(tmp_path: Path) -> None:
         dirty = "本工程施工组织设计正文。" * 40 + "合同金额 999万元。"
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": dirty},
+            json={
+                "markdown": dirty,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         body = edited.json()
@@ -873,7 +943,10 @@ def test_bid_run_manual_section_edit_and_gate(tmp_path: Path) -> None:
         clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 40
         cleaned = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": clean},
+            json={
+                "markdown": clean,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert cleaned.status_code == 200
         assert not any(
@@ -901,31 +974,47 @@ def test_bid_run_manual_edit_guards(tmp_path: Path) -> None:
 
         pending = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert pending.status_code == 409
 
         form = client.patch(
             f"/api/bid-runs/{run_id}/sections/form-09-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(
+                    client, run_id, "form-09-01"
+                ),
+            },
         )
         assert form.status_code == 422
 
         unselected = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-02",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(
+                    client, run_id, "narr-06-02"
+                ),
+            },
         )
         assert unselected.status_code == 422
 
         unknown = client.patch(
             f"/api/bid-runs/{run_id}/sections/unknown",
-            json={"markdown": "正文"},
+            json={"markdown": "正文", "expected_sha256": "0" * 64},
         )
         assert unknown.status_code == 404
 
         blank = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "   "},
+            json={
+                "markdown": "   ",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert blank.status_code == 422
 
@@ -938,7 +1027,10 @@ def test_bid_run_manual_edit_guards(tmp_path: Path) -> None:
         )
         active = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert active.status_code == 409
 
@@ -1219,7 +1311,10 @@ def test_bid_run_compliance_check_and_stale_reports_after_edit(tmp_path: Path) -
         clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 20
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": clean},
+            json={
+                "markdown": clean,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         assert edited.json()["final_source"] == "manual"
@@ -1278,6 +1373,7 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
             f"/api/bid-runs/{run_id}/compliance/fixes/apply",
             json={
                 "section_id": item["section_id"],
+                "expected_sha256": item["section_sha256"],
                 "find": item["find"],
                 "replace": item["replace"],
             },
@@ -1303,6 +1399,7 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
             f"/api/bid-runs/{run_id}/compliance/fixes/apply",
             json={
                 "section_id": item["section_id"],
+                "expected_sha256": item["section_sha256"],
                 "find": item["find"],
                 "replace": item["replace"],
             },
