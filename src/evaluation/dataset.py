@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -367,6 +368,92 @@ def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
         "checks": checks,
+    }
+
+
+def _split_scoring_criteria(text: Any) -> list[str]:
+    value = str(text or "").strip()
+    if not value:
+        return []
+    parts = re.split(r"[；;。\n]+", value)
+    points: list[str] = []
+    for part in parts:
+        cleaned = re.sub(r"^[\s（(]*[0-9一二三四五六七八九十]+[、.．)）\s]*", "", part)
+        cleaned = cleaned.strip(" ，,、")
+        if len(cleaned) >= 4:
+            points.append(cleaned)
+    return points[:3]
+
+
+def seed_must_cover_points(
+    data_dir: Path,
+    case_id: str,
+    *,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Derive draft must-cover points from ``scoring_criteria``.
+
+    This is a deterministic seed for human review, not a reviewed golden label.
+    """
+
+    labels_dir = data_dir / "labels" / case_id
+    factors_path = labels_dir / "evaluation_factors.json"
+    points_path = labels_dir / "must_cover_points.json"
+    if not factors_path.is_file():
+        raise EvalDatasetError(f"missing evaluation_factors.json for {case_id}")
+    factors = _load_json(factors_path)
+    if not isinstance(factors, dict) or not isinstance(factors.get("factors"), list):
+        raise EvalDatasetError("evaluation_factors.json must contain a factors list")
+    existing = _load_json(points_path) if points_path.is_file() else {}
+    if (
+        isinstance(existing, dict)
+        and existing.get("status") == "reviewed"
+        and not overwrite
+    ):
+        raise EvalDatasetError(
+            f"{case_id} must_cover_points is reviewed; pass --overwrite to reseed"
+        )
+
+    points: list[dict[str, Any]] = []
+    unseeded: list[str] = []
+    for factor in factors["factors"]:
+        if not isinstance(factor, dict):
+            continue
+        factor_id = str(factor.get("id") or "")
+        candidates = _split_scoring_criteria(factor.get("scoring_criteria"))
+        if not candidates:
+            unseeded.append(factor_id)
+            continue
+        for index, text in enumerate(candidates, start=1):
+            points.append(
+                {
+                    "id": f"POINT-{factor_id}-{index}",
+                    "factor_id": factor_id,
+                    "text": text,
+                    "status": "draft",
+                    "source": "scoring_criteria",
+                }
+            )
+
+    payload = {
+        "schema_version": "1.0",
+        "doc_id": case_id,
+        "status": "draft",
+        "generated_by": "deterministic-seed-v1",
+        "generated_at": _now(),
+        "instructions": (
+            "这些是根据 scoring_criteria 自动切分的候选点，必须由业务专家复核、"
+            "合并或改写后再把 status 改为 reviewed。"
+        ),
+        "points": points,
+        "unseeded_factor_ids": unseeded,
+    }
+    _write_json(points_path, payload)
+    return {
+        "case_id": case_id,
+        "points": len(points),
+        "unseeded_factors": len(unseeded),
+        "status": "draft",
     }
 
 

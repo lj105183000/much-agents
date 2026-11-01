@@ -9,6 +9,7 @@ from src.evaluation.dataset import (
     build_all,
     build_case,
     list_cases,
+    seed_must_cover_points,
     validate_case,
 )
 
@@ -136,3 +137,43 @@ def test_build_all_and_list_cases(tmp_path) -> None:
     cases = list_cases(tmp_path / "eval-data")
     assert cases[0]["case_id"] == "doc-1"
     assert cases[0]["label_status"] == "draft"
+
+
+def test_seed_must_cover_points_from_scoring_criteria(tmp_path) -> None:
+    _write_parsed_case(tmp_path)
+    build_case(tmp_path / "parsed", "doc-1", tmp_path / "eval-data")
+
+    result = seed_must_cover_points(tmp_path / "eval-data", "doc-1")
+
+    assert result["status"] == "draft"
+    assert result["points"] == 2
+    payload = json.loads(
+        (
+            tmp_path
+            / "eval-data"
+            / "labels"
+            / "doc-1"
+            / "must_cover_points.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert payload["generated_by"] == "deterministic-seed-v1"
+    assert payload["points"][0]["factor_id"] == "EVAL-001"
+    assert payload["points"][0]["status"] == "draft"
+
+
+def test_seed_must_cover_points_protects_reviewed_labels(tmp_path) -> None:
+    _write_parsed_case(tmp_path)
+    build_case(tmp_path / "parsed", "doc-1", tmp_path / "eval-data")
+    points_path = (
+        tmp_path / "eval-data" / "labels" / "doc-1" / "must_cover_points.json"
+    )
+    payload = json.loads(points_path.read_text(encoding="utf-8"))
+    payload["status"] = "reviewed"
+    points_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(EvalDatasetError):
+        seed_must_cover_points(tmp_path / "eval-data", "doc-1")
+    result = seed_must_cover_points(
+        tmp_path / "eval-data", "doc-1", overwrite=True
+    )
+    assert result["status"] == "draft"
