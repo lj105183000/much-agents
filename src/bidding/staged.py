@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -158,6 +159,32 @@ def build_retrieval_snapshot(
         "evidence_chars": sum(len(item.text or "") for item in evidence),
         "warning": warning,
     }
+
+
+_ISSUE_NOISE_RE = re.compile(r"[*`#>\s]+")
+
+
+def _quote_in_markdown(quote: str, markdown: str) -> bool:
+    normalized_quote = _ISSUE_NOISE_RE.sub("", quote or "")
+    if not normalized_quote:
+        return False
+    return normalized_quote in _ISSUE_NOISE_RE.sub("", markdown or "")
+
+
+def _filter_review_issues(
+    issues: list[ReviewIssue], markdown: str
+) -> list[ReviewIssue]:
+    """Drop quoted issues that no longer exist after a revision.
+
+    The LLM reviewer runs on the draft.  If the reviser removes the quoted
+    text, the old issue must not keep blocking the export gate.
+    """
+
+    return [
+        issue
+        for issue in issues
+        if not issue.quote or _quote_in_markdown(issue.quote, markdown)
+    ]
 
 
 async def _write(
@@ -403,7 +430,10 @@ async def _run_section(
                 final_source = "draft"
 
             final_markdown, redactions = redact_unsupported(final_markdown, allowed)
-            issues = [issue.to_dict() for issue in review.issues]
+            issues = [
+                issue.to_dict()
+                for issue in _filter_review_issues(review.issues, final_markdown)
+            ]
             if redactions:
                 issues.extend(
                     ReviewIssue(
