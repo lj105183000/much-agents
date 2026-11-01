@@ -85,6 +85,7 @@ class WriterAgent:
         evidence: list[Evidence],
         content_plan: dict | None = None,
         writing_focus: str = "",
+        profile_brief: str = "",
     ) -> SectionDraft:
         user = (
             writer_user(
@@ -93,6 +94,7 @@ class WriterAgent:
                 evidence,
                 content_plan=content_plan,
                 writing_focus=writing_focus,
+                profile_brief=profile_brief,
             )
             + f"\n\n【编写简报】\n{brief}"
         )
@@ -137,6 +139,7 @@ class ReviewerAgent:
         draft: SectionDraft,
         evidence: list[Evidence],
         brief: str = "",
+        profile_brief: str = "",
     ) -> SectionReview:
         if not draft.written:
             return SectionReview(
@@ -151,7 +154,14 @@ class ReviewerAgent:
         try:
             payload = self.llm.complete_json(
                 system=REVIEWER_SYSTEM,
-                user=reviewer_user(section, draft.markdown, self.facts, evidence, brief),
+                user=reviewer_user(
+                    section,
+                    draft.markdown,
+                    self.facts,
+                    evidence,
+                    brief,
+                    profile_brief=profile_brief,
+                ),
                 temperature=0.0,
                 max_tokens=self.settings.max_tokens,
             )
@@ -206,11 +216,17 @@ class ReviserAgent:
         draft: SectionDraft,
         review: SectionReview,
         evidence: list[Evidence],
+        profile_brief: str = "",
     ) -> SectionRevision:
         try:
             raw = self.llm.complete(
                 system=REVISER_SYSTEM,
-                user=reviser_user(section, draft.markdown, review.issues),
+                user=reviser_user(
+                    section,
+                    draft.markdown,
+                    review.issues,
+                    profile_brief=profile_brief,
+                ),
                 temperature=self.settings.temperature,
                 max_tokens=self.settings.max_tokens,
             )

@@ -102,12 +102,21 @@ def writer_user(
     evidence: list[Evidence],
     content_plan: dict | None = None,
     writing_focus: str = "",
+    profile_brief: str = "",
 ) -> str:
     plan_block = _format_content_plan(content_plan)
     plan_text = f"【本节编写计划】\n{plan_block}\n\n" if plan_block else ""
     focus_text = (
         f"【编写重点】\n{writing_focus.strip()}\n\n"
         if writing_focus and writing_focus.strip()
+        else ""
+    )
+    profile_text = (
+        "【投标人资料摘要（仅含已确认的非敏感信息，禁止编造）】\n"
+        f"{profile_brief.strip()}\n"
+        "注意：类似业绩/在建业绩仅用于投标人业绩描述，不得将其中工程内容、规模或参数"
+        "当作本工程范围或设计依据；本工程范围以招标文件、图纸和工程量清单为准。\n\n"
+        if profile_brief and profile_brief.strip()
         else ""
     )
     has_mcp = any(_is_mcp_evidence(item) for item in evidence)
@@ -126,6 +135,7 @@ def writer_user(
     )
     return (
         f"【项目事实】\n{format_facts(facts)}\n\n"
+        f"{profile_text}"
         f"【本节任务】\n标题：{section.title}\n目标字数：约 {section.target_words} 个汉字\n"
         f"必须覆盖：{', '.join(section.requirements) or '按招标文件要求'}\n\n"
         f"【评分要求】\n{format_factors(section)}\n\n"
@@ -142,9 +152,19 @@ def reviewer_user(
     facts: ProjectFacts,
     evidence: list[Evidence],
     brief: str = "",
+    profile_brief: str = "",
 ) -> str:
+    profile_text = (
+        "【投标人资料摘要（仅含已确认的非敏感信息，可直接引用）】\n"
+        f"{profile_brief.strip()}\n"
+        "注意：若正文把类似业绩/在建业绩的工程内容当作本工程范围或设计依据，"
+        "请作为 fabrication 问题标记。\n\n"
+        if profile_brief and profile_brief.strip()
+        else ""
+    )
     return (
         f"【项目事实（已由解析管线确认，可直接引用）】\n{format_facts(facts)}\n\n"
+        f"{profile_text}"
         f"【已确认的招标约束/编写简报】\n{brief or '无'}\n\n"
         f"【章节】{section.title}\n"
         f"【必须覆盖】{', '.join(section.requirements) or '按招标文件要求'}\n"
@@ -159,15 +179,26 @@ def reviser_user(
     section: OutlineSection,
     markdown: str,
     issues: list[ReviewIssue],
+    profile_brief: str = "",
 ) -> str:
     issue_lines = "\n".join(
         f"- [{issue.severity}/{issue.type}] {issue.message}"
         + (f"（原文：{issue.quote}）" if issue.quote else "")
         for issue in issues
     )
+    profile_text = (
+        "【投标人资料摘要（仅含已确认的非敏感信息，禁止编造）】\n"
+        f"{profile_brief.strip()}\n"
+        "注意：类似业绩/在建业绩仅用于投标人业绩描述，不得将其中工程内容、规模或参数"
+        "当作本工程范围或设计依据。\n\n"
+        if profile_brief and profile_brief.strip()
+        else ""
+    )
     return (
         f"【章节】{section.title}\n"
         f"【审查问题】\n{issue_lines or '- 无'}\n\n"
+        f"{profile_text}"
         f"【原稿】\n{markdown}\n\n"
-        "请输出修订后的 Markdown 正文，保留已有事实和占位符，不新增具体事实。"
+        "请输出修订后的 Markdown 正文，保留已有事实和占位符，不新增具体事实；"
+        "如需补全公司、人员、证书、业绩等事实，只能使用【投标人资料摘要】中的内容。"
     )

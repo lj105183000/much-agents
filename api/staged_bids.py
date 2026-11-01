@@ -276,6 +276,7 @@ async def execute_staged_bid_job(
         ):
             evidence_provider = mcp_manager.collect_evidence
         company_name = (profile.company.name or "").strip()
+        profile_brief = profile.brief()
         states: dict[str, SectionStateRecord] = {
             state.section_id: state for state in await repo.get_states(run_id)
         }
@@ -355,6 +356,7 @@ async def execute_staged_bid_job(
             section_ids=section_ids or None,
             evidence_provider=evidence_provider,
             company_name=company_name,
+            profile_brief=profile_brief,
             run_id=run_id,
             job_id=job.job_id,
             request_id=request_id,

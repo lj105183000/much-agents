@@ -144,6 +144,27 @@ def test_ledger_ignores_evaluation_index_criteria(tmp_path: Path) -> None:
     assert all(item["section_id"] != "idx-00" for item in quality["occurrences"])
 
 
+def test_ledger_ignores_date_table_headers(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "narr-06-06": (
+            "| 序号 | 单位工程名称 | 计划开工日期 | 计划完成日期 | 紧前工序 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| 1 | 管道安装 | 2023 年 11 月 25 日 | 2024 年 6 月 30 日 | 施工准备 |\n"
+        ),
+        narrative.id: "计划开工日期：2023年11月25日\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    start = _fact(ledger, "planned_start")
+    assert start["status"] != "conflict"
+    assert "计划完成日期" not in start["conflicting_values"]
+
+
 def test_ledger_ignores_person_title_cells(tmp_path: Path) -> None:
     planned, profile, narrative = _inputs(tmp_path)
     markdown = {

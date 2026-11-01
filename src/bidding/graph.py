@@ -56,6 +56,7 @@ def build_bid_graph(
     writer = WriterAgent(llm, settings)
     reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
     reviser = ReviserAgent(llm, allowed, settings)
+    profile_brief = profile.brief()
     section_by_id = {section.id: section for section in outline.sections}
 
     def report(stage: str, percent: int, message: str) -> None:
@@ -114,6 +115,7 @@ def build_bid_graph(
             context.facts,
             payload["brief"],
             payload.get("evidence", []),
+            profile_brief=profile_brief,
         )
         return {"drafts": [draft], "warnings": draft.warnings}
 
@@ -146,6 +148,7 @@ def build_bid_graph(
             payload["draft"],
             payload.get("evidence", []),
             payload.get("brief", ""),
+            profile_brief=profile_brief,
         )
         return {"reviews": [review], "warnings": review.warnings}
 
@@ -183,6 +186,7 @@ def build_bid_graph(
             payload["draft"],
             payload["review"],
             payload.get("evidence", []),
+            profile_brief=profile_brief,
         )
         return {"revisions": [revision], "warnings": revision.warnings}
 

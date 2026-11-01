@@ -174,6 +174,38 @@ def test_generate_sections_fails_truncated_writer(tmp_path: Path) -> None:
     )
 
 
+def test_generate_sections_injects_profile_brief(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+
+    asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+            profile_brief="【投标人资料摘要】测试公司；项目经理：王五",
+        )
+    )
+
+    assert any("测试公司" in call["user"] for call in llm.calls)
+    assert any("王五" in call["user"] for call in llm.calls)
+
+
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
     evidence = [
         Evidence(
