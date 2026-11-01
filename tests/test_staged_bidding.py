@@ -209,6 +209,7 @@ def test_generate_sections_injects_profile_brief(tmp_path: Path) -> None:
 
     assert any("测试公司" in call["user"] for call in llm.calls)
     assert any("王五" in call["user"] for call in llm.calls)
+    assert any("拟投入/拟安排" in call["user"] for call in llm.calls)
 
 
 def test_stale_review_issues_are_dropped_after_revision() -> None:

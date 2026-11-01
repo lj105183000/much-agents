@@ -9,7 +9,7 @@ from src.bidding.checks import build_allowed, redact_unsupported
 from src.bidding.config import BidSettings
 from src.bidding.context import ChunkRecord, TenderContext
 from src.bidding.errors import BidContextError
-from src.bidding.outline import build_outline, canonical_checklist
+from src.bidding.outline import build_brief, build_outline, canonical_checklist
 from src.bidding.profile import BidderProfile, placeholder, resolve
 from src.bidding.retrieval import (
     ChromaTenderRetriever,
@@ -106,6 +106,19 @@ def test_profile_brief_includes_safe_facts_and_excludes_sensitive_fields() -> No
     assert "622200000" not in brief
     assert "91110000TEST" not in brief
     assert "do-not-send" not in brief
+
+
+def test_brief_allows_labeled_resource_proposals(tmp_path: Path) -> None:
+    write_parsed_fixture(tmp_path)
+    settings = make_bid_settings(tmp_path)
+    context = TenderContext.load("doc-1", settings)
+    outline = build_outline(context, max_sections=1)
+
+    brief = build_brief(context, outline)
+
+    assert "拟投入/拟安排" in brief
+    assert "【待填写" in brief
+    assert "绝不编造" in brief
 
 
 def test_context_load_and_validation(tmp_path: Path) -> None:
