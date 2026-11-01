@@ -8,6 +8,7 @@ import type {
   BidApprovalListResponse,
   BidApprovalRequest,
   BidApprovalResponse,
+  BidCitationsResponse,
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
@@ -16,6 +17,7 @@ import type {
   BidFixApplyRequest,
   BidFixPlanRequest,
   BidFixPlanResponse,
+  BidRequirementsResponse,
   BidGateResponse,
   BidGenerateRequest,
   BidGenerateResponse,
@@ -708,6 +710,18 @@ export const api = {
   getBidConsistency(runId: string): Promise<BidConsistencyResponse> {
     return request<BidConsistencyResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/consistency`,
+    )
+  },
+
+  getBidRequirements(runId: string): Promise<BidRequirementsResponse> {
+    return request<BidRequirementsResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/requirements`,
+    )
+  },
+
+  getBidCitations(runId: string): Promise<BidCitationsResponse> {
+    return request<BidCitationsResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/citations`,
     )
   },
 

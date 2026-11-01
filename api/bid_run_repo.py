@@ -923,6 +923,33 @@ class BidRunRepository:
                 session.add_all(rows)
         return len(rows)
 
+    async def latest_retrieval_snapshots(
+        self, run_id: str
+    ) -> dict[str, dict[str, Any]]:
+        statement = (
+            select(RetrievalSnapshotRow)
+            .where(RetrievalSnapshotRow.run_id == run_id)
+            .order_by(RetrievalSnapshotRow.id.desc())
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if row.section_id in latest:
+                continue
+            latest[row.section_id] = {
+                "query_text": row.query_text,
+                "query_sha256": row.query_sha256,
+                "mode": row.mode,
+                "top_k": int(row.top_k or 0),
+                "hits": list(row.hits or []),
+                "evidence_chars": int(row.evidence_chars or 0),
+                "created_at": row.created_at.isoformat()
+                if row.created_at
+                else None,
+            }
+        return latest
+
     async def add_llm_usage(
         self,
         run_id: str,

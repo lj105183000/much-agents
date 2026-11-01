@@ -139,6 +139,8 @@ def write_staged_outputs(
     extra_report: dict[str, Any] | None = None,
     compliance: dict[str, Any] | None = None,
     consistency: dict[str, Any] | None = None,
+    requirements: dict[str, Any] | None = None,
+    citations: dict[str, Any] | None = None,
     image_width_cm: float = 15.5,
 ) -> dict[str, Any]:
     root = ensure_dir(Path(output_dir))
@@ -172,6 +174,18 @@ def write_staged_outputs(
             "summary": consistency.get("summary"),
         }
         atomic_write_json(root / "consistency.json", consistency)
+    if requirements is not None:
+        report["requirements"] = {
+            "summary": requirements.get("summary") or {},
+            "warnings": list(requirements.get("warnings") or []),
+        }
+        atomic_write_json(root / "requirements.json", requirements)
+    if citations is not None:
+        report["citations"] = {
+            "summary": citations.get("summary") or {},
+            "warnings": list(citations.get("warnings") or []),
+        }
+        atomic_write_json(root / "citations.json", citations)
     if gate is not None:
         report["gate"] = gate
         atomic_write_json(root / "gate.json", gate)
@@ -193,6 +207,12 @@ def write_staged_outputs(
         "bid_docx": str(root / "bid.docx"),
         "report_path": str(root / "report.json"),
         "outline_path": str(root / "outline.json"),
+        "requirements_path": (
+            str(root / "requirements.json") if requirements is not None else ""
+        ),
+        "citations_path": (
+            str(root / "citations.json") if citations is not None else ""
+        ),
         "sections_dir": str(sections_dir),
         "docx_paragraphs": docx.paragraphs,
         "docx_tables": docx.tables,

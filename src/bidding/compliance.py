@@ -457,28 +457,49 @@ def _scoring_check(report: dict[str, Any]) -> dict[str, Any]:
     coverage = report.get("coverage") if isinstance(report.get("coverage"), dict) else {}
     counts = coverage.get("counts") if isinstance(coverage.get("counts"), dict) else {}
     missing_factors = int(counts.get("missing") or 0)
+    requirements = (
+        report.get("requirements")
+        if isinstance(report.get("requirements"), dict)
+        else None
+    )
+    requirement_summary = (
+        requirements.get("summary")
+        if requirements and isinstance(requirements.get("summary"), dict)
+        else requirements
+    )
+    missing_requirements = int(
+        (requirement_summary or {}).get("missing") or 0
+    )
+    mandatory_missing = int(
+        (requirement_summary or {}).get("mandatory_missing") or 0
+    )
+    weighted = (requirement_summary or {}).get("weighted_coverage")
     placeholders = int((report.get("placeholders") or {}).get("count") or 0)
-    if missing_factors or placeholders:
-        parts: list[str] = []
-        if missing_factors:
-            parts.append(f"{missing_factors} 项评分因素未覆盖")
-        if placeholders:
-            parts.append(f"仍有 {placeholders} 处【待填写】占位符")
-        return _check(
-            "scoring_coverage",
-            title="评分覆盖与占位符",
-            category="评分",
-            level="warn",
-            status="warn",
-            message="；".join(parts),
-            hint="补齐评分因素响应并填写所有占位符，再重新组装。",
-        )
+    parts: list[str] = []
+    if requirement_summary is not None:
+        if missing_requirements:
+            parts.append(
+                f"{missing_requirements} 项需求未覆盖"
+                f"（强制 {mandatory_missing} 项）"
+            )
+        if weighted is not None:
+            parts.append(f"加权覆盖率 {float(weighted):.0%}")
+    elif missing_factors:
+        parts.append(f"{missing_factors} 项评分因素未覆盖")
+    if placeholders:
+        parts.append(f"仍有 {placeholders} 处【待填写】占位符")
+    failed = bool(
+        missing_requirements or mandatory_missing or placeholders
+        or (requirement_summary is None and missing_factors)
+    )
     return _check(
         "scoring_coverage",
         title="评分覆盖与占位符",
         category="评分",
         level="warn",
-        status="pass",
+        status="warn" if failed else "pass",
+        message="；".join(parts) if failed else "",
+        hint="补齐需求/评分因素响应并填写所有占位符，再重新组装。",
     )
 
 

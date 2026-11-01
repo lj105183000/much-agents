@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -190,7 +190,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/health`：返回 `storage_backend`/`storage_ok`；MinIO 不可达时 `status=degraded` 但仍 200。`GET /api/live` 始终 200；`GET /api/ready` 检查 Redis/DB/storage/Chroma，失败 503，结果缓存 `READINESS_CACHE_SECONDS`；`READINESS_STRICT=false` 时 Chroma 失败返回 200+degraded。`GET /api/metrics` 返回 Prometheus 文本指标，`METRICS_TOKEN` 可要求 Bearer；生产 Nginx 对 `/api/metrics` 返回 404，由内网 Prometheus 直接抓取。
 - `GET /api/documents`：只列出当前项目 `documents` 注册表内的文档（minio 模式结合对象列表），返回项目名、页数、chunks、bid_ready 与历史 bid run。
 - `POST /api/search`：JSON `{query, doc_id?, top_k, mode: auto|semantic|keyword}`；只检索当前项目允许的文档；语义优先，auto 在 Chroma/智谱不可用或空结果时回退关键词；返回片段、章节、页码、归一化相关度、warnings、elapsed_ms。semantic 不可用返回 503，项目外/未知 doc 404。minio 模式的关键词检索通过 `iter_lines` 直接读 `chunks.jsonl`。
-- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：先校验项目归属，再按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；minio 模式流式返回对象字节并支持 `GET`/`HEAD`/`Range`；路径穿越返回 404，**`profile.json` 永不暴露**；`bid.docx`/`bid.pdf` 已从 allowlist 移除，DOCX/PDF 只能走严格门禁导出。
+- `GET /api/jobs/{job_id}/artifacts`、`GET /api/documents/{doc_id}/artifacts`、`GET /api/documents/{doc_id}/bids/{run_id}/artifacts`：先校验项目归属，再按 allowlist 列出/下载产物（投标产物含 `compliance.json`、`consistency.json`、`figures/manifest.json` 与 `figures/*.png|jpg|jpeg`）；minio 模式流式返回对象字节并支持 `GET`/`HEAD`/`Range`；路径穿越返回 404，**`profile.json` 永不暴露**；投标产物还包含 `requirements.json`（需求登记/覆盖矩阵）与 `citations.json`（证据引用校验）；`bid.docx`/`bid.pdf` 已从 allowlist 移除，DOCX/PDF 只能走严格门禁导出。
 - `GET/POST/PATCH/DELETE /api/projects*`：项目列表（普通用户只看自己的项目）、创建/修改/删除、成员管理（写操作仅 admin）；`GET /api/audit`、`/api/audit/verify`、`/api/audit/export.csv` 仅 admin。
 - `GET /api/bids/profile-template`：返回 `bidder_profile.example.json` 的 JSON 模板。
 - `GET/POST /api/companies`、`GET/PUT/DELETE /api/companies/{company_id}`：PostgreSQL 公司库 CRUD；`profile` 为完整 BidderProfile；公司名称必填。
@@ -244,6 +244,14 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 修复方案先由一致性冲突生成确定性 replace 项（找不到唯一原文则不生成）；可选 LLM 只提供候选，所有候选都会重新校验 check id、章节可编辑性、`find` 唯一、`replace` 不含未授权金额/日期/证件与占位符。LLM 失败自动回退确定性方案。
 - 应用修复要求 final 可编辑 narrative、`find` 恰好出现一次；替换后走 `edit_section` 语义（`final_source="manual"`、run `paused/edited`、清空 gate 与两份报告），下一次 assemble 重新计算。大纲失效、人工编辑、单节重写都会删除过期报告。
 
+### 需求覆盖矩阵与引用契约（`src/bidding/requirements.py`、`citations.py`）
+
+- 组装时从 `extraction.json` 生成 `requirements.json`：评分因素 `REQ-EVAL-*`（权重/原文/来源页/映射章节/状态）与资格要求 `REQ-QUAL-*`（强制属性、对应资格审查表）；状态为 `covered|partial|missing|not_applicable`，资格表有 `【待填写】` 视为 partial。`report.json` 只写 summary（总数、加权覆盖率、强制缺失）。
+- 引用契约：Writer 提示词要求金额/日期/证件号等关键事实句末标注 `[E编号]`；编号对应生成时实际提供给 Writer 的检索证据（`retrieval_snapshots.hits`）。组装时用 `citations.json` 校验编号存在、范围、页码/章节与引用证据，统计关键事实覆盖率、无效编号与未引用主张；导出前从 `bid.md`、`sections/*.md` 与 DOCX 中剥离 `[E…]` 标记，交付文件不含内部标记。
+- 门禁：`requirements` 默认 warn（`BID_REQUIREMENTS_BLOCK=true` 时强制需求缺失 block）；`citations` warn（无效编号或覆盖率低于 `BID_CITATION_MIN_COVERAGE`）。21 项合规中的 `scoring_coverage` 优先消费需求矩阵。
+- 接口：`GET /api/bid-runs/{id}/requirements`、`GET /api/bid-runs/{id}/citations`；前端「需求覆盖与引用契约」面板展示缺失需求、加权覆盖率、引用覆盖率与未引用关键事实。
+- 人工编辑/重写/大纲失效/应用修复会删除 `requirements.json`/`citations.json`，需重新组装生成。
+
 ### AI 配图（`src/bidding/figures/`）
 
 - 只在**组装时**生成，不新增数据库表；产物为 run 目录下的 `figures/manifest.json` + `figures/fig-*.png`，已加入 artifact allowlist，`profile.json` 仍排除。
@@ -257,7 +265,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 ### MCP 服务端与客户端（`api/mcp_server.py`、`src/mcp_client/`）
 
 - **服务端**是本地 FastAPI 的薄代理，不直接访问 DB/Redis/Celery/文件系统，复用 `BidRunService` 的守卫、revision CAS、artifact allowlist 与 profile 排除。默认 stdio：`uv run python -m api.mcp_server`；HTTP：`--transport http --host 127.0.0.1 --port 8765`。HTTP 默认仅回环，非回环绑定必须 `MCP_HTTP_TOKEN`，请求需 `Authorization: Bearer`。服务端调用业务 API 时另用 `MCP_API_TOKEN`（service 身份）；`AUTH_ENABLED=true` 且未设置时调用 401，启动日志会警告。
-- 工具覆盖 health/文档检索/公司列表/run/大纲/章节/门禁/合规/一致性/job/artifact/配图查询，以及 create/patch/generate/resume/cancel/assemble/edit/regenerate/fix-plan/apply-fix/regenerate-figures 等写操作。长任务只返回 `job_id`，由调用方轮询 `get_job`。`create_bid_run` 不接受 inline profile；`read_artifact_text` 强制 allowlist 且拒绝 `profile.json`；`list_companies` 只返回 id/名称/信用代码。
+- 工具覆盖 health/文档检索/公司列表/run/大纲/章节/门禁/合规/一致性/需求覆盖/引用/job/artifact/配图查询，以及 create/patch/generate/resume/cancel/assemble/edit/regenerate/fix-plan/apply-fix/regenerate-figures 等写操作。长任务只返回 `job_id`，由调用方轮询 `get_job`。`create_bid_run` 不接受 inline profile；`read_artifact_text` 强制 allowlist 且拒绝 `profile.json`；`list_companies` 只返回 id/名称/信用代码。
 - **客户端**默认关闭（`MCP_CLIENT_ENABLED=false`），只连接 `mcp_servers.json` 中声明的服务器与 `allowed_tools`；参数只能使用固定占位符（`${query}`、`${doc_id}`、`${top_k}`、`${company_name}`、`${project_name}`、`${section_id}`、`${section_title}`、`${figure_spec}`），未知占位符启动报错。LLM 不能发现或调用任意 MCP 工具。
 - 支持 `stdio` 与 `streamable_http`；命令/参数/URL/headers/env 中的 `${VAR}` 从环境展开（如 `${DRAWING_TOKEN}`），缺失变量报错。真实 `mcp_servers.json` 已 gitignore，示例为 `mcp_servers.example.json`；`.mcp.json` 也已 gitignore，示例为 `.mcp.json.example`。
 - `purpose=evidence|company` 的工具在每节本地检索后并发调用，结果合并为带 `source="mcp"` / `MCP/<server>/<tool>` 标记的不可信证据；外部证据预算最多为总预算 1/3，未用满回补本地。单服务器失败/超时只 warning，不阻断章节。
@@ -266,7 +274,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
+- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、评论/指派/SSE、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
 
 ### 配置与数据
 
@@ -276,6 +284,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 对象存储：`STORAGE_BACKEND`（默认 minio）、`MINIO_ENDPOINT`、`MINIO_SECURE`、`MINIO_BUCKET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_CONSOLE_PORT`（仅 start.bat）、`MINIO_TIMEOUT_SECONDS`。
 - AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。
 - 章节版本：`BID_SECTION_VERSION_KEEP`（默认 50，每节保留的版本数）。
+- 需求与引用：`BID_REQUIREMENTS_BLOCK`（默认 false；true 时强制需求缺失阻断导出）、`BID_CITATION_MIN_COVERAGE`（默认 0.8，低于则门禁警告）。
 - PDF 导出：`SOFFICE_PATH`（可选，指定 `soffice`/`libreoffice` 可执行文件；留空自动探测 PATH 与 Windows 默认安装目录）。未安装 LibreOffice 时 `POST .../export/pdf` 返回 503。
 - MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`、`MCP_API_TOKEN`（调用业务 API 的 service token）。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
 - 生产部署：`deploy/env.production` 从 `deploy/env.production.example` 复制（真实文件已 gitignore），其中 `ENVIRONMENT=production` 触发 fail-fast；TLS 证书放在 `deploy/nginx/certs/{fullchain.pem,privkey.pem}`（已 gitignore，可用 `generate-self-signed.sh` 生成）。生产只通过 `docker compose -f docker-compose.prod.yml` 启动，详见 `docs/deployment.md`。
