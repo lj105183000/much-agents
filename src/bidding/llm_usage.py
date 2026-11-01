@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
+from src.observability.metrics import record_llm_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -241,6 +243,15 @@ class MeteredChatClient:
             system_fingerprint=usage.get("system_fingerprint"),
         )
         record_usage(record)
+        record_llm_usage(
+            operation=record.operation,
+            model=record.model_actual or record.model_requested or "unknown",
+            status=record.status,
+            fallback=record.fallback,
+            prompt_tokens=record.prompt_tokens,
+            completion_tokens=record.completion_tokens,
+            cost_cny=record.cost_cny,
+        )
 
 
 def _int_or_none(value: Any) -> int | None:

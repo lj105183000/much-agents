@@ -41,6 +41,8 @@ from src.bidding.staged_output import (
     assemble_staged_bid,
     write_staged_outputs,
 )
+from src.observability.logging import get_request_id
+from src.observability.metrics import GATE_STATUS
 from src.mcp_client.config import McpClientConfig
 from src.mcp_client.manager import (
     McpClientManager,
@@ -1037,6 +1039,7 @@ class BidRunService:
                     "mode": "staged",
                     "run_id": run_id,
                     "project_id": run.project_id,
+                    "request_id": get_request_id(),
                     "generation_token": generation_token,
                     "section_ids": generated_ids,
                     "assemble": bool(payload.assemble),
@@ -1734,6 +1737,7 @@ class BidRunService:
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
             )
+            GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
             outline_data = outline_data_from_records(outline, records)
             result = write_staged_outputs(
                 context=context,

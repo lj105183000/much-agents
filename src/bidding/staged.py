@@ -18,6 +18,9 @@ from .agents import ReviserAgent, ReviewerAgent, WriterAgent
 from .checks import AllowedFacts, redact_unsupported
 from .config import BidSettings
 from .context import TenderContext
+from src.observability.logging import section_id_var
+from src.observability.metrics import SECTION_FAILURES
+
 from .llm import ChatClient
 from .llm_usage import MeteredChatClient, usage_scope
 from .models import (
@@ -272,6 +275,7 @@ async def _run_section(
                 writing_focus,
             )
             if not draft.written:
+                SECTION_FAILURES.inc(stage="writer")
                 warning = "; ".join(draft.warnings) or "writer produced no content"
                 await hooks.update_section(
                     section.id,
@@ -365,6 +369,7 @@ async def _run_section(
                 llm_calls=calls,
             )
         except Exception as exc:  # noqa: BLE001 - isolate one section
+            SECTION_FAILURES.inc(stage="section")
             logger.exception("staged section failed: %s", section.id)
             try:
                 await hooks.update_section(
@@ -433,31 +438,35 @@ async def generate_sections(
 
     async def run_one(section: OutlineSection) -> StagedSectionOutcome:
         nonlocal cancelled
-        with usage_scope(
-            run_id=run_id,
-            job_id=job_id,
-            request_id=request_id,
-            project_id=project_id,
-            section_id=section.id,
-        ) as scope:
-            result = await _run_section(
-                section=section,
-                context=context,
-                brief=brief,
-                content_plan=content_plans.get(section.id),
-                writing_focus=writing_focus.get(section.id, ""),
-                attempt=int(existing_attempt.get(section.id, 0)) + 1,
-                settings=settings,
-                writer=writer,
-                reviewer=reviewer,
-                reviser=reviser,
-                retriever=retriever,
-                allowed=allowed,
-                hooks=hooks,
-                semaphore=semaphore,
-                evidence_provider=evidence_provider,
-                company_name=company_name,
-            )
+        section_token = section_id_var.set(section.id)
+        try:
+            with usage_scope(
+                run_id=run_id,
+                job_id=job_id,
+                request_id=request_id,
+                project_id=project_id,
+                section_id=section.id,
+            ) as scope:
+                result = await _run_section(
+                    section=section,
+                    context=context,
+                    brief=brief,
+                    content_plan=content_plans.get(section.id),
+                    writing_focus=writing_focus.get(section.id, ""),
+                    attempt=int(existing_attempt.get(section.id, 0)) + 1,
+                    settings=settings,
+                    writer=writer,
+                    reviewer=reviewer,
+                    reviser=reviser,
+                    retriever=retriever,
+                    allowed=allowed,
+                    hooks=hooks,
+                    semaphore=semaphore,
+                    evidence_provider=evidence_provider,
+                    company_name=company_name,
+                )
+        finally:
+            section_id_var.reset(section_token)
         result.usage = [record.to_dict() for record in scope.records]
         result.llm_calls = len(scope.records)
         if result.status in ("final", "failed"):
