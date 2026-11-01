@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
+from src.bidding.errors import BidLLMTruncatedError
 from src.observability.metrics import record_llm_usage
 
 logger = logging.getLogger(__name__)
@@ -201,11 +202,16 @@ class MeteredChatClient:
                 kwargs=kwargs,
             )
             raise
-        self._record(
+        record = self._record(
             status="ok",
             latency_ms=int((time.perf_counter() - started) * 1000),
             kwargs=kwargs,
         )
+        if record.status == "truncated":
+            raise BidLLMTruncatedError(
+                f"{self.operation} output truncated at max_tokens "
+                f"({record.model_actual or record.model_requested or 'unknown model'})"
+            )
         return result
 
     def _record(
@@ -215,7 +221,7 @@ class MeteredChatClient:
         latency_ms: int,
         kwargs: dict[str, Any],
         error_type: str | None = None,
-    ) -> None:
+    ) -> LLMUsageRecord:
         usage = getattr(self.inner, "last_usage", None)
         usage = usage if isinstance(usage, dict) else {}
         model = usage.get("model_actual") or usage.get("model_requested")
@@ -252,6 +258,7 @@ class MeteredChatClient:
             completion_tokens=record.completion_tokens,
             cost_cny=record.cost_cny,
         )
+        return record
 
 
 def _int_or_none(value: Any) -> int | None:

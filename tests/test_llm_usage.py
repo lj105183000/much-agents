@@ -13,7 +13,7 @@ from src.bidding.llm_usage import (
     load_price_table,
     usage_scope,
 )
-from src.bidding.errors import BidLLMError
+from src.bidding.errors import BidLLMError, BidLLMTruncatedError
 
 
 def _response(
@@ -186,6 +186,31 @@ def test_metered_client_records_scope_and_cost(monkeypatch) -> None:
     assert record.cost_cny == 0.002
     assert record.retry_count == 1
     assert record.status == "ok"
+
+
+def test_metered_client_raises_on_truncated_completion() -> None:
+    inner = _MeteredInner()
+    inner.last_usage = {**inner.last_usage, "finish_reason": "length"}
+    client = MeteredChatClient(inner, operation="writer")
+    with usage_scope(run_id="run-1", section_id="s-1") as scope:
+        with pytest.raises(BidLLMTruncatedError):
+            client.complete(system="s", user="u", max_tokens=8192)
+
+    assert len(scope.records) == 1
+    assert scope.records[0].status == "truncated"
+    assert scope.records[0].finish_reason == "length"
+
+
+def test_metered_client_raises_on_truncated_json() -> None:
+    inner = _MeteredInner()
+    inner.last_usage = {**inner.last_usage, "finish_reason": "length"}
+    client = MeteredChatClient(inner, operation="reviewer")
+    with usage_scope(run_id="run-1", section_id="s-1") as scope:
+        with pytest.raises(BidLLMTruncatedError):
+            client.complete_json(system="s", user="u", json_mode=True)
+
+    assert len(scope.records) == 1
+    assert scope.records[0].status == "truncated"
 
 
 def test_metered_client_records_errors() -> None:

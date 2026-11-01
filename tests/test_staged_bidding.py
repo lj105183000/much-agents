@@ -132,6 +132,48 @@ def test_generate_sections_persists_usage_per_outcome(tmp_path: Path) -> None:
     }
 
 
+def test_generate_sections_fails_truncated_writer(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    llm.last_usage = {
+        "model_requested": "deepseek-flash",
+        "model_actual": "deepseek-flash",
+        "prompt_tokens": 10,
+        "completion_tokens": 10,
+        "total_tokens": 20,
+        "finish_reason": "length",
+    }
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+        )
+    )
+
+    assert result.outcomes
+    assert all(item.status == "failed" for item in result.outcomes)
+    assert any(
+        fields.get("status") == "failed" for _section_id, fields in hooks.updates
+    )
+
+
 def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
     evidence = [
         Evidence(
