@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验。PDF/DOC 导出、审批与版本、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma digest pin 与 CI Trivy/Syft SBOM。PDF/DOC 导出、审批 UI 与版本 diff、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -46,6 +46,7 @@ uv run python -m scripts.baseline_metrics                                    # �
 uv run python -m scripts.eval_dataset build --all                            # 构建私有评测集到 eval-data/（gitignored）
 uv run python -m scripts.eval_dataset validate                               # 校验评测集结构并提示待人工标注项
 uv run python -m scripts.dlq --limit 20                                      # 查看 Redis 死信列表
+uv run python -m scripts.check_image_pins docker-compose.prod.yml            # 检查生产镜像是否仍使用 :latest
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
 uv run python -m api.mcp_server --check      # 列出 MCP 服务端工具后退出
@@ -75,7 +76,7 @@ stop.bat                # 停止由 start.bat 拉起的 Python/Node 进程
 - 实现在 `scripts/start_all.py`（仅标准库）；Docker Desktop 未运行时会尝试启动并等待，失败则报错。
 - 首次运行会从 `.env.example` 复制 `.env`；缺少 `DEEPSEEK_API_KEY`/`ZHIPU_API_KEY`/`MINERU_API_KEY` 时只警告，不阻塞启动。
 - 启动/复用 `much-agents-postgres`、`much-agents-redis`、`much-agents-minio`（prod 还会启动 `much-agents-nginx`）；容器带 `--restart unless-stopped`，`stop.bat` 不会关闭容器。
-- MinIO 容器使用 `minio/minio:latest`、数据卷 `much-agents-minio-data`，映射 `MINIO_ENDPOINT` 端口到 9000、`MINIO_CONSOLE_PORT` 到同名控制台端口；启动脚本等待 `/minio/health/live`，并把 `STORAGE_BACKEND` 传给 API/worker。端口被占用时会提示修改 `MINIO_ENDPOINT`/`MINIO_CONSOLE_PORT`。
+- MinIO 容器使用固定 digest 的 `minio/minio` 镜像、数据卷 `much-agents-minio-data`，映射 `MINIO_ENDPOINT` 端口到 9000、`MINIO_CONSOLE_PORT` 到同名控制台端口；启动脚本等待 `/minio/health/live`，并把 `STORAGE_BACKEND` 传给 API/worker。端口被占用时会提示修改 `MINIO_ENDPOINT`/`MINIO_CONSOLE_PORT`。
 - PID 记录在 `.run/start.json`（已 gitignore）；再次运行会先清理上次拉起的进程，`stop.bat` 在 Windows 用 `taskkill /T /F` 结束进程树。
 - 端口已有 Much Agents API 时，仅当 `GET /api/live` 返回 2xx 才复用；health 正常但 `/api/live` 404 说明是旧版本 API，脚本会提示先 `stop.bat`。Vite 端口已有可访问页面时直接复用；被其他程序占用则报错。`--skip-docker` 可连接已有 PostgreSQL/Redis/MinIO；本地 Redis 不可用时自动降级为 `TASK_BACKEND=local`，MinIO 不可用时降级为 `STORAGE_BACKEND=local`。
 - 每个服务使用独立控制台窗口；强制关闭 supervisor 窗口不会触发自动停止，改用 `stop.bat`。`--dry-run` 不写 `.env`、不启动进程。
@@ -101,7 +102,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - **Redis**：本机无原生 `redis-server.exe`，使用 Docker 容器 `much-agents-redis`（映射 6379，`--restart unless-stopped`）：`docker start much-agents-redis`。连接串 `redis://localhost:6379/0`。
 - **PostgreSQL**：Docker 容器 `much-agents-postgres`（`postgres:16-alpine`，映射 5433，`--restart unless-stopped`，数据卷 `much-agents-postgres-data`）：`docker start much-agents-postgres`。连接串 `postgresql+asyncpg://much_agents:much_agents_dev@localhost:5433/much_agents`；表结构由 Alembic 管理，API 启动默认执行 `alembic upgrade head`（`DB_AUTO_MIGRATE=false` 可关闭）。
 - **Nginx**：Docker 容器 `much-agents-nginx`（`nginx:alpine`，`127.0.0.1:8080->80`，`--restart unless-stopped`），配置 `deploy/nginx.conf`，静态目录挂载 `frontend/dist`；`http://127.0.0.1:8080` 提供前端页面，`/api/*`、`/docs` 反向代理到 `host.docker.internal:8001`。重建前端后无需重启容器。
-- **MinIO**：Docker 容器 `much-agents-minio`（`minio/minio:latest`，数据卷 `much-agents-minio-data`，`--restart unless-stopped`）；`start.bat` 自动启动/复用，`stop.bat` 不关闭。端口以 `.env` 的 `MINIO_ENDPOINT` 为准（默认 9000/9001；本机因 `bidding-agent` 占用改为 9010/9011），凭据来自 `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`（缺失时回退 `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`）。`STORAGE_BACKEND=local` 时不需要。详细说明见 `docs/minio-storage.md`。
+- **MinIO**：Docker 容器 `much-agents-minio`（固定 digest 的 `minio/minio`，数据卷 `much-agents-minio-data`，`--restart unless-stopped`）；`start.bat` 自动启动/复用，`stop.bat` 不关闭。端口以 `.env` 的 `MINIO_ENDPOINT` 为准（默认 9000/9001；本机因 `bidding-agent` 占用改为 9010/9011），凭据来自 `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`（缺失时回退 `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`）。`STORAGE_BACKEND=local` 时不需要。详细说明见 `docs/minio-storage.md`。
 - **Chroma**：`uv run chroma run --path ./chroma_db`，向量数据落在 `chroma_db/`（已 gitignore）。
 - **MinerU**：云端解析，需要 `MINERU_API_KEY`（有效期 90 天）；单文件页数上限 200，超过需先分片。
 
@@ -242,12 +243,12 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批流与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、Prometheus/Grafana 告警栈、L1 标注与 L2 judge 校准、DOCX 质量检查、镜像 digest pin/SBOM/签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
+- **待办**：前端 IPC（打开本地目录）、PDF/DOC 导出、审批 UI 与版本 diff/恢复、评论/指派/SSE、引用契约与需求覆盖矩阵、模型网关/数据边界重构、Prometheus/Grafana 告警栈、L1 标注与 L2 judge 校准、Postgres/Redis digest pin、Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
 
 ### 配置与数据
 
 - `.env`（已 gitignore）由 `.env.example` 复制；关键变量：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`、`DATABASE_URL`、`REDIS_URL`，以及 API/Chroma/MinerU/投标参数（`ENVIRONMENT`、`API_HOST/API_PORT`、`DOCS_ENABLED`、`TRUSTED_PROXIES`、`READINESS_CACHE_SECONDS`、`UPLOAD_DIR`、`MAX_UPLOAD_MB`、`MAX_PDF_PAGES`、`API_JOB_WORKERS`、`CORS_ORIGINS`、`TASK_BACKEND`、`CELERY_BROKER_URL`、`CELERY_WORKER_POOL`、`CELERY_SOFT_TIME_LIMIT_SECONDS`、`CELERY_TIME_LIMIT_SECONDS`、`JOB_TTL_SECONDS`、`DB_AUTO_MIGRATE`、`BID_RUN_MAX_ATTEMPTS`、`BID_RUN_STALE_SECONDS`、`BIDS_DIR`、`BID_MAX_SECTIONS`、`BID_RETRIEVAL_TOP_K`、`BID_MAX_TOKENS`、`BID_MAX_REVIEW_REVISIONS`、`BID_LLM_CONCURRENCY`、`BID_USE_CHROMA`）。
-- 生产就绪与运维：`READINESS_STRICT`、`METRICS_ENABLED`、`METRICS_TOKEN`、`LOG_FORMAT`、`BID_SECTION_MAX_ATTEMPTS`、`BID_HEARTBEAT_SECONDS`、`DEEPSEEK_ALLOW_FALLBACK`、`LLM_PRICE_TABLE`，以及 `BACKUP_ENCRYPT`/`BACKUP_AGE_RECIPIENT`/`BACKUP_GPG_RECIPIENT`/`BACKUP_OFFSITE_TARGET`/`BACKUP_METRICS_DIR`。
+- 生产就绪与运维：`READINESS_STRICT`、`METRICS_ENABLED`、`METRICS_TOKEN`、`LOG_FORMAT`、`BID_SECTION_MAX_ATTEMPTS`、`BID_REQUIRE_APPROVAL`、`BID_HEARTBEAT_SECONDS`、`DEEPSEEK_ALLOW_FALLBACK`、`LLM_PRICE_TABLE`，以及 `BACKUP_ENCRYPT`/`BACKUP_AGE_RECIPIENT`/`BACKUP_GPG_RECIPIENT`/`BACKUP_OFFSITE_TARGET`/`BACKUP_METRICS_DIR`。
 - 认证：`AUTH_ENABLED`（默认 true）、`AUTH_SESSION_TTL_HOURS`、`AUTH_LOGIN_MAX_FAILURES`、`AUTH_LOCKOUT_MINUTES`、`AUTH_HASH_CONCURRENCY`、`AUTH_LOGIN_IP_MAX_FAILURES`、`AUTH_LOGIN_IP_WINDOW_SECONDS`、`TRUSTED_PROXIES`、`MCP_API_TOKEN`、`MCP_DEFAULT_PROJECT_ID`。`AUTH_ENABLED=false` 仅用于无数据库的本机开发，所有请求按本地 admin 处理。
 - 对象存储：`STORAGE_BACKEND`（默认 minio）、`MINIO_ENDPOINT`、`MINIO_SECURE`、`MINIO_BUCKET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_CONSOLE_PORT`（仅 start.bat）、`MINIO_TIMEOUT_SECONDS`。
 - AI 配图：`BID_FIGURES_ENABLED`、`BID_FIGURES_MAX`、`BID_FIGURES_USE_LLM`、`BID_FIGURES_FONT`、`BID_FIGURES_WIDTH_PX`、`BID_FIGURES_IMAGE_WIDTH_CM`、`BID_FIGURES_PAGE_ESTIMATE`、`BID_FIGURES_EXTERNAL`。

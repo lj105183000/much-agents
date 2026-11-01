@@ -73,7 +73,7 @@ services:
       - no-new-privileges:true
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     env_file:
       - ./deploy/env.production
@@ -89,7 +89,7 @@ services:
       - no-new-privileges:true
 
   createbuckets:
-    image: minio/mc:latest
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     env_file:
       - ./deploy/env.production
     entrypoint: ["/bin/sh", "-c"]
@@ -103,7 +103,7 @@ services:
     restart: "no"
 
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     restart: unless-stopped
     command: ["run", "--path", "/data", "--host", "0.0.0.0", "--port", "8000"]
     volumes:

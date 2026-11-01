@@ -51,7 +51,7 @@ MINIO_TIMEOUT_SECONDS=30
 `start.bat` 默认会确保 `much-agents-minio` 容器运行：
 
 ```text
-镜像      minio/minio:latest
+镜像      minio/minio（digest 固定，见 docker-compose.prod.yml）
 数据卷    much-agents-minio-data -> /data
 API       <MINIO_ENDPOINT 端口>:9000
 控制台    <MINIO_CONSOLE_PORT>:<MINIO_CONSOLE_PORT>

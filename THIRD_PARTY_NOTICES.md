@@ -133,9 +133,9 @@ MPL-2.0 是文件级 copyleft：只要不修改 MPL 覆盖的文件，可与 AGP
 
 | 组件 | 镜像/来源 | 许可证 | 说明 |
 |---|---|---|---|
-| MinIO Server | `minio/minio:latest` | AGPL-3.0 | 未修改，作为独立服务运行。 |
-| MinIO Client | `minio/mc:latest` | AGPL-3.0 | 未修改，仅用于初始化 bucket。 |
-| Chroma | `chromadb/chroma:latest` | Apache-2.0 | 独立向量数据库服务。 |
+| MinIO Server | `minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | AGPL-3.0 | 未修改，作为独立服务运行；digest 固定。 |
+| MinIO Client | `minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727` | AGPL-3.0 | 未修改，仅用于初始化 bucket；digest 固定。 |
+| Chroma | `chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6` | Apache-2.0 | 独立向量数据库服务；digest 固定。 |
 | PostgreSQL | `postgres:16-alpine` | PostgreSQL License | 宽松许可证，类 BSD。 |
 | Redis | `redis:7-alpine` | 取决于实际解析版本 | 7.2 及更早为 BSD-3-Clause；7.4 起改为 RSALv2/SSPLv1。**必须固定 digest 或小版本后再分发。** |
 | Nginx | `nginx:1.27-alpine` | BSD-2-Clause | 前端静态托管与反向代理。 |

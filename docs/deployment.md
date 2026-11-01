@@ -327,7 +327,7 @@ docker compose -f docker-compose.prod.yml config
 ## 12. 已知限制
 
 - 单机 Compose，无 HA/多副本；Postgres/Redis/MinIO 故障会导致服务不可用。
-- `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前 `chromadb/chroma:latest` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
+- `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前固定 digest 的 `chromadb/chroma` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
 - 没有内置 Prometheus/Grafana 栈；API 暴露受保护的 `/api/metrics`，需自行部署抓取与告警。Celery beat 与 `deploy/systemd/much-agents-backup.timer` 分别负责 stale reaper 与每日备份。
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。

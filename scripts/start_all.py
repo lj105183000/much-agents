@@ -47,7 +47,10 @@ REDIS_CONTAINER = "much-agents-redis"
 MINIO_CONTAINER = "much-agents-minio"
 NGINX_CONTAINER = "much-agents-nginx"
 
-MINIO_IMAGE = "minio/minio:latest"
+MINIO_IMAGE = (
+    "minio/minio@sha256:"
+    "14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+)
 MINIO_VOLUME = "much-agents-minio-data"
 MINIO_API_CONTAINER_PORT = 9000
 DEFAULT_STORAGE_BACKEND = "minio"

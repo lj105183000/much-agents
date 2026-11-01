@@ -89,10 +89,50 @@ jobs:
           ./deploy/nginx/generate-self-signed.sh localhost
       - name: Validate compose file
         run: docker compose -f docker-compose.prod.yml config > /dev/null
+      - name: Check production images are pinned
+        run: python3 scripts/check_image_pins.py docker-compose.prod.yml
       - name: Build API image
         run: docker build --target api -t much-agents-api:ci .
       - name: Build web image
         run: docker build --target web -t much-agents-web:ci .
+      - name: Scan API image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: much-agents-api:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Report-only until the baseline is triaged; tighten to 1 afterwards.
+          exit-code: "0"
+      - name: Scan web image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: much-agents-web:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Scan repository configuration (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,config
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: much-agents-api:ci
+          format: spdx-json
+          artifact-name: much-agents-api-sbom.spdx.json
+      - name: Generate web SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: much-agents-web:ci
+          format: spdx-json
+          artifact-name: much-agents-web-sbom.spdx.json
       - name: Verify license files in images
         run: |
           docker run --rm --entrypoint sh much-agents-api:ci \
