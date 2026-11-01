@@ -207,6 +207,29 @@ def test_csv_attachment_chunks(tmp_path: Path) -> None:
     assert "0.8MPa" in combined
 
 
+def test_xlsx_attachment_chunks(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    path = tmp_path / "boq.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "工程量清单"
+    sheet.append(["项目编码", "项目名称", "计量单位", "工程量"])
+    sheet.append(["010101001", "沟槽土方开挖", "m3", 1200])
+    sheet.append(["030101002", "PE100给水管DN200", "m", 5000])
+    workbook.save(path)
+
+    chunks, meta = build_attachment_chunks(
+        DOC_ID, path, chunk_size=1000, overlap=100
+    )
+
+    assert chunks
+    assert meta["parser"] == "xlsx"
+    combined = "\n".join(chunk.text for chunk in chunks)
+    assert "010101001" in combined
+    assert "DN200" in combined
+
+
 def test_pdf_attachment_chunks(tmp_path: Path) -> None:
     path = _pdf(tmp_path / "evidence.pdf")
     chunks, meta = build_attachment_chunks(DOC_ID, path, chunk_size=1000, overlap=100)
@@ -305,7 +328,7 @@ def test_attach_evidence_without_ingest(
 
 
 def test_unsupported_attachment_type(tmp_path: Path) -> None:
-    path = tmp_path / "boq.xlsx"
-    path.write_bytes(b"not a real xlsx")
+    path = tmp_path / "boq.xls"
+    path.write_bytes(b"not a real xls")
     with pytest.raises(AttachmentError):
         build_attachment_chunks(DOC_ID, path)

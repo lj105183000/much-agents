@@ -2,9 +2,9 @@
 
 The attachment is chunked with ``<doc_id>:att-<sha12>:<ordinal>`` ids, appended
 to ``chunks.jsonl`` and upserted into Chroma without pruning the main document's
-chunks.  Text-based PDFs and CSV files are supported.  Pages without an
-extractable text layer are reported as requiring OCR (MinerU or another OCR
-pipeline); they are not silently filled with invented content.
+chunks.  Text-based PDFs, CSV, XLSX/XLSM and plain text are supported.  Pages
+without an extractable text layer fall back to MinerU OCR when configured; they
+are never silently filled with invented content.
 """
 
 from __future__ import annotations
@@ -26,9 +26,12 @@ from .models import Chunk
 logger = logging.getLogger(__name__)
 
 TABLE_SUFFIXES = {".csv"}
+XLSX_SUFFIXES = {".xlsx", ".xlsm"}
 TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
 PDF_SUFFIXES = {".pdf"}
-SUPPORTED_SUFFIXES = PDF_SUFFIXES | TEXT_SUFFIXES | TABLE_SUFFIXES
+SUPPORTED_SUFFIXES = (
+    PDF_SUFFIXES | TEXT_SUFFIXES | TABLE_SUFFIXES | XLSX_SUFFIXES
+)
 
 _DEFAULT_CHUNK_SIZE = 1200
 _DEFAULT_OVERLAP = 150
@@ -135,6 +138,38 @@ def _csv_units(
         (piece, 1, 1, "table")
         for piece in _split_text(text, size, overlap)
     ]
+    return units, 1, []
+
+
+def _xlsx_units(
+    path: Path,
+    *,
+    size: int,
+    overlap: int,
+) -> tuple[list[tuple[str, int, int, str]], int, list[str]]:
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - dependency is pinned
+        raise AttachmentError(
+            "openpyxl is required to parse XLSX attachments"
+        ) from exc
+
+    units: list[tuple[str, int, int, str]] = []
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        for sheet in workbook.worksheets:
+            lines = [f"[工作表] {sheet.title}"]
+            for row in sheet.iter_rows(values_only=True):
+                cells = [
+                    str(cell).strip() if cell is not None else ""
+                    for cell in row
+                ]
+                if any(cells):
+                    lines.append(" | ".join(cells))
+            for piece in _split_text("\n".join(lines), size, overlap):
+                units.append((piece, 1, 1, "table"))
+    finally:
+        workbook.close()
     return units, 1, []
 
 
@@ -253,6 +288,11 @@ def build_attachment_chunks(
             source, size=size, overlap=overlap_value
         )
         parser = "csv"
+    elif suffix in XLSX_SUFFIXES:
+        units, pages, warnings = _xlsx_units(
+            source, size=size, overlap=overlap_value
+        )
+        parser = "xlsx"
     else:
         units, pages, warnings = _text_units(
             source, size=size, overlap=overlap_value

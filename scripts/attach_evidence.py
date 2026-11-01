@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--doc-id", required=True, help="Existing parsed document id")
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--file", help="Attachment path (PDF/CSV/TXT/MD)")
+    action.add_argument("--file", help="Attachment path (PDF/CSV/XLSX/TXT/MD)")
     action.add_argument("--list", action="store_true", help="List attachments")
     action.add_argument(
         "--remove",

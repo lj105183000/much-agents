@@ -34,6 +34,7 @@
 | mcp | >=1.20,<2 | MIT | <https://github.com/modelcontextprotocol/python-sdk> |
 | minio | >=7.2.20 | Apache-2.0 | <https://github.com/minio/minio-py> |
 | openai | >=3.36.1 | Apache-2.0 | <https://github.com/openai/openai-python> |
+| openpyxl | >=3.1.5 | MIT | <https://foss.heptapod.net/openpyxl/openpyxl> |
 | pillow | >=11 | MIT-CMU | <https://github.com/python-pillow/Pillow> |
 | pydantic | >=2.14.1 | MIT | <https://github.com/pydantic/pydantic> |
 | pymupdf | >=2.0 | **AGPL-3.0 或 Artifex 商业许可（双许可）** | <https://github.com/pymupdf/pymupdf> |
@@ -62,6 +63,7 @@
 - mcp：`Copyright (c) 2024 Anthropic, PBC`
 - minio（Python SDK）：`MinIO Cloud Storage, (C) 2014-2023 MinIO, Inc.`，NOTICE 原文见第 5.1 节。
 - openai：许可证文件为 Apache-2.0 正文，未单独列版权行；版权归 OpenAI 及贡献者。
+- openpyxl：`Copyright (c) 2010-2024 openpyxl`
 - pillow：`Copyright © 1997-2011 by Secret Labs AB`；`Copyright © 1995-2011 by Fredrik Lundh and contributors`；`Copyright © 2010 by Jeffrey 'Alex' Clark and contributors`
 - pydantic：`Copyright (c) 2017 to present Pydantic Services Inc. and individual contributors.`
 - pymupdf：`Copyright (c) Artifex Software, Inc.`
@@ -94,6 +96,7 @@ Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License
 | 组件 | 许可证 | 说明 |
 |---|---|---|
 | certifi | MPL-2.0 | CA 证书包；未修改，按 MPL-2.0 分发。 |
+| et-xmlfile | MIT | openpyxl 的 XML 读写依赖；`Copyright (c) 1999-2008 by Fredrik Lundh`、`Copyright (c) 2010-2015 openpyxl`。 |
 | orjson | MPL-2.0 AND (Apache-2.0 OR MIT) | 可选择 Apache-2.0 或 MIT 选项；未修改。 |
 | tqdm | MPL-2.0 AND MIT | 不同文件分别适用；未修改。 |
 | numpy | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | 组件级宽松许可；未修改。 |

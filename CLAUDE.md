@@ -146,9 +146,9 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 附件证据（`src/parsing/attachments.py`、`scripts/attach_evidence.py`）
 
-- 把工程量清单/补充资料以 PDF/CSV/TXT/MD 追加到已解析文档：chunk id `<doc_id>:att-<sha12>:<ordinal>`，写入 `chunks.jsonl` 与 `attachments.json`，以 `prune=False` upsert Chroma（不删除主文档 chunks），minio 模式同步 `parsed/<doc_id>/` 对象。
+- 把工程量清单/补充资料以 PDF/CSV/XLSX/XLSM/TXT/MD 追加到已解析文档：chunk id `<doc_id>:att-<sha12>:<ordinal>`，写入 `chunks.jsonl` 与 `attachments.json`，以 `prune=False` upsert Chroma（不删除主文档 chunks），minio 模式同步 `parsed/<doc_id>/` 对象。
 - 检索时若文档含 `附件：` chunk，每节额外执行一次 BOQ 专项 query 并把附件命中前置合并（主证据按 chunk id 去重后跟进，仍受 `BID_MAX_EVIDENCE_CHARS` 预算限制）。
-- PDF 用 PyMuPDF 提取文本与 `find_tables()` 表格；无文本层或存在无文本页时自动回退 MinerU OCR（需 `MINERU_API_KEY`，`--no-ocr` 可关闭；已验证扫描件 OCR），CSV 作为表格 chunk。XLSX 未支持，先导出 CSV/PDF。
+- PDF 用 PyMuPDF 提取文本与 `find_tables()` 表格；无文本层或存在无文本页时自动回退 MinerU OCR（需 `MINERU_API_KEY`，`--no-ocr` 可关闭；已验证扫描件 OCR），CSV/XLSX/XLSM 作为表格 chunk（XLSX 用 openpyxl）。旧 `.xls` 未支持，先另存为 `.xlsx`/CSV/PDF。
 - `--list` 列出附件；`--remove <attachment_id>` 删除 `chunks.jsonl`/`attachments.json` 中的附件记录与 Chroma 向量（`--no-chroma-delete` 可保留向量），minio 模式同步对象。合成测试附件必须明确标注，并在真实使用前用 `--remove` 清理。
 
 ### 对象存储（`src/storage/`，默认 MinIO）
