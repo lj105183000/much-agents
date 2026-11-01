@@ -196,7 +196,11 @@ class BidderProfile(ProfileModel):
                 for name, child in value.__dict__.items():
                     walk(f"{prefix}.{name}" if prefix else name, child)
             elif isinstance(value, list):
-                return
+                for index, child in enumerate(value):
+                    walk(
+                        f"{prefix}[{index}]" if prefix else f"[{index}]",
+                        child,
+                    )
             elif isinstance(value, dict):
                 for name, child in value.items():
                     walk(f"{prefix}.{name}" if prefix else name, child)
