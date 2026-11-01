@@ -183,8 +183,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         "",
         "## 历史 run",
         "",
-        "| doc_id | run_id | 状态 | 模型 | LLM 调用 | 覆盖率计数 | 加权覆盖率 | 占位符/千字 | 问题/节 | 门禁 | 合规 | 一致性 | generate 秒 |",
-        "|---|---|---|---|---:|---|---:|---:|---:|---|---|---|---:|",
+        "| doc_id | run_id | 状态 | 模型 | LLM 调用 | 覆盖率计数 | 叙事因素 | 加权覆盖率 | 叙事覆盖率 | 模板权重占比 | 占位符/千字 | 问题/节 | 门禁 | 合规 | 一致性 | generate 秒 |",
+        "|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|---|---|---:|",
     ]
     for run in payload.get("runs") or []:
         metrics = run.get("metrics") or {}
@@ -194,14 +194,21 @@ def render_markdown(payload: dict[str, Any]) -> str:
         issues = metrics.get("issues") or {}
         timings = run.get("timings_seconds") or {}
         lines.append(
-            "| {doc} | {run} | {status} | {model} | {calls} | {counts} | {ratio} | {density} | {issues} | {gate} | {comp} | {cons} | {gen} |".format(
+            "| {doc} | {run} | {status} | {model} | {calls} | {counts} | {narrative_count} | {ratio} | {narrative} | {template_share} | {density} | {issues} | {gate} | {comp} | {cons} | {gen} |".format(
                 doc=run.get("doc_id"),
                 run=run.get("run_id"),
                 status=run.get("status") or "-",
                 model=run.get("model") or "-",
                 calls=run.get("llm_calls") if run.get("llm_calls") is not None else "-",
                 counts=_format_counts(coverage.get("counts")),
+                narrative_count=weighted.get("narrative_count", "-"),
                 ratio=weighted.get("ratio", "-"),
+                narrative=(
+                    weighted.get("narrative_ratio")
+                    if weighted.get("narrative_ratio") is not None
+                    else "-"
+                ),
+                template_share=weighted.get("template_weight_share", "-"),
                 density=placeholders.get("density_per_1k_chars", "-"),
                 issues=issues.get("per_section", "-"),
                 gate=metrics.get("gate_status") or "-",

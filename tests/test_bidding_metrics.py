@@ -39,6 +39,8 @@ def test_weighted_coverage_uses_scores_and_fallback() -> None:
     assert result["total"] == 101.0
     assert result["achieved"] == 75.0
     assert result["ratio"] == pytest.approx(0.7426, abs=0.0001)
+    assert result["narrative_ratio"] == pytest.approx(0.8025, abs=0.0001)
+    assert result["template_weight_share"] == pytest.approx(0.198, abs=0.0001)
 
 
 def test_weighted_coverage_treats_zero_and_unknown_status_as_missing() -> None:
@@ -54,6 +56,8 @@ def test_weighted_coverage_treats_zero_and_unknown_status_as_missing() -> None:
     assert result["total"] == 10.0
     assert result["achieved"] == 1.0
     assert result["ratio"] == 0.1
+    assert result["narrative_ratio"] == 0.1
+    assert result["template_weight_share"] == 0.0
 
 
 def test_reviewer_gap_aggregates_points() -> None:
