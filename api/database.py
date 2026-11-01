@@ -356,6 +356,10 @@ class BidSectionStateRow(Base):
     llm_calls: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
+    generation_token: Mapped[str | None] = mapped_column(String(64))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(

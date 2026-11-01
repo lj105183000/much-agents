@@ -9,6 +9,7 @@ without repeating completed sections.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -274,6 +275,10 @@ async def _run_section(
                 content_plan,
                 writing_focus,
             )
+            if await hooks.is_cancelled():
+                return StagedSectionOutcome(
+                    section_id=section.id, status="pending"
+                )
             if not draft.written:
                 SECTION_FAILURES.inc(stage="writer")
                 warning = "; ".join(draft.warnings) or "writer produced no content"
@@ -299,6 +304,10 @@ async def _run_section(
                 warnings=list(draft.warnings),
             )
             review = await _review(reviewer, section, draft, evidence, brief)
+            if await hooks.is_cancelled():
+                return StagedSectionOutcome(
+                    section_id=section.id, status="pending"
+                )
             await hooks.update_section(
                 section.id,
                 status="reviewed",
@@ -309,6 +318,10 @@ async def _run_section(
             if review.needs_revision and settings.max_review_revisions > 0:
                 await hooks.update_section(section.id, status="revising")
                 revision = await _revise(reviser, section, draft, review, evidence)
+                if await hooks.is_cancelled():
+                    return StagedSectionOutcome(
+                        section_id=section.id, status="pending"
+                    )
                 await hooks.update_section(
                     section.id,
                     status="revised",
@@ -435,6 +448,17 @@ async def generate_sections(
     total = len(candidates)
     completed = 0
     cancelled = False
+    progress = {"percent": 10}
+
+    async def heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(max(5, int(settings.heartbeat_seconds)))
+            try:
+                await hooks.heartbeat("write", progress["percent"], "generating")
+            except Exception:  # noqa: BLE001 - heartbeat is best-effort
+                logger.warning("periodic heartbeat failed", exc_info=True)
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
 
     async def run_one(section: OutlineSection) -> StagedSectionOutcome:
         nonlocal cancelled
@@ -484,23 +508,29 @@ async def generate_sections(
             cancelled = True
         return result
 
-    tasks = [asyncio.create_task(run_one(section)) for section in candidates]
     outcomes: list[StagedSectionOutcome] = []
-    for task in asyncio.as_completed(tasks):
-        result = await task
-        outcomes.append(result)
-        if result.status == "pending":
-            continue
-        completed += 1
-        percent = 10 + int(65 * completed / total)
-        try:
-            await hooks.heartbeat(
-                "write",
-                percent,
-                f"completed {result.section_id}",
-            )
-        except Exception:  # noqa: BLE001 - heartbeat must not drop a section
-            logger.warning("could not persist staged heartbeat", exc_info=True)
+    try:
+        tasks = [asyncio.create_task(run_one(section)) for section in candidates]
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            outcomes.append(result)
+            if result.status == "pending":
+                continue
+            completed += 1
+            percent = 10 + int(65 * completed / total)
+            progress["percent"] = percent
+            try:
+                await hooks.heartbeat(
+                    "write",
+                    percent,
+                    f"completed {result.section_id}",
+                )
+            except Exception:  # noqa: BLE001 - heartbeat must not drop a section
+                logger.warning("could not persist staged heartbeat", exc_info=True)
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
     return StagedRunOutcome(outcomes=outcomes, cancelled=cancelled)
 
 

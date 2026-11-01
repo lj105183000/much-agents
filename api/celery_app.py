@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import logging
+
 from celery import Celery
-from celery.signals import task_postrun, task_prerun, worker_process_init
+from celery.signals import (
+    task_failure,
+    task_postrun,
+    task_prerun,
+    worker_process_init,
+)
 
 from src.observability.logging import configure_logging, request_id_var
 from src.parsing.logging_utils import configure_stdio
 
 from .config import ApiSettings
-from .task_names import PARSE_QUEUE
+from .redis_jobs import RedisJobStore
+from .task_names import MAINTENANCE_QUEUE, MAINTENANCE_TASK_NAME, PARSE_QUEUE
+
+logger = logging.getLogger(__name__)
 
 
 def _install_task_context_signals() -> None:
@@ -31,6 +41,21 @@ def _install_task_context_signals() -> None:
     @worker_process_init.connect
     def _configure_worker_logging(**_kwargs):  # type: ignore[no-untyped-def]
         configure_logging(force=True)
+
+    @task_failure.connect
+    def _record_task_failure(  # type: ignore[no-untyped-def]
+        sender=None, task_id=None, exception=None, **_kwargs
+    ):
+        try:
+            store = RedisJobStore.from_settings(ApiSettings.from_env())
+            store.push_dlq(
+                job_id=str(task_id or ""),
+                task_name=str(getattr(sender, "name", "") or ""),
+                error=str(exception or ""),
+                error_type=type(exception).__name__ if exception else "",
+            )
+        except Exception:  # noqa: BLE001 - DLQ must not mask the original failure
+            logger.warning("could not push task failure to DLQ", exc_info=True)
 
 
 def create_celery_app(settings: ApiSettings) -> Celery:
@@ -62,6 +87,13 @@ def create_celery_app(settings: ApiSettings) -> Celery:
         broker_transport_options={
             "visibility_timeout": 6 * 3600,
             "socket_connect_timeout": 5,
+        },
+        beat_schedule={
+            "reap-stale-bid-runs": {
+                "task": MAINTENANCE_TASK_NAME,
+                "schedule": 60.0,
+                "options": {"queue": MAINTENANCE_QUEUE},
+            }
         },
     )
     return app

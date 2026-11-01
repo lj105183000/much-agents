@@ -870,6 +870,14 @@ class FakeBidRunRepository:
             started_at=run.started_at or now,
         )
         self.runs[run_id] = updated
+        self.states[run_id] = [
+            replace(
+                state,
+                generation_token=generation_token,
+                last_heartbeat_at=now,
+            )
+            for state in self.states.get(run_id, [])
+        ]
         return updated
 
     async def heartbeat(
@@ -912,6 +920,7 @@ class FakeBidRunRepository:
         section_id: str,
         *,
         expected_status: str | None = None,
+        expected_token: str | None = None,
         **fields: Any,
     ) -> bool:
         states = self.states.get(run_id, [])
@@ -920,6 +929,11 @@ class FakeBidRunRepository:
         for state in states:
             if state.section_id == section_id:
                 if expected_status is not None and state.status != expected_status:
+                    return False
+                if (
+                    expected_token is not None
+                    and getattr(state, "generation_token", None) != expected_token
+                ):
                     return False
                 found = True
                 updated.append(replace(state, **fields))

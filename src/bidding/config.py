@@ -68,6 +68,7 @@ class BidSettings:
     max_tokens: int = 8192
     temperature: float = 0.2
     max_review_revisions: int = 1
+    heartbeat_seconds: int = 60
     llm_concurrency: int = 2
     use_chroma: bool = True
     profile_max_mb: int = 5
@@ -119,6 +120,7 @@ class BidSettings:
             max_tokens=_int(env, "BID_MAX_TOKENS", 8192, minimum=512),
             temperature=_float(env, "BID_TEMPERATURE", 0.2, minimum=0.0),
             max_review_revisions=_int(env, "BID_MAX_REVIEW_REVISIONS", 1, minimum=0),
+            heartbeat_seconds=_int(env, "BID_HEARTBEAT_SECONDS", 60, minimum=5),
             llm_concurrency=_int(env, "BID_LLM_CONCURRENCY", 2, minimum=1),
             use_chroma=_bool(env, "BID_USE_CHROMA", True),
             profile_max_mb=_int(env, "BID_PROFILE_MAX_MB", 5, minimum=1),
