@@ -26,7 +26,7 @@
 - 检索快照：每个章节的 query、mode、top_k、命中 chunk/score/页码/文本哈希写入 `retrieval_snapshots`（迁移 `0010`），不保存证据原文。
 - Prompt registry：`prompt_registry`（迁移 `0011`）记录 prompt 文件哈希、默认模型/温度与 git sha，`scripts/seed_prompts.py` 可重复 upsert。
 
-**真实 staged E2E 验收（2026-11-01）**：使用默认项目与 `6055594244948` 跑 1 节真实生成（`deepseek-flash`），run `22e47cd4c8864580832bb789b8557c03`。结果：3 次 LLM 调用、1 条 `run_usage`、1 条 `retrieval_snapshot`、1 条 `bid_approval`；`content_sha256` 已写入；导出 DOCX 171KB；DOCX 质量检查 TOC/页码/字体/表头/DPI 全部 pass；`/api/metrics` 含 LLM/run/queue 指标。gate 为 block，原因是示例 `bidder_profile.example.json` 产生 273 个占位符、14 个缺失资料、1 个高危/脱敏问题与 1 个合规阻断项；使用 admin override 审批后导出成功。该结果验证了“生成→组装→审批→导出→账本/快照/指标”的完整链路；正式资料下的门禁通过率仍需用真实公司 profile 复测。
+**真实 staged E2E 验收（2026-11-01）**：使用默认项目与 `6055594244948` 跑 1 节真实生成（`deepseek-flash`），run `22e47cd4c8864580832bb789b8557c03`。结果：3 次 LLM 调用、1 条 `run_usage`、1 条 `retrieval_snapshot`、1 条 `bid_approval`；`content_sha256` 已写入；导出 DOCX 171KB；DOCX 质量检查 TOC/页码/字体/表头/DPI 全部 pass；`/api/metrics` 含 LLM/run/queue 指标。gate 为 block，原因是示例 `bidder_profile.example.json` 产生 273 个占位符、14 个缺失资料、1 个 reviewer 高严重度覆盖缺口（非编造/脱敏）与 1 个合规阻断项；使用 admin override 审批后导出成功。该结果验证了“生成→组装→审批→导出→账本/快照/指标”的完整链路；正式资料下的门禁通过率仍需用真实公司 profile 复测。
 
 **迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
 
