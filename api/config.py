@@ -91,6 +91,7 @@ class ApiSettings:
     job_ttl_seconds: int = 24 * 3600
     bid_run_max_attempts: int = 2
     bid_section_max_attempts: int = 2
+    bid_require_approval: bool = False
     bid_run_stale_seconds: int = 900
     readiness_strict: bool = False
     metrics_enabled: bool = True
@@ -230,6 +231,7 @@ class ApiSettings:
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
             bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
             bid_section_max_attempts=_int(env, "BID_SECTION_MAX_ATTEMPTS", 2),
+            bid_require_approval=_bool(env, "BID_REQUIRE_APPROVAL", False),
             bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
             readiness_strict=_bool(
                 env,

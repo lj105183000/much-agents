@@ -83,6 +83,8 @@ from .schemas import (
     AuditVerifyResponse,
     AuthMeResponse,
     AuthUser,
+    BidApprovalRequest,
+    BidApprovalResponse,
     BidComplianceResponse,
     BidConsistencyResponse,
     BidCreatedResponse,
@@ -1137,6 +1139,86 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGateResponse:
         return await service.get_gate(run_id)
+
+    @router.get(
+        "/bid-runs/{run_id}/approval",
+        response_model=BidApprovalResponse,
+    )
+    async def get_bid_run_approval(
+        run_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidApprovalResponse:
+        return BidApprovalResponse(**await service.get_approval(run_id))
+
+    @router.post(
+        "/bid-runs/{run_id}/approve",
+        response_model=BidApprovalResponse,
+    )
+    async def approve_bid_run(
+        run_id: str,
+        request: Request,
+        payload: BidApprovalRequest | None = None,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidApprovalResponse:
+        body = payload or BidApprovalRequest()
+        result = await service.approve(
+            run_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            reason=body.reason,
+            override=body.override,
+        )
+        await _audit(
+            request,
+            "bid_run.approve",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "status": result["status"],
+                "gate_status": result["gate_status"],
+                "override": body.override,
+            },
+            required=True,
+        )
+        return BidApprovalResponse(**result)
+
+    @router.post(
+        "/bid-runs/{run_id}/reject",
+        response_model=BidApprovalResponse,
+    )
+    async def reject_bid_run(
+        run_id: str,
+        request: Request,
+        payload: BidApprovalRequest | None = None,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidApprovalResponse:
+        body = payload or BidApprovalRequest()
+        result = await service.reject(
+            run_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            reason=body.reason,
+            override=body.override,
+        )
+        await _audit(
+            request,
+            "bid_run.reject",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "status": result["status"],
+                "gate_status": result["gate_status"],
+            },
+            required=True,
+        )
+        return BidApprovalResponse(**result)
 
     @router.get(
         "/bid-runs/{run_id}/figures",

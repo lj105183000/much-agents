@@ -346,6 +346,7 @@ class BidRunService:
         dispatch: Callable[[Job], None] | None = None,
         max_attempts: int = 2,
         section_max_attempts: int = 2,
+        require_approval: bool = False,
         stale_seconds: int = 900,
         llm_factory: Callable[[], Any] | None = None,
         storage: Storage | None = None,
@@ -357,6 +358,7 @@ class BidRunService:
         self.dispatch = dispatch
         self.max_attempts = max(1, int(max_attempts))
         self.section_max_attempts = max(1, int(section_max_attempts))
+        self.require_approval = bool(require_approval)
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
         self.storage = storage
@@ -1949,6 +1951,109 @@ class BidRunService:
         await self._sync_run_derived(run)
         return self._figures_response(run, manifest)
 
+    async def _record_approval(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        actor_id: str,
+        actor_name: str,
+        reason: str,
+        override: bool,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status != "assembled" or not run.gate or not run.content_sha256:
+            raise BidRunError(409, "assemble the run before approval")
+        if status == "approved" and run.gate_status == "block" and not override:
+            raise BidRunError(
+                409,
+                "gate is blocked; approval requires an explicit override",
+            )
+        record = await repo.add_approval(
+            run_id,
+            status=status,
+            content_sha256=run.content_sha256,
+            gate_status=run.gate_status,
+            approved_by=actor_id,
+            approved_by_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+        return self._approval_payload(record, run_id=run_id)
+
+    @staticmethod
+    def _approval_payload(record: Any, *, run_id: str) -> dict[str, Any]:
+        if record is None:
+            return {
+                "run_id": run_id,
+                "status": "not_requested",
+                "content_sha256": None,
+                "gate_status": None,
+                "approved_by": None,
+                "approved_by_name": None,
+                "reason": "",
+                "override": False,
+                "created_at": None,
+            }
+        return {
+            "run_id": run_id,
+            "status": record.status,
+            "content_sha256": record.content_sha256,
+            "gate_status": record.gate_status,
+            "approved_by": record.approved_by,
+            "approved_by_name": record.approved_by_name,
+            "reason": record.reason,
+            "override": bool(record.override),
+            "created_at": record.created_at.isoformat(),
+        }
+
+    async def approve(
+        self,
+        run_id: str,
+        *,
+        actor_id: str,
+        actor_name: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict[str, Any]:
+        return await self._record_approval(
+            run_id,
+            status="approved",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+
+    async def reject(
+        self,
+        run_id: str,
+        *,
+        actor_id: str,
+        actor_name: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict[str, Any]:
+        return await self._record_approval(
+            run_id,
+            status="rejected",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+
+    async def get_approval(self, run_id: str) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.latest_approval(run_id)
+        return self._approval_payload(record, run_id=run_id)
+
     async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1973,6 +2078,17 @@ class BidRunService:
                 raise BidRunError(
                     409,
                     "content changed since assembly; re-assemble before export",
+                )
+        if self.require_approval and not force:
+            approval = await repo.latest_approval(run_id)
+            if (
+                approval is None
+                or approval.status != "approved"
+                or approval.content_sha256 != run.content_sha256
+            ):
+                raise BidRunError(
+                    409,
+                    "approval required for the current assembled content",
                 )
         prefix = run_prefix(run.doc_id, run.run_id)
         if force and run.gate_status == "block":

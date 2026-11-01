@@ -24,7 +24,7 @@ from tests.fakes import (
 )
 
 
-def make_app(tmp_path: Path, *, llm_factory=None):
+def make_app(tmp_path: Path, *, llm_factory=None, require_approval: bool = False):
     write_parsed_fixture(tmp_path)
     repo = FakeBidRunRepository()
     bid_settings = make_bid_settings(tmp_path)
@@ -38,6 +38,7 @@ def make_app(tmp_path: Path, *, llm_factory=None):
         store=store,
         dispatch=dispatcher.dispatch,
         llm_factory=llm_factory,
+        require_approval=require_approval,
     )
     app = create_app(
         api_settings=make_api_settings(tmp_path, TASK_BACKEND="local"),
@@ -417,6 +418,55 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         detail = client.get(f"/api/bid-runs/{run_id}").json()
         assert detail["status"] == "assembled"
         assert detail["gate_status"] == gate["status"]
+
+
+def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(
+        tmp_path, require_approval=True
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.get(f"/api/bid-runs/{run_id}/approval").json()["status"] == (
+            "not_requested"
+        )
+
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        denied = client.post(f"/api/bid-runs/{run_id}/export")
+        assert denied.status_code == 409
+        assert "approval" in denied.json()["detail"]
+
+        approved = client.post(
+            f"/api/bid-runs/{run_id}/approve", json={"reason": "内容确认"}
+        )
+        assert approved.status_code == 200, approved.text
+        approval = approved.json()
+        assert approval["status"] == "approved"
+        assert approval["content_sha256"]
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 200
+
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "人工修改后的正文，用于触发新的内容哈希。"},
+        )
+        assert edited.status_code == 200, edited.text
+        reassembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert reassembled.status_code == 200, reassembled.text
+        stale = client.post(f"/api/bid-runs/{run_id}/export")
+        assert stale.status_code == 409
+        assert "approval" in stale.json()["detail"]
+
+        assert (
+            client.post(
+                f"/api/bid-runs/{run_id}/reject", json={"reason": "需重写"}
+            ).json()["status"]
+            == "rejected"
+        )
 
 
 def test_bid_run_figures_api_and_regeneration(tmp_path: Path) -> None:

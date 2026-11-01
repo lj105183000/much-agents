@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from .database import (
+    BidApprovalRow,
     BidOutlineSectionRow,
     BidRunRow,
     BidSectionStateRow,
@@ -53,6 +54,20 @@ class BidRunRecord:
     started_at: datetime | None
     finished_at: datetime | None
     content_sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BidApprovalRecord:
+    run_id: str
+    status: str
+    content_sha256: str
+    gate_status: str | None
+    approved_by: str | None
+    approved_by_name: str | None
+    reason: str
+    override: bool
+    expires_at: datetime | None
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +189,21 @@ def _state_record(row: BidSectionStateRow) -> SectionStateRecord:
         updated_at=row.updated_at,
         generation_token=row.generation_token,
         last_heartbeat_at=row.last_heartbeat_at,
+    )
+
+
+def _approval_record(row: BidApprovalRow) -> BidApprovalRecord:
+    return BidApprovalRecord(
+        run_id=row.run_id,
+        status=row.status,
+        content_sha256=row.content_sha256,
+        gate_status=row.gate_status,
+        approved_by=row.approved_by,
+        approved_by_name=row.approved_by_name,
+        reason=row.reason or "",
+        override=bool(row.override),
+        expires_at=row.expires_at,
+        created_at=row.created_at,
     )
 
 
@@ -300,6 +330,49 @@ class BidRunRepository:
         async with self._session_factory() as session:
             row = (await session.execute(statement)).scalar_one_or_none()
             return _run_record(row) if row is not None else None
+
+    async def add_approval(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        content_sha256: str,
+        gate_status: str | None,
+        approved_by: str,
+        approved_by_name: str,
+        reason: str = "",
+        override: bool = False,
+        expires_at: datetime | None = None,
+    ) -> BidApprovalRecord:
+        row = BidApprovalRow(
+            run_id=run_id,
+            status=status,
+            content_sha256=content_sha256,
+            gate_status=gate_status,
+            approved_by=approved_by,
+            approved_by_name=approved_by_name,
+            reason=reason,
+            override=override,
+            expires_at=expires_at,
+            created_at=_now(),
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add(row)
+        return _approval_record(row)
+
+    async def latest_approval(self, run_id: str) -> BidApprovalRecord | None:
+        statement = (
+            select(BidApprovalRow)
+            .where(BidApprovalRow.run_id == run_id)
+            .order_by(
+                BidApprovalRow.created_at.desc(), BidApprovalRow.id.desc()
+            )
+            .limit(1)
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            return _approval_record(row) if row is not None else None
 
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         statement = (
