@@ -13,6 +13,7 @@ import redis
 from api.audit import AuditEvent, AuditRecord, event_hash
 from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
+    BidApprovalRecord,
     BidRunRecord,
     OutlineSectionRecord,
     SectionStateRecord,
@@ -708,6 +709,7 @@ class FakeBidRunRepository:
         self.runs: dict[str, BidRunRecord] = {}
         self.sections: dict[str, list[OutlineSectionRecord]] = {}
         self.states: dict[str, list[SectionStateRecord]] = {}
+        self.approvals: dict[str, list[BidApprovalRecord]] = {}
 
     async def create(
         self,
@@ -749,6 +751,38 @@ class FakeBidRunRepository:
         if project_id is not None and run.project_id != project_id:
             return None
         return run
+
+    async def add_approval(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        content_sha256: str,
+        gate_status: str | None,
+        approved_by: str,
+        approved_by_name: str,
+        reason: str = "",
+        override: bool = False,
+        expires_at=None,
+    ) -> BidApprovalRecord:
+        record = BidApprovalRecord(
+            run_id=run_id,
+            status=status,
+            content_sha256=content_sha256,
+            gate_status=gate_status,
+            approved_by=approved_by,
+            approved_by_name=approved_by_name,
+            reason=reason,
+            override=override,
+            expires_at=expires_at,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.approvals.setdefault(run_id, []).append(record)
+        return record
+
+    async def latest_approval(self, run_id: str) -> BidApprovalRecord | None:
+        records = self.approvals.get(run_id) or []
+        return records[-1] if records else None
 
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         return sorted(

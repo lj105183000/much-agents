@@ -209,6 +209,7 @@ def create_app(
         dispatch=bid_dispatcher.dispatch,
         max_attempts=api_settings.bid_run_max_attempts,
         section_max_attempts=api_settings.bid_section_max_attempts,
+        require_approval=api_settings.bid_require_approval,
         stale_seconds=api_settings.bid_run_stale_seconds,
         storage=storage,
     )

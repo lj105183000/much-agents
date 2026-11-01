@@ -207,6 +207,25 @@ class BidGateResponse(BaseModel):
     consistency_summary: dict[str, Any] | None = None
 
 
+class BidApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="", max_length=2000)
+    override: bool = False
+
+
+class BidApprovalResponse(BaseModel):
+    run_id: str
+    status: str
+    content_sha256: str | None = None
+    gate_status: str | None = None
+    approved_by: str | None = None
+    approved_by_name: str | None = None
+    reason: str = ""
+    override: bool = False
+    created_at: str | None = None
+
+
 class BidFigureView(BaseModel):
     figure_id: str
     index: int
