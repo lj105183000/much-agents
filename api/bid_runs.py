@@ -37,6 +37,7 @@ from src.bidding.llm import DeepSeekChatClient
 from src.bidding.models import BidOutline
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
+from src.bidding.provenance import build_provenance
 from src.bidding.staged_output import (
     SectionOutput,
     assemble_staged_bid,
@@ -1629,6 +1630,7 @@ class BidRunService:
         external_renderer: ExternalRenderer | None = None,
     ) -> BidGateResponse:
         repo = self._repo()
+        assembly_started = datetime.now(timezone.utc)
         run = await repo.get_run(run_id)
         if run is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
@@ -1740,6 +1742,18 @@ class BidRunService:
             )
             GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
             outline_data = outline_data_from_records(outline, records)
+            llm_calls = sum(int(state.llm_calls or 0) for state in states)
+            timings_seconds = {
+                "assemble": round(
+                    (datetime.now(timezone.utc) - assembly_started).total_seconds(),
+                    3,
+                )
+            }
+            provenance = build_provenance(
+                settings=self.bid_settings,
+                llm_calls=llm_calls,
+                timings_seconds=timings_seconds,
+            )
             result = write_staged_outputs(
                 context=context,
                 assembly=assembly,
@@ -1747,7 +1761,11 @@ class BidRunService:
                 output_dir=run_dir,
                 gate=gate,
                 outline_data=outline_data,
-                extra_report={"run_id": run_id},
+                extra_report={
+                    "run_id": run_id,
+                    "model": provenance["model"],
+                    "provenance": provenance,
+                },
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
