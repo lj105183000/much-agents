@@ -84,11 +84,11 @@ class DocumentRegistry(Protocol):
 def _validate_pdf_file(path: Path, max_pages: int) -> None:
     """Reject files that are not openable, encrypted, or larger than the cap."""
     try:
-        import fitz  # PyMuPDF
+        import pymupdf
     except Exception as exc:  # noqa: BLE001 - dependency is installed
         raise UploadError(503, "PDF validation is unavailable") from exc
     try:
-        document = fitz.open(path)
+        document = pymupdf.open(path)
     except Exception as exc:  # noqa: BLE001 - any parse failure means invalid
         raise UploadError(400, "uploaded file is not a valid PDF") from exc
     try:
