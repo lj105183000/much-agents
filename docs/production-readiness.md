@@ -44,6 +44,8 @@
 
 **合成测试数据清理（2026-11-01）**：已删除合成公司「北京华昊水利水电工程有限责任公司（合成测试）」及 7 个测试 run（v1–v5 + 两个单节附件测试），以及对应的 `bid_outline_sections`/`bid_section_states`/`bid_approvals`/`run_usage`/`retrieval_snapshots`/`llm_call_log`、本地与 MinIO run 产物、私有 profile 和测试 `attachments.json`。公司库保留 4 家真实公司；保留 3 个真实 profile/示例 profile E2E run（`22e47cd4`/`d5b77b67`/`47d44fe4`）与主文档 266 个 chunks；审计事件按 append-only 设计保留。
 
+**生产价格表配置（2026-11-01）**：`deploy/env.production` 已设置 `LLM_PRICE_TABLE`（`deepseek-flash`/`deepseek-chat` 公开列表价估算：¥0.001/1k 输入、¥0.002/1k 输出，`effective_from=2026-08-16`）；`load_price_table` 在未配置时只告警一次，成本为 null/0，避免静默免费。该值为公开估算，上线前必须替换为实际合同价并核对 `effective_from`。
+
 **迁移与恢复演练（2026-11-01）**：本地 Docker Desktop 上将开发库 `0005 → 0009` 升级成功，用户/审计数据保持不变；临时库完成 `0009 → 0001 → 0009` 往返。使用生产 Compose 对 32 个 MinIO 对象和 95 条审计事件执行备份 → 删除测试数据 → `restore.sh` 恢复，恢复后 `Backup Drill Co` 与 `drill/restore-check.txt` 均存在，`/api/ready` 返回 200，审计链 95 条校验通过。演练后已删除测试数据并停止生产栈，命名卷与备份保留；仍需在干净 Linux 主机按真实数据量复测 RPO/RTO。
 
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
@@ -656,7 +658,7 @@ eval-data/
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `LLM_PRICE_TABLE` | 空 | JSON/文件路径；模型输入/输出单价 |
+| `LLM_PRICE_TABLE` | 空（生产必须配置；当前生产 env 为公开估算，待合同价） | JSON/文件路径；模型输入/输出单价与 `effective_from` |
 | `BUDGET_MONTHLY_CNY` | 空 | 全局月预算；空表示不限制 |
 | `PROJECT_MONTHLY_BUDGET_CNY` | 空 | 项目月预算 |
 | `BID_RUN_MAX_LLM_CALLS` | 空 | 单 run 调用上限 |
