@@ -5,6 +5,7 @@ from .dataset import (
     build_all,
     build_case,
     list_cases,
+    mark_reviewed,
     seed_must_cover_points,
     validate_case,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "EvalJudgeError",
     "judge_section",
     "list_cases",
+    "mark_reviewed",
     "seed_must_cover_points",
     "validate_case",
 ]

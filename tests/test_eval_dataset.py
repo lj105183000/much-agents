@@ -9,6 +9,7 @@ from src.evaluation.dataset import (
     build_all,
     build_case,
     list_cases,
+    mark_reviewed,
     seed_must_cover_points,
     validate_case,
 )
@@ -159,6 +160,27 @@ def test_seed_must_cover_points_from_scoring_criteria(tmp_path) -> None:
     assert payload["generated_by"] == "deterministic-seed-v1"
     assert payload["points"][0]["factor_id"] == "EVAL-001"
     assert payload["points"][0]["status"] == "draft"
+
+
+def test_mark_reviewed_updates_manifest_and_validate(tmp_path) -> None:
+    _write_parsed_case(tmp_path)
+    build_case(tmp_path / "parsed", "doc-1", tmp_path / "eval-data")
+    labels = tmp_path / "eval-data" / "labels" / "doc-1"
+    for name in ("evaluation_factors.json", "must_cover_points.json"):
+        payload = json.loads((labels / name).read_text(encoding="utf-8"))
+        payload["status"] = "reviewed"
+        if name == "must_cover_points.json":
+            payload["points"] = [{"id": "P1", "factor_id": "EVAL-001", "text": "x"}]
+        (labels / name).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+
+    result = mark_reviewed(tmp_path / "eval-data", "doc-1")
+    validation = validate_case(tmp_path / "eval-data", "doc-1")
+
+    assert result["label_status"] == "reviewed"
+    assert validation["checks"]["label_status"] == "reviewed"
+    assert validation["warnings"] == []
 
 
 def test_seed_must_cover_points_protects_reviewed_labels(tmp_path) -> None:
