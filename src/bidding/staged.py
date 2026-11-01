@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -74,6 +75,9 @@ class StagedSectionOutcome:
     llm_calls: int = 0
     usage: list[dict[str, Any]] = field(default_factory=list)
     retrieval: dict[str, Any] | None = None
+
+
+UsageSink = Callable[[StagedSectionOutcome], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -471,6 +475,7 @@ async def generate_sections(
     job_id: str = "",
     request_id: str = "",
     project_id: str = "",
+    usage_sink: UsageSink | None = None,
 ) -> StagedRunOutcome:
     requested = set(section_ids or [])
     candidates = [
@@ -567,6 +572,15 @@ async def generate_sections(
         for task in asyncio.as_completed(tasks):
             result = await task
             outcomes.append(result)
+            if usage_sink is not None:
+                try:
+                    await usage_sink(result)
+                except Exception:  # noqa: BLE001 - usage must not drop a section
+                    logger.warning(
+                        "could not persist incremental usage for %s",
+                        result.section_id,
+                        exc_info=True,
+                    )
             if result.status == "pending":
                 continue
             completed += 1
@@ -592,5 +606,6 @@ __all__ = [
     "StagedHooks",
     "StagedRunOutcome",
     "StagedSectionOutcome",
+    "UsageSink",
     "generate_sections",
 ]
