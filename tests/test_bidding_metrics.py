@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.baseline_metrics import collect, render_markdown
+from src.bidding.checks import build_allowed
 from src.bidding.metrics import (
     issue_density,
     l0_metrics,
@@ -13,6 +14,10 @@ from src.bidding.metrics import (
     reviewer_gap,
     weighted_coverage,
 )
+from src.bidding.plan import plan_bid
+from src.bidding.profile import BidderProfile
+from src.bidding.staged_output import SectionOutput, assemble_staged_bid
+from tests.fakes import make_bid_settings, write_parsed_fixture
 
 
 def test_weighted_coverage_uses_scores_and_fallback() -> None:
@@ -179,3 +184,38 @@ def test_collect_reads_only_aggregate_fields(tmp_path) -> None:
     assert payload["parsed_docs"][0]["chunks"] == 2
     assert payload["runs"][0]["metrics"]["gate_status"] is None
     assert "招标正文" in render_markdown(payload)
+
+
+def test_staged_assembly_preserves_reviewer_gap(tmp_path) -> None:
+    write_parsed_fixture(tmp_path)
+    settings = make_bid_settings(tmp_path)
+    planned = plan_bid("doc-1", settings, max_sections=1)
+    narrative = planned.outline.selected_narratives[0]
+    outputs = {
+        narrative.id: SectionOutput(
+            section_id=narrative.id,
+            status="final",
+            final_markdown="项目名称：测试供水工程\n计划工期：218 日历天\n",
+            review={
+                "verdict": "revise",
+                "missing_points": ["评分点 A"],
+                "covered_points": ["评分点 B", "评分点 C"],
+                "needs_revision": False,
+            },
+        )
+    }
+    allowed = build_allowed(planned.context, BidderProfile.empty(), planned.outline)
+
+    assembly = assemble_staged_bid(
+        context=planned.context,
+        profile=BidderProfile.empty(),
+        outline=planned.outline,
+        outputs=outputs,
+        allowed=allowed,
+    )
+
+    gap = assembly.report["coverage"]["reviewer_gap"]
+    assert gap["missing_points"] == 1
+    assert gap["covered_points"] == 2
+    assert gap["sections_reviewed"] >= 1
+    assert assembly.report["coverage"]["weighted"]["total"] > 0

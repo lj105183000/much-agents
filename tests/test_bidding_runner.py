@@ -64,6 +64,9 @@ def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:
     assert report["kind"] == "bid"
     assert report["coverage"]["total"] >= 5
     assert report["coverage"]["counts"]["template"] >= 1
+    assert report["coverage"]["weighted"]["total"] > 0
+    assert "reviewer_gap" in report["coverage"]
+    assert report["coverage"]["reviewer_gap"]["sections_reviewed"] >= 1
     assert report["missing_profile_fields"]
     assert report["placeholders"]["count"] > 0
 

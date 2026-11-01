@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from .checks import AllowedFacts, count_placeholders, placeholder_labels, redact_unsupported
 from .context import TenderContext
+from .metrics import reviewer_gap, weighted_coverage
 from .models import (
     BidAssembly,
     BidOutline,
@@ -152,6 +153,8 @@ def assemble_bid(
         status: sum(1 for item in coverage_items if item["status"] == status)
         for status in ("covered", "partial", "template", "missing")
     }
+    coverage_weighted = weighted_coverage(coverage_items)
+    coverage_reviewer_gap = reviewer_gap(reviews)
     placeholder_count = count_placeholders(markdown)
     labels = sorted(set(placeholder_labels(markdown)))
     missing_fields = profile.missing_required_fields()
@@ -183,6 +186,8 @@ def assemble_bid(
             "total": len(factors),
             "covered": covered,
             "counts": coverage_counts,
+            "weighted": coverage_weighted,
+            "reviewer_gap": coverage_reviewer_gap,
             "items": coverage_items,
         },
         "placeholders": {
