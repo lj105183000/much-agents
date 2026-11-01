@@ -78,6 +78,7 @@ export interface HealthResponse {
   database_ok?: boolean | null
   storage_backend: 'local' | 'minio'
   storage_ok: boolean
+  pdf_export_available: boolean
 }
 
 export interface JobCreatedResponse {

@@ -23,6 +23,7 @@ interface BidGatePanelProps {
   onReject: (reason: string) => void
   exporting: boolean
   exportingPdf: boolean
+  pdfAvailable: boolean
   exportError: string | null
   onExport: (force: boolean) => void
   onExportPdf: (force: boolean) => void
@@ -92,6 +93,7 @@ export function BidGatePanel({
   onReject,
   exporting,
   exportingPdf,
+  pdfAvailable,
   exportError,
   onExport,
   onExportPdf,
@@ -413,6 +415,12 @@ export function BidGatePanel({
                     variant="danger"
                     size="sm"
                     loading={exportingPdf}
+                    disabled={!pdfAvailable}
+                    title={
+                      pdfAvailable
+                        ? undefined
+                        : '服务器未安装 LibreOffice，PDF 导出不可用'
+                    }
                     onClick={() => onExportPdf(true)}
                   >
                     <Icon name="alert" className="h-3.5 w-3.5" />
@@ -438,6 +446,12 @@ export function BidGatePanel({
                   size="sm"
                   variant="secondary"
                   loading={exportingPdf}
+                  disabled={!pdfAvailable}
+                  title={
+                    pdfAvailable
+                      ? undefined
+                      : '服务器未安装 LibreOffice，PDF 导出不可用'
+                  }
                   onClick={() => onExportPdf(false)}
                 >
                   <Icon name="download" className="h-3.5 w-3.5" />
@@ -446,6 +460,11 @@ export function BidGatePanel({
               </>
             )}
           </div>
+          {!pdfAvailable && canManage ? (
+            <p className="text-right text-[11px] text-amber-200/80">
+              服务器未安装 LibreOffice，PDF 导出不可用；DOCX 导出不受影响。
+            </p>
+          ) : null}
         </div>
       )}
     </Card>

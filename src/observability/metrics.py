@@ -262,6 +262,21 @@ GATE_STATUS = REGISTRY.counter(
     "Assembled bid gate status.",
     ("status",),
 )
+PDF_EXPORTS = REGISTRY.counter(
+    "much_agents_pdf_exports_total",
+    "PDF export attempts by result (cache/converted/unavailable/failed).",
+    ("result",),
+)
+PDF_EXPORT_DURATION = REGISTRY.histogram(
+    "much_agents_pdf_export_duration_seconds",
+    "PDF conversion duration in seconds.",
+    ("result",),
+)
+PDF_EXPORT_AVAILABLE = REGISTRY.gauge(
+    "much_agents_pdf_export_available",
+    "Whether headless LibreOffice is available (1=yes, 0=no).",
+    (),
+)
 READY_CHECKS = REGISTRY.gauge(
     "much_agents_ready_checks",
     "Readiness component status (1=ready, 0=failed).",

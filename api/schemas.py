@@ -20,6 +20,7 @@ class HealthResponse(BaseModel):
     database_ok: bool | None = None
     storage_backend: Literal["local", "minio"] = "local"
     storage_ok: bool = True
+    pdf_export_available: bool = False
 
 
 class JobCreatedResponse(BaseModel):

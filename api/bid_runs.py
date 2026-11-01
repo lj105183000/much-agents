@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import shutil
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -49,7 +50,11 @@ from src.bidding.staged_output import (
     write_staged_outputs,
 )
 from src.observability.logging import get_request_id
-from src.observability.metrics import GATE_STATUS
+from src.observability.metrics import (
+    GATE_STATUS,
+    PDF_EXPORTS,
+    PDF_EXPORT_DURATION,
+)
 from src.mcp_client.config import McpClientConfig
 from src.mcp_client.manager import (
     McpClientManager,
@@ -368,6 +373,9 @@ class BidRunService:
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
         self.storage = storage
+        # LibreOffice is CPU and memory hungry; serialize conversions per
+        # process so concurrent exports cannot exhaust the API host.
+        self._pdf_semaphore = asyncio.Semaphore(1)
 
     def _repo(self) -> BidRunRepository:
         if self.repo is None:
@@ -2439,14 +2447,29 @@ class BidRunService:
             except OSError:
                 needs_conversion = True
         if needs_conversion:
+            started = time.perf_counter()
             try:
-                await asyncio.to_thread(
-                    convert_docx_to_pdf,
-                    docx_target.path,
-                    pdf_path,
-                )
+                async with self._pdf_semaphore:
+                    await asyncio.to_thread(
+                        convert_docx_to_pdf,
+                        docx_target.path,
+                        pdf_path,
+                    )
             except PdfExportError as exc:
+                result = (
+                    "unavailable"
+                    if "LibreOffice" in str(exc)
+                    else "failed"
+                )
+                PDF_EXPORTS.inc(result=result)
+                PDF_EXPORT_DURATION.observe(
+                    time.perf_counter() - started, result=result
+                )
                 raise BidRunError(503, str(exc)) from exc
+            PDF_EXPORTS.inc(result="converted")
+            PDF_EXPORT_DURATION.observe(
+                time.perf_counter() - started, result="converted"
+            )
             if is_remote(self.storage):
                 assert self.storage is not None
                 try:
@@ -2459,6 +2482,8 @@ class BidRunService:
                     raise BidRunError(
                         503, "object storage is unavailable"
                     ) from exc
+        else:
+            PDF_EXPORTS.inc(result="cache")
         if not pdf_path.is_file():
             raise BidRunError(409, "bid.pdf is not available")
         return ExportTarget(path=pdf_path, key=f"{prefix}/bid.pdf")

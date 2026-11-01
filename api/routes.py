@@ -23,9 +23,14 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from src.bidding.pdf_export import find_soffice
 from src.parsing.artifacts import read_json
 
-from src.observability.metrics import QUEUE_DEPTH, READY_CHECKS
+from src.observability.metrics import (
+    PDF_EXPORT_AVAILABLE,
+    QUEUE_DEPTH,
+    READY_CHECKS,
+)
 
 from .metrics import metrics_authorized, metrics_response
 from .artifacts import (
@@ -509,6 +514,8 @@ def build_router() -> APIRouter:
                 storage_ok = False
             if not storage_ok:
                 status_value = "degraded"
+        pdf_export_available = find_soffice() is not None
+        PDF_EXPORT_AVAILABLE.set(1 if pdf_export_available else 0)
         return HealthResponse(
             status=status_value,
             service="much-agents-api",
@@ -519,6 +526,7 @@ def build_router() -> APIRouter:
             database_ok=database_ok,
             storage_backend=storage_backend,
             storage_ok=storage_ok,
+            pdf_export_available=pdf_export_available,
         )
 
     @public_router.post("/auth/login", response_model=LoginResponse)
