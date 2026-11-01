@@ -254,6 +254,19 @@ ALLOW_EMPTY_MINIO=1 scripts/restore.sh <dir>        # 仅限确实为空的 buck
 
 恢复后必须验证：登录、打开一个 run、下载产物、`GET /api/ready`、`python -m api.audit verify`。建议每季度在测试栈演练一次，并记录实际 RPO/RTO。
 
+## 7.1 监控（可选 monitoring profile）
+
+```bash
+# 先设置 GRAFANA_ADMIN_PASSWORD
+docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus grafana
+```
+
+- Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
+- Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`。
+- 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（信息级）。
+- `METRICS_TOKEN` 非空时，需要给 Prometheus 增加 `authorization` 配置；默认假设 API 只在内部 Compose 网络可达。
+- `monitoring` profile 默认不启动，不影响普通部署；Grafana 管理员密码缺失时会回退到 `change_me`，生产必须显式设置。
+
 ## 8. 日志与排障
 
 ```bash
