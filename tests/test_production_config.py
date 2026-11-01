@@ -136,12 +136,54 @@ def test_liveness_and_readiness_do_not_require_auth(tmp_path: Path) -> None:
 
         ready = client.get("/api/ready")
         assert ready.status_code == 200, ready.text
-        assert ready.json()["status"] == "ok"
-        assert ready.json()["checks"]["storage"] is True
+        body = ready.json()
+        assert body["status"] in {"ok", "degraded"}
+        assert body["readiness_strict"] is False
+        assert body["checks"]["storage"] is True
+        assert "chroma" in body["checks"]
         # Local mode has no Redis dependency and no configured database.
-        assert "redis" not in ready.json()["checks"]
+        assert "redis" not in body["checks"]
         assert client.get("/docs").status_code == 404
         assert client.get("/openapi.json").status_code == 404
+
+
+def test_readiness_strict_controls_chroma_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "api.routes._chroma_ping", lambda settings, timeout=1.5: False
+    )
+    strict_settings = make_api_settings(
+        tmp_path, DOCS_ENABLED="false", READINESS_STRICT="true"
+    )
+    strict_app = create_app(
+        api_settings=strict_settings,
+        parse_settings=make_parse_settings(tmp_path),
+        bid_settings=make_bid_settings(tmp_path),
+        parse_func=lambda *args, **kwargs: make_parse_result("doc"),
+        bid_func=lambda *args, **kwargs: None,
+    )
+    with TestClient(strict_app) as client:
+        response = client.get("/api/ready")
+        assert response.status_code == 503
+        assert response.json()["checks"]["chroma"] is False
+        assert response.json()["status"] == "degraded"
+
+    relaxed_settings = make_api_settings(
+        tmp_path, DOCS_ENABLED="false", READINESS_STRICT="false"
+    )
+    relaxed_app = create_app(
+        api_settings=relaxed_settings,
+        parse_settings=make_parse_settings(tmp_path),
+        bid_settings=make_bid_settings(tmp_path),
+        parse_func=lambda *args, **kwargs: make_parse_result("doc"),
+        bid_func=lambda *args, **kwargs: None,
+    )
+    with TestClient(relaxed_app) as client:
+        response = client.get("/api/ready")
+        assert response.status_code == 200
+        assert response.json()["checks"]["chroma"] is False
+        assert response.json()["status"] == "degraded"
 
 
 def test_login_attempt_limiter_is_per_ip_and_resets() -> None:

@@ -347,6 +347,23 @@ def _artifact_error(exc: ArtifactError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
+def _chroma_ping(settings: Any, timeout: float = 1.5) -> bool:
+    """Check the Chroma heartbeat endpoint without importing its client."""
+
+    host = str(getattr(settings, "chroma_host", "") or "").strip()
+    port = getattr(settings, "chroma_port", 0)
+    if not host or not port:
+        return False
+    import urllib.request
+
+    url = f"http://{host}:{port}/api/v2/heartbeat"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return 200 <= int(getattr(response, "status", 0) or 0) < 300
+    except Exception:  # noqa: BLE001 - readiness reports status
+        return False
+
+
 def build_router() -> APIRouter:
     public_router = APIRouter(prefix="/api")
     auth_router = APIRouter(prefix="/api", dependencies=[Depends(require_user)])
@@ -391,11 +408,25 @@ def build_router() -> APIRouter:
                 )
             except Exception:  # noqa: BLE001 - readiness reports status
                 checks["storage"] = False
+        parse_settings = getattr(request.app.state, "parse_settings", None)
+        if parse_settings is not None:
+            try:
+                checks["chroma"] = bool(
+                    await asyncio.to_thread(_chroma_ping, parse_settings)
+                )
+            except Exception:  # noqa: BLE001 - readiness reports status
+                checks["chroma"] = False
 
-        ready_value = all(checks.values())
+        core_ready = all(
+            value for name, value in checks.items() if name != "chroma"
+        )
+        chroma_ready = checks.get("chroma", True)
+        strict = bool(getattr(settings, "readiness_strict", False))
+        ready_value = core_ready and (chroma_ready or not strict)
         payload = {
-            "status": "ok" if ready_value else "degraded",
+            "status": "ok" if core_ready and chroma_ready else "degraded",
             "checks": checks,
+            "readiness_strict": strict,
         }
         status_code = 200 if ready_value else 503
         request.app.state.ready_cache = (
