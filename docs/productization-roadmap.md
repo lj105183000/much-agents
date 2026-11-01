@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-01 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、P3 的 PDF 导出（Headless LibreOffice）以及 P1 的需求覆盖矩阵/引用契约最小版也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice）以及 P1 的需求覆盖矩阵/引用契约最小版也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -18,7 +18,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **开发默认仍不等于生产**：`.env.example` 保留 `0.0.0.0` 与 `CORS_ORIGINS=*` 以兼容本机启动；`ENVIRONMENT=production` 会拒绝这些值并 fail-fast。
 - **前端测试仍薄**：已有 Vitest 覆盖 URL 信任边界与 API 客户端，但没有组件/E2E 测试；token 仍存 localStorage。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
-- **无审批/版本**：`src/bidding/gate.py:214-220` 的强制导出只记录不拦截；没有审批人、审批状态、版本 diff 或恢复。
+- **协作与实时进度（已补，通知/看板未做）**：审批绑定内容哈希、章节版本 diff/恢复、评论/@提及/指派与 SSE 实时进度已落地；站内通知、SMTP/Webhook、截止时间与项目看板仍未实现。
 - **交付物有限**：`src/bidding/docx_export.py:286-370` 仅基础标题/段落/表格/图片；无 PDF；无模板管理。
 - **输入格式单一**：`src/parsing/pipeline.py:212-213` 只接受 PDF；无 DOCX/XLSX/HTML、无本地 OCR。
 
@@ -272,18 +272,17 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - `GET .../sections/{id}/versions`、`GET .../diff?from=&to=`（统一 diff）、`POST .../restore`（走人工编辑语义，清 gate，留审计）。
 - 前端并排 diff / 渲染 diff；大纲 revision 历史可选。
 
-### 5.3 评论、指派与通知
+### 5.3 评论、指派与通知（评论/指派已实现，通知未实现）
 
-- `section_comments`（作者、正文、resolved、@提及）；`section_assignments`（负责人、截止时间）。
-- 通知：站内 + SMTP/Webhook（run 完成、门禁阻断、待审批、@提及、资质到期）。
-- 项目看板：节状态、负责人、截止时间、阻塞原因。
+- 已落地 `bid_comments`（run 级评论、可选章节定位、作者快照、正文、`open/resolved`、@提及与处理人快照）；`GET /api/project-members` 提供项目成员选择；`GET/POST/PATCH /api/bid-runs/{id}/comments*` 承载查看、发表、解决/重开、指派。详见 `docs/collaboration.md`。
+- 尚未实现：站内 + SMTP/Webhook 通知（run 完成、门禁阻断、待审批、@提及、资质到期）、截止时间、项目看板与评论删除/线程回复。
 
-### 5.4 并发保护与实时进度
+### 5.4 并发保护与实时进度（已实现）
 
-- 章节/大纲 PATCH 增加 `expected_revision`；冲突返回 409 + 最新版本，前端提示 diff/重载。
-- 可选 Redis 编辑租约（120s 心跳）显示"某人正在编辑"；不强行锁死。
-- SSE：`run_events` 追加表 + `GET /api/bid-runs/{id}/events?after=`；worker 写事件，API 流式推送；前端用 fetch-SSE（带 Authorization），断线用 Last-Event-ID 续传；local 模式回退轮询。
-- Nginx 关闭 SSE buffering，读超时覆盖长任务。
+- 章节编辑使用 `expected_sha256` 内容哈希，冲突返回 409；大纲使用 revision 乐观锁。
+- SSE：`GET /api/bid-runs/{id}/events` 推送 run/章节/Redis job 快照；前端以 fetch-SSE（Authorization 头）消费，3 秒重连，轮询兜底。当前是快照流，不是 `run_events` 追加表，也没有 `Last-Event-ID` 续传；local 模式回退轮询。
+- Nginx 通过 `X-Accel-Buffering: no` 关闭该响应缓冲，读超时覆盖长任务。
+- 尚未实现：Redis 编辑租约/“某人正在编辑”提示。
 
 **验收**：未审批导出被拒；两人同时编辑同节，后提交者 409；版本可恢复且审计完整；SSE 在 2s 内反映状态变化。
 
