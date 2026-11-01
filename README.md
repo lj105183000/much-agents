@@ -135,6 +135,7 @@ npm audit --omit=dev --audit-level=high
 - [依赖安全审计与例外](docs/dependency-security.md)
 - [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
 - [产品化路线图](docs/productization-roadmap.md)
+- [生产就绪与评测路线图](docs/production-readiness.md)
 - [产品设计与技术架构演示（PPT）](docs/presentation/much-agents-product-architecture.pptx)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
 - [贡献指南](CONTRIBUTING.md)
