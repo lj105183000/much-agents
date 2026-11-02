@@ -135,6 +135,39 @@ RAG 不是独立服务，而是写作链路的一部分：先建向量库，再�
 - 引用覆盖率和需求缺失默认是 warn（`BID_CITATION_MIN_COVERAGE=0.8`、`BID_REQUIREMENTS_BLOCK=false`），管理员可强制导出。
 - 没有 NLI/语义蕴含模型或外部事实核查服务；这是多层约束，不是 100% 保证。
 
+## 知识库
+
+系统的知识库不是通用大模型知识，而是三类持久化资料；写作时只使用它们和当前项目事实。
+
+### 招标文件知识库（项目级）
+
+- **解析产物**：`upload/parsed/<doc_id>/` 保存 `full.md`、`content_list.json`、`toc.json`、`extraction.json`、`chunks.jsonl`、`meta.json`、`ingest.json`；MinIO 模式下 `parsed/<doc_id>/` 是权威对象，本地目录是工作缓存。
+- **切块与向量**：按 TOC 章节切块（默认 700 字 / 120 重叠），智谱 `embedding-3` 写入 Chroma 集合 `bidding_documents`；chunk id 为 `<doc_id>:<section_id>:<ordinal>`。
+- **附件证据**：PDF/CSV/XLSX/XLSM/TXT/MD 可追加；chunk id 为 `<doc_id>:att-<sha12>:<ordinal>`，不删除主文档向量；检索时执行 BOQ 专项 query。
+- **项目隔离**：PostgreSQL `documents` 注册表记录项目归属；检索与文档库按 `X-Project-Id` 过滤，跨项目按 404 处理。
+- **检索入口**：`POST /api/search` 支持 `semantic|keyword|auto`；语义不可用时回退关键词；结果带章节、页码、相关度。
+- **重建与清理**：源文件 sha256 用于缓存；`--force` 重跑；删除附件会同时清理 chunks、Chroma 向量与 MinIO 对象；重新入库会 upsert 并清理旧向量。
+
+### 企业资料库（全局共享）
+
+- PostgreSQL `companies` 保存完整 `BidderProfile` JSONB；`company_qualifications` 保存施工资质、安许、ISO、人员证书及发证/到期日。
+- 公司库全局共享；创建投标 run 时可用 `company_id` 载入资料，也可使用当前编辑的 profile。
+- 完整 profile 仅 admin / bid_manager 可见；其他角色读取公司列表时脱敏，读取单公司时 `profile` 为空。
+- profile 快照只写私有对象 key，不进入检索、MCP 输出、审计 detail 或下载 URL。
+
+### 模板库（项目级）
+
+- DOCX 模板存 `bid_templates` + 私有对象 `private/templates/<project_id>/<id>.docx`；每个项目最多一个启用模板，启用时优先于全局 `BID_DOCX_TEMPLATE`。
+- 模板文件与预览缓存在私有对象前缀；组装时下载到临时目录，结束后清理。
+
+### 边界
+
+- 招标文件知识库按项目隔离；企业资料库全局共享；两者权限模型不同。
+- 不使用 LLM 的通用知识作为事实来源；Writer 只能使用项目事实、检索证据和资料摘要。
+- MCP 外部证据实时获取、不落库、默认不可信；检索快照只记录哈希与元数据，不保存证据原文。
+- 图纸/清单未进入解析文本时，知识库无法补出对应事实；需要 OCR 或作为附件补充。
+- 知识库不包含投标 run 正文、评论、审计等业务数据；这些分别在 run 产物、`bid_comments`、`audit_events` 中。
+
 ## 快速开始
 
 ### 依赖
