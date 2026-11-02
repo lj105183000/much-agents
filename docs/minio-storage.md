@@ -19,6 +19,8 @@ Much Agents 支持两种存储后端，由 `STORAGE_BACKEND` 选择：
 | `parsed/<doc_id>/...` | `<PARSED_DIR>/<doc_id>/...` | 解析、抽取、分块产物 |
 | `bids/<doc_id>/<run_id>/...` | `<BIDS_DIR>/<doc_id>/<run_id>/...` | 投标产物、配图、报告 |
 | `private/profiles/<doc_id>/<run_id>.json` | `<UPLOAD_DIR>/private/profiles/...`（仅本地副本） | 投标人 profile 快照，**私有对象** |
+| `private/templates/<project_id>/<template_id>.docx` | `<UPLOAD_DIR>/private/templates/...`（仅本地副本） | 项目 DOCX 模板；仅通过模板 API 访问，不在 artifact allowlist |
+| `private/template-previews/<project_id>/<template_id>/<sha>.pdf` | `<UPLOAD_DIR>/private/template-previews/...`（仅本地副本） | 模板预览 PDF 缓存；模板删除时清理 |
 
 `profile.json` 永远不会出现在 `bids/` 前缀、artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL 中；它只存为上述私有 key，用于跨机器继续编辑/组装。
 
@@ -51,7 +53,7 @@ MINIO_TIMEOUT_SECONDS=30
 `start.bat` 默认会确保 `much-agents-minio` 容器运行：
 
 ```text
-镜像      minio/minio:latest
+镜像      minio/minio（digest 固定，见 docker-compose.prod.yml）
 数据卷    much-agents-minio-data -> /data
 API       <MINIO_ENDPOINT 端口>:9000
 控制台    <MINIO_CONSOLE_PORT>:<MINIO_CONSOLE_PORT>

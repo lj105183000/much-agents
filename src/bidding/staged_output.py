@@ -12,6 +12,7 @@ from .assemble import assemble_bid
 from .checks import AllowedFacts
 from .context import TenderContext
 from .docx_export import markdown_to_docx
+from .docx_quality import check_docx
 from .models import (
     BidAssembly,
     BidOutline,
@@ -57,6 +58,11 @@ def assemble_staged_bid(
         output = outputs.get(section.id)
         final = output.final_markdown if output is not None else ""
         written = bool(output is not None and output.status == "final" and final)
+        review_payload = (
+            output.review
+            if output is not None and isinstance(output.review, dict)
+            else {}
+        )
         drafts.append(
             SectionDraft(
                 section_id=section.id,
@@ -69,12 +75,21 @@ def assemble_staged_bid(
         reviews.append(
             SectionReview(
                 section_id=section.id,
-                verdict="pass" if written else "skipped",
+                verdict=str(
+                    review_payload.get("verdict") or ("pass" if written else "skipped")
+                ),
                 issues=[
                     ReviewIssue.from_dict(item)
                     for item in (output.issues if output is not None else [])
                     if isinstance(item, dict)
                 ],
+                missing_points=[
+                    str(item) for item in review_payload.get("missing_points") or []
+                ],
+                covered_points=[
+                    str(item) for item in review_payload.get("covered_points") or []
+                ],
+                needs_revision=bool(review_payload.get("needs_revision", False)),
                 final_markdown=final,
                 warnings=list(output.warnings) if output is not None else [],
             )
@@ -124,7 +139,10 @@ def write_staged_outputs(
     extra_report: dict[str, Any] | None = None,
     compliance: dict[str, Any] | None = None,
     consistency: dict[str, Any] | None = None,
+    requirements: dict[str, Any] | None = None,
+    citations: dict[str, Any] | None = None,
     image_width_cm: float = 15.5,
+    docx_template: str = "",
 ) -> dict[str, Any]:
     root = ensure_dir(Path(output_dir))
     sections_dir = ensure_dir(root / "sections")
@@ -135,11 +153,15 @@ def write_staged_outputs(
         title=f"{context.facts.project_name} 投标文件",
         asset_dir=root,
         image_width_cm=image_width_cm,
+        template_path=docx_template or None,
     )
     report = dict(assembly.report)
     if extra_report:
         report.update(extra_report)
     report["docx_images"] = docx.images
+    docx_quality = check_docx(docx.path)
+    report["docx_quality"] = docx_quality
+    atomic_write_json(root / "docx_quality.json", docx_quality)
     if isinstance(report.get("figures"), dict):
         report["figures"]["docx_images"] = docx.images
     if compliance is not None:
@@ -154,6 +176,18 @@ def write_staged_outputs(
             "summary": consistency.get("summary"),
         }
         atomic_write_json(root / "consistency.json", consistency)
+    if requirements is not None:
+        report["requirements"] = {
+            "summary": requirements.get("summary") or {},
+            "warnings": list(requirements.get("warnings") or []),
+        }
+        atomic_write_json(root / "requirements.json", requirements)
+    if citations is not None:
+        report["citations"] = {
+            "summary": citations.get("summary") or {},
+            "warnings": list(citations.get("warnings") or []),
+        }
+        atomic_write_json(root / "citations.json", citations)
     if gate is not None:
         report["gate"] = gate
         atomic_write_json(root / "gate.json", gate)
@@ -175,6 +209,12 @@ def write_staged_outputs(
         "bid_docx": str(root / "bid.docx"),
         "report_path": str(root / "report.json"),
         "outline_path": str(root / "outline.json"),
+        "requirements_path": (
+            str(root / "requirements.json") if requirements is not None else ""
+        ),
+        "citations_path": (
+            str(root / "citations.json") if citations is not None else ""
+        ),
         "sections_dir": str(sections_dir),
         "docx_paragraphs": docx.paragraphs,
         "docx_tables": docx.tables,

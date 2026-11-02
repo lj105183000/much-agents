@@ -35,12 +35,13 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `src/bidding/` | LangGraph 写作、大纲、合规、一致性、修复方案、配图 |
 | `src/storage/` | 本地 / MinIO 对象存储与 hydration |
 | `src/mcp_client/` | 白名单 MCP 客户端 |
-| `migrations/` | Alembic 迁移（`0001`–`0005`） |
+| `migrations/` | Alembic 迁移（`0001`–`0021`） |
 | `frontend/` | React 19 + TypeScript + TailwindCSS 4 + Electron |
 | `deploy/` | Nginx/TLS、生产 Compose 环境模板 |
-| `scripts/` | 一键启动、备份/恢复、worker 健康检查 |
-| `docs/` | 认证、项目 ACL、审计、对象存储、部署、AI 配图/MCP |
+| `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测 |
+| `docs/` | 认证、项目 ACL、审计、对象存储、部署、AI 配图/MCP、E2E/压测 |
 | `tests/` | 后端单元/接口测试（全部 mock 网络） |
+| `frontend/e2e/` | Playwright 浏览器 E2E（真实隔离 API + PostgreSQL） |
 
 ## 快速开始
 
@@ -123,7 +124,16 @@ uv run ruff check .
 uv run pytest
 cd frontend && npm run lint && npm test && npm run build
 npm audit --omit=dev --audit-level=high
+
+# 浏览器 E2E（隔离 PostgreSQL + local API/Vite，需先启动 Docker Desktop）
+cd frontend && npx playwright install chromium && cd ..
+uv run python scripts/run_e2e.py
+
+# 只读 HTTP/SSE 压测（token 从环境变量读取）
+uv run python -m scripts.load_test --endpoint health --endpoint runs
 ```
+
+详见 [`docs/e2e-and-load-testing.md`](docs/e2e-and-load-testing.md)。
 
 ## 文档
 
@@ -134,14 +144,23 @@ npm audit --omit=dev --audit-level=high
 - [生产部署与运维](docs/deployment.md)
 - [依赖安全审计与例外](docs/dependency-security.md)
 - [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
+- [前端 E2E 与压测](docs/e2e-and-load-testing.md)
+- [站内通知、Webhook 与 SMTP](docs/notifications.md)
+- [干净主机生产验收](docs/production-acceptance.md)
+- [DOC 导出、DOCX 模板与企业资质库](docs/export-and-qualifications.md)
+- [反馈闭环、质量快照与运营看板](docs/feedback-and-analytics.md)
+- [L1 评测集标注流程](docs/eval-annotation.md)
+- [L2 judge 与人工标签校准](docs/l2-judge-calibration.md)
 - [产品化路线图](docs/productization-roadmap.md)
+- [生产就绪与评测路线图](docs/production-readiness.md)
+- [产品设计与技术架构演示（PPT）](docs/presentation/much-agents-product-architecture.pptx)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
 - [贡献指南](CONTRIBUTING.md)
 - [第三方组件与许可证](THIRD_PARTY_NOTICES.md)
 
 ## 状态与未实现项
 
-P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）。尚未完成：干净 Linux VM 与真实 DNS/CA 验收、远程 CI 结果确认、完整 LLM 正向生成/组装/导出演练、PDF/DOC 导出、审批流与版本 diff、评论/SSE、监控告警、前端 E2E 与压测、MCP OAuth 与前端配置 UI。
+P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）、审批 UI（意见/override/历史/内容哈希提示）、经 Headless LibreOffice 的 PDF 导出、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，以及需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）。浏览器 E2E（Playwright，隔离 PostgreSQL 栈）、只读 HTTP/SSE 压测、站内通知与可选 Webhook/SMTP、章节反馈/质量快照/运营看板与 CSV 报表、MinerU/Embedding（含附件）用量账本、run 预算/项目月度配额、80%/100% 阈值告警与预算趋势图、L1 评测集 CSV 标注流程与 reviewed points 回归评分、L2 盲评工作簿与人工标签校准、DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览、企业资质库、Electron 本地产物目录打开、干净主机验收工具 `scripts/acceptance_check.py` 已落地。尚未完成：真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）、模板变量/公司级模板、资质扫描件与到期自动通知、Alertmanager 真实通知渠道、MCP OAuth 与前端配置 UI、Cosign 签名、L1 实际标注数据与 L2 评测校准。
 
 ## License
 

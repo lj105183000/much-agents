@@ -31,6 +31,16 @@
   --md-link: #67e8f9;
   --md-selection-bg: rgba(34, 211, 238, 0.3);
   --md-selection-text: #f8fafc;
+
+  /* Budget trend chart (validated dark categorical pair: blue/orange). */
+  --viz-surface: #0f172a;
+  --viz-grid: #1e293b;
+  --viz-axis: #334155;
+  --viz-text: #f1f5f9;
+  --viz-muted: #94a3b8;
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-budget: #fab219;
 }
 
 html[data-theme="light"] {
@@ -57,6 +67,16 @@ html[data-theme="light"] {
   --md-link: #0e7490;
   --md-selection-bg: rgba(8, 145, 178, 0.18);
   --md-selection-text: #0f172a;
+
+  /* Budget trend chart (validated light categorical pair: blue/orange). */
+  --viz-surface: #f8fafc;
+  --viz-grid: #e2e8f0;
+  --viz-axis: #cbd5e1;
+  --viz-text: #0f172a;
+  --viz-muted: #64748b;
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-budget: #b45309;
 
   /* Invert the slate utility scale for the light surface hierarchy. */
   --color-slate-950: #f8fafc;

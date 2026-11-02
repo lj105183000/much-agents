@@ -85,6 +85,7 @@ class WriterAgent:
         evidence: list[Evidence],
         content_plan: dict | None = None,
         writing_focus: str = "",
+        profile_brief: str = "",
     ) -> SectionDraft:
         user = (
             writer_user(
@@ -93,6 +94,7 @@ class WriterAgent:
                 evidence,
                 content_plan=content_plan,
                 writing_focus=writing_focus,
+                profile_brief=profile_brief,
             )
             + f"\n\n【编写简报】\n{brief}"
         )
@@ -137,6 +139,7 @@ class ReviewerAgent:
         draft: SectionDraft,
         evidence: list[Evidence],
         brief: str = "",
+        profile_brief: str = "",
     ) -> SectionReview:
         if not draft.written:
             return SectionReview(
@@ -148,38 +151,56 @@ class ReviewerAgent:
         issues = deterministic_review(section, draft.markdown, self.allowed)
         warnings: list[str] = []
         revise_flag = any(issue.severity in ("high", "medium") for issue in issues)
-        try:
-            payload = self.llm.complete_json(
-                system=REVIEWER_SYSTEM,
-                user=reviewer_user(section, draft.markdown, self.facts, evidence, brief),
-                temperature=0.0,
-                max_tokens=self.settings.max_tokens,
-            )
-            if isinstance(payload, dict):
-                for item in payload.get("issues") or []:
-                    if not isinstance(item, dict):
-                        continue
-                    issues.append(
-                        ReviewIssue(
-                            type=str(item.get("type") or "quality"),
-                            severity=str(item.get("severity") or "low"),
-                            message=str(item.get("message") or ""),
-                            quote=str(item.get("quote") or ""),
-                        )
+        user = reviewer_user(
+            section,
+            draft.markdown,
+            self.facts,
+            evidence,
+            brief,
+            profile_brief=profile_brief,
+        )
+        payload = None
+        for attempt in range(2):
+            try:
+                payload = self.llm.complete_json(
+                    system=REVIEWER_SYSTEM,
+                    user=user + ("\n\n请只输出合法 JSON 对象。" if attempt else ""),
+                    temperature=0.0,
+                    max_tokens=self.settings.max_tokens,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 0:
+                    warnings.append(
+                        f"LLM reviewer failed; retrying once: "
+                        f"{type(exc).__name__}"
                     )
-                revise_flag = revise_flag or bool(payload.get("revise"))
-                missing_points = [str(item) for item in payload.get("missing_points") or []]
-                covered_points = [str(item) for item in payload.get("covered_points") or []]
-            else:
-                missing_points, covered_points = [], []
-                warnings.append("reviewer returned non-object JSON")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("reviewer failed for %s: %s", section.id, exc)
+                    continue
+                logger.warning("reviewer failed for %s: %s", section.id, exc)
+                warnings.append(
+                    f"LLM reviewer failed for {section.title}: "
+                    f"{type(exc).__name__}: {str(exc)[:160]}"
+                )
+        if isinstance(payload, dict):
+            for item in payload.get("issues") or []:
+                if not isinstance(item, dict):
+                    continue
+                issues.append(
+                    ReviewIssue(
+                        type=str(item.get("type") or "quality"),
+                        severity=str(item.get("severity") or "low"),
+                        message=str(item.get("message") or ""),
+                        quote=str(item.get("quote") or ""),
+                    )
+                )
+            revise_flag = revise_flag or bool(payload.get("revise"))
+            missing_points = [str(item) for item in payload.get("missing_points") or []]
+            covered_points = [str(item) for item in payload.get("covered_points") or []]
+        elif payload is not None:
             missing_points, covered_points = [], []
-            warnings.append(
-                f"LLM reviewer failed for {section.title}: "
-                f"{type(exc).__name__}: {str(exc)[:160]}"
-            )
+            warnings.append("reviewer returned non-object JSON")
+        else:
+            missing_points, covered_points = [], []
 
         verdict = "revise" if revise_flag else "pass"
         return SectionReview(
@@ -206,11 +227,17 @@ class ReviserAgent:
         draft: SectionDraft,
         review: SectionReview,
         evidence: list[Evidence],
+        profile_brief: str = "",
     ) -> SectionRevision:
         try:
             raw = self.llm.complete(
                 system=REVISER_SYSTEM,
-                user=reviser_user(section, draft.markdown, review.issues),
+                user=reviser_user(
+                    section,
+                    draft.markdown,
+                    review.issues,
+                    profile_brief=profile_brief,
+                ),
                 temperature=self.settings.temperature,
                 max_tokens=self.settings.max_tokens,
             )

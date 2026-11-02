@@ -1,5 +1,10 @@
-import { useState } from 'react'
-import type { BidSectionDetail } from '../api/types'
+import { useEffect, useState } from 'react'
+import { api, ApiError } from '../api/client'
+import type {
+  BidSectionDetail,
+  BidSectionVersionDiffResponse,
+  BidSectionVersionListResponse,
+} from '../api/types'
 import { MarkdownPreview } from './MarkdownPreview'
 import { Modal } from './Modal'
 import { Badge, Button, Spinner, textareaClass } from './ui'
@@ -17,6 +22,16 @@ interface BidSectionModalProps {
   onClose: () => void
   onSave: (markdown: string) => Promise<boolean>
   onRegenerate: () => void
+  onRestored: (section: BidSectionDetail) => void
+  onConflict: () => void | Promise<void>
+}
+
+const VERSION_SOURCE_LABEL: Record<string, string> = {
+  draft: '初稿',
+  revision: '修订稿',
+  manual: '人工编辑',
+  current: '当前正文',
+  generated: '生成稿',
 }
 
 const SEVERITY_TONE: Record<
@@ -88,12 +103,60 @@ export function BidSectionModal({
   onClose,
   onSave,
   onRegenerate,
+  onRestored,
+  onConflict,
 }: BidSectionModalProps) {
   const [editing, setEditing] = useState(
     Boolean(startEditing && section?.status === 'final' && !actionsDisabled),
   )
   const [draft, setDraft] = useState(section?.final_markdown ?? '')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [versions, setVersions] =
+    useState<BidSectionVersionListResponse | null>(null)
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState<string | null>(null)
+  const [diff, setDiff] = useState<BidSectionVersionDiffResponse | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  const [rating, setRating] = useState(0)
+  const [feedbackReason, setFeedbackReason] = useState('')
+  const [feedbackBusy, setFeedbackBusy] = useState(false)
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null)
+  const [feedbackError, setFeedbackError] = useState<string | null>(null)
+  const [restoringVersionId, setRestoringVersionId] = useState<number | null>(
+    null,
+  )
+  const canEdit =
+    section?.kind === 'narrative' &&
+    section?.status === 'final' &&
+    !actionsDisabled
+  const busy = saving || regenerating || restoringVersionId !== null
+
+  const loadVersions = async (target: BidSectionDetail) => {
+    setVersionsLoading(true)
+    setVersionsError(null)
+    try {
+      setVersions(
+        await api.listBidSectionVersions(target.run_id, target.section_id),
+      )
+    } catch (caught) {
+      setVersionsError(
+        caught instanceof ApiError ? caught.message : '版本历史读取失败',
+      )
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !section) {
+      setVersions(null)
+      setDiff(null)
+      return
+    }
+    void loadVersions(section)
+    // Section ids identify the history; reload when the modal reopens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, section?.run_id, section?.section_id])
 
   const save = async () => {
     const value = draft.trim()
@@ -103,11 +166,105 @@ export function BidSectionModal({
     }
     setLocalError(null)
     const ok = await onSave(value)
-    if (ok) setEditing(false)
+    if (ok) {
+      setEditing(false)
+      if (section) void loadVersions(section)
+    }
   }
 
-  const canEdit = section?.status === 'final' && !actionsDisabled
-  const busy = saving || regenerating
+  const loadDiff = async (versionId: number) => {
+    if (!section) return
+    setDiffLoading(true)
+    setVersionsError(null)
+    try {
+      setDiff(
+        await api.diffBidSectionVersion(
+          section.run_id,
+          section.section_id,
+          versionId,
+        ),
+      )
+    } catch (caught) {
+      setVersionsError(
+        caught instanceof ApiError ? caught.message : '版本对比失败',
+      )
+    } finally {
+      setDiffLoading(false)
+    }
+  }
+
+  const restoreVersion = async (versionId: number) => {
+    if (!section || !canEdit) return
+    if (
+      !window.confirm(
+        '恢复该历史版本会覆盖当前正文，并生成一个新的人工编辑版本。继续吗？',
+      )
+    ) {
+      return
+    }
+    setRestoringVersionId(versionId)
+    setVersionsError(null)
+    try {
+      const updated = await api.restoreBidSectionVersion(
+        section.run_id,
+        section.section_id,
+        versionId,
+        section.content_sha256,
+      )
+      onRestored(updated)
+      setDiff(null)
+      await loadVersions(updated)
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409) {
+        await onConflict()
+        await loadVersions(section)
+        setVersionsError(
+          '正文已被其他用户修改，已加载最新内容；请重新选择要恢复的版本。',
+        )
+      } else {
+        setVersionsError(
+          caught instanceof ApiError ? caught.message : '恢复版本失败',
+        )
+      }
+    } finally {
+      setRestoringVersionId(null)
+    }
+  }
+
+  const submitFeedback = async (eventType: 'rating' | 'adopt' | 'reject') => {
+    if (!section) return
+    if (eventType === 'rating' && rating === 0) {
+      setFeedbackError('请先选择 1–5 分')
+      return
+    }
+    setFeedbackBusy(true)
+    setFeedbackError(null)
+    setFeedbackMessage(null)
+    try {
+      await api.createBidFeedback(section.run_id, {
+        section_id: section.section_id,
+        event_type: eventType,
+        score: eventType === 'rating' ? rating : null,
+        reason: feedbackReason.trim(),
+        content_sha256: section.content_sha256 || null,
+      })
+      setFeedbackMessage(
+        eventType === 'rating'
+          ? '评分已记录，感谢反馈'
+          : eventType === 'adopt'
+            ? '已标记采纳'
+            : '已标记需修改',
+      )
+      setFeedbackReason('')
+      setRating(0)
+    } catch (caught) {
+      setFeedbackError(
+        caught instanceof ApiError ? caught.message : '反馈提交失败',
+      )
+    } finally {
+      setFeedbackBusy(false)
+    }
+  }
 
   return (
     <Modal
@@ -241,6 +398,196 @@ export function BidSectionModal({
               ))}
             </ul>
           ) : null}
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-300">
+                本节质量反馈
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={feedbackBusy}
+                  onClick={() => void submitFeedback('adopt')}
+                >
+                  采纳
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={feedbackBusy}
+                  onClick={() => void submitFeedback('reject')}
+                >
+                  需修改
+                </Button>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-500">评分</span>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setRating(value)}
+                  className={
+                    rating === value
+                      ? 'h-7 w-7 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-[11px] text-cyan-200'
+                      : 'h-7 w-7 rounded-lg border border-slate-800 text-[11px] text-slate-400 hover:border-slate-700'
+                  }
+                  aria-label={`${value} 分`}
+                >
+                  {value}
+                </button>
+              ))}
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={feedbackBusy}
+                disabled={rating === 0}
+                onClick={() => void submitFeedback('rating')}
+              >
+                提交评分
+              </Button>
+            </div>
+            <textarea
+              className={`${textareaClass} mt-2 min-h-12`}
+              value={feedbackReason}
+              maxLength={1000}
+              placeholder="可选：说明评分或修改原因，例如“进度计划缺少雨季措施”"
+              onChange={(event) => setFeedbackReason(event.target.value)}
+            />
+            {feedbackMessage ? (
+              <p className="mt-1 text-[11px] text-emerald-300">
+                {feedbackMessage}
+              </p>
+            ) : null}
+            {feedbackError ? (
+              <p className="mt-1 text-[11px] text-red-300">{feedbackError}</p>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-300">历史版本</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={versionsLoading}
+                onClick={() => void loadVersions(section)}
+              >
+                刷新
+              </Button>
+            </div>
+            {versionsError ? (
+              <p className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1.5 text-[11px] text-red-200">
+                {versionsError}
+              </p>
+            ) : null}
+            {versionsLoading && !versions ? (
+              <p className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+                <Spinner className="h-3.5 w-3.5" />
+                正在读取版本历史…
+              </p>
+            ) : !versions?.versions.length ? (
+              <p className="mt-2 text-[11px] text-slate-500">暂无历史版本。</p>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {versions.versions.map((version) => (
+                  <div
+                    key={version.id}
+                    className="rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                      <Badge tone="neutral">v{version.version}</Badge>
+                      <span>
+                        {VERSION_SOURCE_LABEL[version.source] ?? version.source}
+                      </span>
+                      <span>{version.char_count} 字</span>
+                      {version.outline_revision !== null ? (
+                        <span>大纲 r{version.outline_revision}</span>
+                      ) : null}
+                      {version.created_by_name ? (
+                        <span>· {version.created_by_name}</span>
+                      ) : null}
+                      {version.review_summary ? (
+                        <span
+                          className="text-slate-500"
+                          title={version.review_summary}
+                        >
+                          ·{' '}
+                          {version.review_summary.length > 40
+                            ? `${version.review_summary.slice(0, 40)}…`
+                            : version.review_summary}
+                        </span>
+                      ) : null}
+                      <span>
+                        {new Date(version.created_at).toLocaleString('zh-CN')}
+                      </span>
+                      <span title={version.content_sha256}>
+                        #{version.content_sha256.slice(0, 8)}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        loading={diffLoading}
+                        onClick={() => void loadDiff(version.id)}
+                      >
+                        对比当前
+                      </Button>
+                      {canEdit ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={restoringVersionId === version.id}
+                          disabled={
+                            busy && restoringVersionId !== version.id
+                          }
+                          onClick={() => void restoreVersion(version.id)}
+                        >
+                          恢复
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {diff ? (
+              <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                  <Badge tone={diff.changed ? 'amber' : 'green'}>
+                    {diff.changed ? '有差异' : '无差异'}
+                  </Badge>
+                  <span>
+                    {diff.from_label} → {diff.to_label}
+                  </span>
+                </div>
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5">
+                  {diff.diff ? (
+                    diff.diff.split('\n').map((line, index) => (
+                      <div
+                        key={index}
+                        className={
+                          line.startsWith('+')
+                            ? 'text-emerald-300'
+                            : line.startsWith('-')
+                              ? 'text-red-300'
+                              : 'text-slate-500'
+                        }
+                      >
+                        {line || ' '}
+                      </div>
+                    ))
+                  ) : (
+                    <span className="text-slate-500">无差异。</span>
+                  )}
+                </pre>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
     </Modal>

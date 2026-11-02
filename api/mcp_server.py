@@ -483,6 +483,20 @@ def create_server(
         )
 
     @server.tool()
+    async def get_requirements(run_id: str) -> dict[str, Any]:
+        """读取需求登记与覆盖矩阵。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/requirements"
+        )
+
+    @server.tool()
+    async def get_citations(run_id: str) -> dict[str, Any]:
+        """读取章节证据引用覆盖率与未引用关键事实。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/citations"
+        )
+
+    @server.tool()
     async def get_job(job_id: str) -> dict[str, Any]:
         """读取解析或标书长任务状态；用于轮询 create/generate 返回的 job_id。"""
         return await api_proxy.get_json(f"/api/jobs/{_segment(job_id)}")
@@ -608,10 +622,17 @@ def create_server(
         markdown: str,
     ) -> dict[str, Any]:
         """保存人工正文；等同人工编辑，会使旧门禁与报告失效。"""
+        current = await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}"
+            f"/sections/{_segment(section_id)}"
+        )
+        expected = str(current.get("content_sha256") or "")
+        if not expected:
+            raise ValueError("section has no content hash; reload the run")
         return await api_proxy.patch_json(
             f"/api/bid-runs/{_segment(run_id)}"
             f"/sections/{_segment(section_id)}",
-            {"markdown": markdown},
+            {"markdown": markdown, "expected_sha256": expected},
         )
 
     @server.tool()
@@ -631,7 +652,7 @@ def create_server(
         check_ids: list[str] | None = None,
         max_items: int = 10,
     ) -> dict[str, Any]:
-        """为未通过检查生成确定性/LLM 修复候选，不自动应用。"""
+        """为未通过检查生成修复候选，不自动应用；回传 item.section_sha256。"""
         return await api_proxy.post_json(
             f"/api/bid-runs/{_segment(run_id)}/compliance/fix-plan",
             {
@@ -646,12 +667,27 @@ def create_server(
         section_id: str,
         find: str,
         replace: str,
+        expected_sha256: str = "",
     ) -> dict[str, Any]:
-        """应用一处修复；find 必须恰好出现一次，应用后需重新组装。"""
+        """应用一处修复；find 必须恰好出现一次，应用后需重新组装。
+
+        ``expected_sha256`` 应来自 fix plan 的 ``section_sha256``；省略时先
+        读取当前章节（仍只能防止读取与提交之间的并发修改）。
+        """
+        expected = expected_sha256.strip()
+        if not expected:
+            current = await api_proxy.get_json(
+                f"/api/bid-runs/{_segment(run_id)}"
+                f"/sections/{_segment(section_id)}"
+            )
+            expected = str(current.get("content_sha256") or "")
+            if not expected:
+                raise ValueError("section has no content hash; reload the run")
         return await api_proxy.post_json(
             f"/api/bid-runs/{_segment(run_id)}/compliance/fixes/apply",
             {
                 "section_id": section_id,
+                "expected_sha256": expected,
                 "find": find,
                 "replace": replace,
             },

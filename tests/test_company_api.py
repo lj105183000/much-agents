@@ -59,6 +59,78 @@ def sample_profile(name: str = "测试建设有限公司") -> dict:
     }
 
 
+def test_company_qualifications_crud(tmp_path: Path) -> None:
+    service = FakeCompanyService()
+    app = make_app(tmp_path, service)
+    with TestClient(app) as client:
+        company = client.post(
+            "/api/companies", json={"profile": sample_profile()}
+        ).json()
+        company_id = company["id"]
+
+        created = client.post(
+            f"/api/companies/{company_id}/qualifications",
+            json={
+                "name": "市政公用工程施工总承包",
+                "qualification_type": "施工资质",
+                "certificate_no": "D123456789",
+                "issuer": "省住建厅",
+                "issued_at": "2024-01-01",
+                "expires_at": "2027-01-01",
+                "notes": "主项资质",
+            },
+        )
+        assert created.status_code == 201, created.text
+        qualification = created.json()
+        qualification_id = qualification["id"]
+        assert qualification["name"] == "市政公用工程施工总承包"
+        assert qualification["issued_at"] == "2024-01-01"
+        assert qualification["expires_at"] == "2027-01-01"
+
+        listed = client.get(
+            f"/api/companies/{company_id}/qualifications"
+        )
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()["qualifications"]] == [
+            qualification_id
+        ]
+
+        updated = client.patch(
+            f"/api/companies/{company_id}/qualifications/{qualification_id}",
+            json={"expires_at": "2026-06-30", "notes": "即将到期"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["expires_at"] == "2026-06-30"
+        assert updated.json()["notes"] == "即将到期"
+
+        invalid = client.patch(
+            f"/api/companies/{company_id}/qualifications/{qualification_id}",
+            json={"expires_at": "2023-01-01"},
+        )
+        assert invalid.status_code == 422
+
+        deleted = client.delete(
+            f"/api/companies/{company_id}/qualifications/{qualification_id}"
+        )
+        assert deleted.status_code == 204
+        assert (
+            client.get(f"/api/companies/{company_id}/qualifications")
+            .json()["qualifications"]
+            == []
+        )
+
+        unknown_company = client.get(
+            "/api/companies/missing/qualifications"
+        )
+        assert unknown_company.status_code == 404
+
+        unknown = client.patch(
+            f"/api/companies/{company_id}/qualifications/missing",
+            json={"notes": "x"},
+        )
+        assert unknown.status_code == 404
+
+
 def test_company_crud(tmp_path: Path) -> None:
     service = FakeCompanyService()
     app = make_app(tmp_path, service)

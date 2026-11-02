@@ -28,6 +28,8 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+
+from src.observability.logging import request_id_var
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -626,14 +628,18 @@ def install_request_context(app: FastAPI, service: AuditService) -> None:
         )
         request.state.request_id = request_id
         request.state.audit_recorded = False
+        token = request_id_var.set(request_id)
         try:
-            response = await call_next(request)
-        except Exception:
-            await _record_fallback(service, request, status=500)
-            raise
-        response.headers[REQUEST_ID_HEADER] = request_id
-        await _record_fallback(service, request, status=response.status_code)
-        return response
+            try:
+                response = await call_next(request)
+            except Exception:
+                await _record_fallback(service, request, status=500)
+                raise
+            response.headers[REQUEST_ID_HEADER] = request_id
+            await _record_fallback(service, request, status=response.status_code)
+            return response
+        finally:
+            request_id_var.reset(token)
 
 
 async def _record_fallback(

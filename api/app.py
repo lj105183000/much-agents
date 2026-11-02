@@ -40,16 +40,26 @@ from .auth import (
 from .bid_run_repo import BidRunRepository
 from .bid_runs import BidRunError, BidRunService
 from .bids import BidService, execute_bid_job
+from .metrics import install_metrics
 from .companies import CompanyService
 from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
+from .external_usage import (
+    build_external_usage,
+    persist_external_usage,
+)
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
+from .notifications import (
+    NotificationError,
+    NotificationService,
+    NotificationSettings,
+)
 from .projects import ProjectError, ProjectRepository, ProjectService
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
 from .search import SearchService
-from .service import ParseService, UploadError
+from .service import AttachmentService, ParseService, UploadError
 from .task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
 
 logger = logging.getLogger(__name__)
@@ -70,6 +80,7 @@ def create_app(
     search_service: SearchService | None = None,
     company_service: CompanyService | None = None,
     bid_run_service: BidRunService | None = None,
+    notification_service: NotificationService | None = None,
     auth_service: AuthService | None = None,
     project_service: ProjectService | None = None,
     audit_service: AuditService | None = None,
@@ -132,6 +143,12 @@ def create_app(
                     parse_settings=parse_settings,
                     parse_func=parse_func,
                     storage=storage,
+                    external_usage_recorder=lambda current, result: (
+                        persist_external_usage(
+                            bid_run_repo,
+                            build_external_usage(current, result),
+                        )
+                    ),
                 )
 
             dispatcher = LocalDispatcher(runner=parse_runner, executor=execute_parse)
@@ -194,11 +211,22 @@ def create_app(
         storage=storage,
         document_registry=project_service,
     )
+    attachment_service = AttachmentService(
+        api_settings=api_settings,
+        parse_settings=parse_settings,
+        store=store,
+        dispatch=dispatcher.dispatch,
+        storage=storage,
+    )
     company_service = company_service or CompanyService(
         api_settings.database_url,
         profile_max_mb=bid_settings.profile_max_mb,
         engine=database.engine,
         session_factory=database.session_factory,
+    )
+    notification_service = notification_service or NotificationService(
+        bid_run_repo,
+        NotificationSettings.from_env(),
     )
     bid_run_service = bid_run_service or BidRunService(
         bid_settings=bid_settings,
@@ -207,8 +235,11 @@ def create_app(
         store=store,
         dispatch=bid_dispatcher.dispatch,
         max_attempts=api_settings.bid_run_max_attempts,
+        section_max_attempts=api_settings.bid_section_max_attempts,
+        require_approval=api_settings.bid_require_approval,
         stale_seconds=api_settings.bid_run_stale_seconds,
         storage=storage,
+        notifier=notification_service,
     )
     resolved_auth_service = auth_service
     if resolved_auth_service is None and api_settings.auth_enabled:
@@ -281,9 +312,11 @@ def create_app(
     app.state.parse_func = parse_func
     app.state.bid_func = bid_func
     app.state.parse_service = parse_service
+    app.state.attachment_service = attachment_service
     app.state.bid_service = bid_service
     app.state.bid_run_service = bid_run_service
     app.state.bid_run_repo = bid_run_repo
+    app.state.notification_service = notification_service
     app.state.database = database
     app.state.search_service = search_service
     app.state.company_service = company_service
@@ -302,10 +335,17 @@ def create_app(
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Project-Id", "X-Request-ID"],
-        expose_headers=["Content-Disposition", "ETag", "X-Request-ID"],
+        expose_headers=[
+            "Content-Disposition",
+            "ETag",
+            "X-Request-ID",
+            "X-Template-Preview-Page",
+            "X-Template-Preview-Pages",
+        ],
         max_age=600,
     )
     install_request_context(app, audit_service)
+    install_metrics(app)
 
     @app.exception_handler(UploadError)
     async def handle_upload_error(_request: Request, exc: UploadError) -> JSONResponse:
@@ -332,6 +372,12 @@ def create_app(
     @app.exception_handler(BidRunError)
     async def handle_bid_run_error(
         _request: Request, exc: BidRunError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(NotificationError)
+    async def handle_notification_error(
+        _request: Request, exc: NotificationError
     ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 

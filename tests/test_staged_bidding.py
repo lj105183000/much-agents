@@ -4,13 +4,20 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from src.bidding.agents import ReviewerAgent
 from src.bidding.checks import build_allowed
 from src.bidding.context import TenderContext
-from src.bidding.models import Evidence
+from src.bidding.models import Evidence, ReviewIssue, SectionDraft
 from src.bidding.outline import build_outline
 from src.bidding.plan import build_content_plan
 from src.bidding.profile import BidderProfile
-from src.bidding.staged import generate_sections
+from src.bidding.staged import (
+    _filter_review_issues,
+    _merge_attachment_evidence,
+    _quote_in_markdown,
+    build_retrieval_snapshot,
+    generate_sections,
+)
 from tests.fakes import FakeChatClient, FakeRetriever, make_bid_settings, write_parsed_fixture
 
 
@@ -78,6 +85,242 @@ def test_generate_sections_checkpoints_each_stage(tmp_path: Path) -> None:
     assert statuses.count("final") == 2
     assert any("【本节编写计划】" in call["user"] for call in llm.calls)
     assert any("【编写重点】" in call["user"] for call in llm.calls)
+    retrieval = result.outcomes[0].retrieval
+    assert retrieval is not None
+    assert retrieval["query_text"]
+    assert retrieval["hits"]
+    assert "text" not in retrieval["hits"][0]
+    assert len(retrieval["hits"][0]["text_sha256"]) == 64
+
+
+def test_generate_sections_persists_usage_per_outcome(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+    seen: list[tuple[str, int, bool]] = []
+
+    async def sink(item: Any) -> None:
+        seen.append(
+            (
+                item.section_id,
+                len(item.usage),
+                isinstance(item.retrieval, dict),
+            )
+        )
+
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+            usage_sink=sink,
+        )
+    )
+
+    assert len(seen) == len(result.outcomes) == 2
+    assert all(count > 0 for _section_id, count, _retrieval in seen)
+    assert all(has_retrieval for _section_id, _count, has_retrieval in seen)
+    assert {section_id for section_id, _count, _retrieval in seen} == {
+        item.section_id for item in result.outcomes
+    }
+
+
+def test_generate_sections_fails_truncated_writer(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    llm.last_usage = {
+        "model_requested": "deepseek-flash",
+        "model_actual": "deepseek-flash",
+        "prompt_tokens": 10,
+        "completion_tokens": 10,
+        "total_tokens": 20,
+        "finish_reason": "length",
+    }
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+        )
+    )
+
+    assert result.outcomes
+    assert all(item.status == "failed" for item in result.outcomes)
+    assert any(
+        fields.get("status") == "failed" for _section_id, fields in hooks.updates
+    )
+
+
+def test_generate_sections_injects_profile_brief(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+    llm = FakeChatClient()
+    retriever = FakeRetriever(
+        [Evidence(chunk_id="c1", text="招标文件相关证据", doc_id="doc-1")]
+    )
+
+    asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={
+                section.id: build_content_plan(section) for section in narratives
+            },
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=retriever,
+            allowed=allowed,
+            hooks=hooks,
+            profile_brief="【投标人资料摘要】测试公司；项目经理：王五",
+        )
+    )
+
+    assert any("测试公司" in call["user"] for call in llm.calls)
+    assert any("王五" in call["user"] for call in llm.calls)
+    assert any("拟投入/拟安排" in call["user"] for call in llm.calls)
+
+
+def test_stale_review_issues_are_dropped_after_revision() -> None:
+    issues = [
+        ReviewIssue(
+            type="fabrication",
+            severity="high",
+            message="stale",
+            quote="**基岩井成井工序**",
+        ),
+        ReviewIssue(
+            type="coverage",
+            severity="high",
+            message="current",
+            quote="管道安装",
+        ),
+        ReviewIssue(type="quality", severity="low", message="general"),
+    ]
+
+    kept = _filter_review_issues(
+        issues,
+        "本工程管道安装工序；成井类工序是否包含以图纸和工程量清单核实为准。",
+    )
+
+    assert [issue.message for issue in kept] == ["current", "general"]
+    assert _quote_in_markdown("", "任意正文") is False
+
+
+def test_attachment_evidence_is_merged_first_and_deduped() -> None:
+    main = [
+        Evidence(chunk_id="main", text="main evidence", doc_id="d"),
+        Evidence(chunk_id="att", text="duplicate", doc_id="d"),
+    ]
+    attachment = [
+        Evidence(
+            chunk_id="att",
+            text="BOQ evidence",
+            doc_id="d",
+            section_path="附件：boq.csv",
+        ),
+        Evidence(
+            chunk_id="other",
+            text="not an attachment",
+            doc_id="d",
+            section_path="第四卷",
+        ),
+    ]
+
+    merged = _merge_attachment_evidence(main, attachment, 1000)
+
+    assert [item.chunk_id for item in merged] == ["att", "main"]
+    assert merged[0].text == "BOQ evidence"
+    assert _merge_attachment_evidence(main, [], 1000) == main
+
+
+def test_reviewer_retries_invalid_json_once(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, narratives = _setup(tmp_path)
+    section = narratives[0]
+    draft = SectionDraft(
+        section_id=section.id,
+        title=section.title,
+        markdown="本工程按招标文件要求组织施工。",
+    )
+
+    class RetryingReviewer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("invalid json")
+            return {
+                "issues": [],
+                "missing_points": ["测试缺失点"],
+                "covered_points": ["测试覆盖点"],
+                "revise": False,
+            }
+
+    llm = RetryingReviewer()
+    reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
+
+    review = reviewer.review(section, draft, [], brief="")
+
+    assert llm.calls == 2
+    assert review.missing_points == ["测试缺失点"]
+    assert any("retrying once" in item for item in review.warnings)
+
+
+def test_retrieval_snapshot_hashes_text_and_detects_keyword_mode() -> None:
+    evidence = [
+        Evidence(
+            chunk_id="c1",
+            text="招标文件证据",
+            page_start=1,
+            page_end=2,
+            section_path="第一章",
+            score=0.9,
+        )
+    ]
+    snapshot = build_retrieval_snapshot("查询", evidence, None, 6)
+    assert snapshot["mode"] == "semantic"
+    assert snapshot["evidence_chars"] == len("招标文件证据")
+    assert "text" not in snapshot["hits"][0]
+
+    keyword = build_retrieval_snapshot(
+        "查询", evidence, "Chroma disabled; used keyword retrieval", 6
+    )
+    assert keyword["mode"] == "keyword"
 
 
 def test_generate_sections_skips_final_and_resumes_failed(tmp_path: Path) -> None:
@@ -132,6 +375,37 @@ def test_generate_sections_cancels_before_writing(tmp_path: Path) -> None:
     assert result.outcomes
     assert all(item.status == "pending" for item in result.outcomes)
     assert not llm.calls
+
+
+def test_generate_sections_cancels_after_writer(tmp_path: Path) -> None:
+    context, settings, outline, _profile, allowed, _narratives = _setup(tmp_path)
+    hooks = MemoryHooks()
+
+    def handler(_system: str, _user: str, _json_mode: bool) -> str:
+        hooks.cancel = True
+        return "本工程施工组织设计内容。" * 30
+
+    llm = FakeChatClient(handler=handler)
+    result = asyncio.run(
+        generate_sections(
+            context=context,
+            brief="测试简报",
+            sections=outline.sections,
+            existing_status={},
+            existing_attempt={},
+            content_plans={},
+            writing_focus={},
+            settings=settings,
+            llm=llm,
+            retriever=FakeRetriever(),
+            allowed=allowed,
+            hooks=hooks,
+        )
+    )
+    assert result.cancelled
+    assert result.outcomes
+    assert all(item.status == "pending" for item in result.outcomes)
+    assert llm.calls
 
 
 def test_generate_sections_isolates_writer_failure(tmp_path: Path) -> None:

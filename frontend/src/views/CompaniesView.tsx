@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { CompanySummary, ViewKey } from '../api/types'
 import { Icon } from '../components/icons'
+import { CompanyQualificationsPanel } from '../components/CompanyQualificationsPanel'
 import { Modal } from '../components/Modal'
 import { ProfileEditor } from '../components/ProfileEditor'
 import {
@@ -39,6 +40,8 @@ export function CompaniesView({
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [qualificationCompany, setQualificationCompany] =
+    useState<CompanySummary | null>(null)
 
   const filtered = companies.filter((company) => {
     const haystack = [
@@ -255,6 +258,14 @@ export function CompaniesView({
                   更新于 {formatDate(company.updated_at)}
                 </span>
                 <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setQualificationCompany(company)}
+                  >
+                    <Icon name="shield" className="h-3.5 w-3.5" />
+                    资质
+                  </Button>
                   {canManage ? (
                     <Button
                       variant="ghost"
@@ -281,6 +292,14 @@ export function CompaniesView({
           ))}
         </div>
       )}
+
+      <CompanyQualificationsPanel
+        open={qualificationCompany !== null}
+        companyId={qualificationCompany?.id ?? null}
+        companyName={qualificationCompany?.company_name ?? ''}
+        canManage={canManage}
+        onClose={() => setQualificationCompany(null)}
+      />
 
       <Modal
         open={modalOpen}

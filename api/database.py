@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
@@ -40,6 +42,45 @@ class CompanyRow(Base):
     bank_name: Mapped[str | None] = mapped_column(String(255))
     bank_account: Mapped[str | None] = mapped_column(String(128))
     profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CompanyQualificationRow(Base):
+    __tablename__ = "company_qualifications"
+    __table_args__ = (
+        Index(
+            "ix_company_qualifications_company_expiry",
+            "company_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    qualification_type: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    certificate_no: Mapped[str | None] = mapped_column(String(128))
+    issuer: Mapped[str | None] = mapped_column(String(128))
+    issued_at: Mapped[date | None] = mapped_column(Date)
+    expires_at: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -115,6 +156,7 @@ class ProjectRow(Base):
     description: Mapped[str] = mapped_column(
         String(512), nullable=False, server_default=text("''")
     )
+    monthly_budget_cents: Mapped[int | None] = mapped_column(Integer)
     created_by: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -151,6 +193,53 @@ class ProjectMemberRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+    )
+
+
+class BidTemplateRow(Base):
+    __tablename__ = "bid_templates"
+    __table_args__ = (
+        Index("ix_bid_templates_project_created", "project_id", "created_at"),
+        Index(
+            "uq_bid_templates_active_project",
+            "project_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(
+        String(512), nullable=False, server_default=text("''")
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger(), nullable=False, server_default=text("0")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(36))
+    created_by_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 
@@ -249,6 +338,7 @@ class BidRunRow(Base):
     )
     gate_status: Mapped[str | None] = mapped_column(String(8))
     gate: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
     warnings: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
@@ -355,12 +445,512 @@ class BidSectionStateRow(Base):
     llm_calls: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
+    generation_token: Mapped[str | None] = mapped_column(String(64))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class BidSectionVersionRow(Base):
+    __tablename__ = "bid_section_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "section_id",
+            "version",
+            name="uq_bid_section_versions_run_section_version",
+        ),
+        Index(
+            "ix_bid_section_versions_run_section",
+            "run_id",
+            "section_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'generated'")
+    )
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    outline_revision: Mapped[int | None] = mapped_column(Integer)
+    review_summary: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(String(36))
+    created_by_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class LlmCallLogRow(Base):
+    __tablename__ = "llm_call_log"
+    __table_args__ = (
+        Index("ix_llm_call_log_run_ts", "run_id", "ts"),
+        Index("ix_llm_call_log_project_ts", "project_id", "ts"),
+        Index("ix_llm_call_log_status_ts", "status", "ts"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'deepseek'")
+    )
+    model_requested: Mapped[str | None] = mapped_column(String(64))
+    model_actual: Mapped[str | None] = mapped_column(String(64))
+    operation: Mapped[str | None] = mapped_column(String(32))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_cny: Mapped[float | None] = mapped_column(Float)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    finish_reason: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ok'")
+    )
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    temperature: Mapped[float | None] = mapped_column(Float)
+    max_tokens: Mapped[int | None] = mapped_column(Integer)
+    json_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    system_fingerprint: Mapped[str | None] = mapped_column(String(128))
+
+
+class RunUsageRow(Base):
+    __tablename__ = "run_usage"
+
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    llm_calls: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    total_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    cost_cny: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0")
+    )
+    retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    fallback_calls: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    duration_ms: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ExternalUsageRow(Base):
+    __tablename__ = "external_usage"
+    __table_args__ = (
+        Index("ix_external_usage_project_created", "project_id", "created_at"),
+        Index("ix_external_usage_provider_created", "provider", "created_at"),
+        Index("ix_external_usage_doc_created", "doc_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+    )
+    doc_id: Mapped[str | None] = mapped_column(String(128))
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    units: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    unit_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    cost_cny: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ok'")
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    usage_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class BidApprovalRow(Base):
+    __tablename__ = "bid_approvals"
+    __table_args__ = (
+        Index("ix_bid_approvals_run_created", "run_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_status: Mapped[str | None] = mapped_column(String(8))
+    approved_by: Mapped[str | None] = mapped_column(String(36))
+    approved_by_name: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class BidCommentRow(Base):
+    __tablename__ = "bid_comments"
+    __table_args__ = (
+        Index("ix_bid_comments_run_created", "run_id", "created_at"),
+        Index("ix_bid_comments_project_status", "project_id", "status"),
+        Index("ix_bid_comments_assignee", "assignee_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    # Author/assignee identifiers are snapshots, not foreign keys: local
+    # development uses a synthetic user, and deleting a user must not delete
+    # the review discussion. Display names are snapshotted for the same reason.
+    author_id: Mapped[str | None] = mapped_column(String(36))
+    author_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    mentions: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    assignee_id: Mapped[str | None] = mapped_column(String(36))
+    assignee_name: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'open'")
+    )
+    resolved_by: Mapped[str | None] = mapped_column(String(36))
+    resolved_by_name: Mapped[str | None] = mapped_column(String(128))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class FeedbackEventRow(Base):
+    __tablename__ = "feedback_events"
+    __table_args__ = (
+        Index("ix_feedback_run_section_created", "run_id", "section_id", "created_at"),
+        Index("ix_feedback_project_created", "project_id", "created_at"),
+        Index("ix_feedback_type_created", "event_type", "created_at"),
+        Index("ix_feedback_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    user_id: Mapped[str | None] = mapped_column(String(36))
+    user_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("''")
+    )
+    event_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    score: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class BidQualitySnapshotRow(Base):
+    __tablename__ = "bid_quality_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "content_sha256",
+            name="uq_quality_snapshots_run_content",
+        ),
+        Index("ix_quality_snapshots_project_created", "project_id", "created_at"),
+        Index("ix_quality_snapshots_gate_created", "gate_status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_status: Mapped[str | None] = mapped_column(String(8))
+    compliance_status: Mapped[str | None] = mapped_column(String(8))
+    consistency_status: Mapped[str | None] = mapped_column(String(16))
+    requirements_coverage: Mapped[float | None] = mapped_column(Float)
+    citation_coverage: Mapped[float | None] = mapped_column(Float)
+    model: Mapped[str | None] = mapped_column(String(64))
+    summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class NotificationPreferenceRow(Base):
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    comment_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    run_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    budget_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class NotificationRow(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "dedupe_key",
+            name="uq_notifications_user_dedupe",
+        ),
+        Index(
+            "ix_notifications_user_read_created",
+            "user_id",
+            "read_at",
+            "created_at",
+        ),
+        Index("ix_notifications_project_created", "project_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Recipients are project members at creation time; no FK so a deleted
+    # account does not erase its unread history.
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    resource_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("''")
+    )
+    resource_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    doc_id: Mapped[str | None] = mapped_column(String(128))
+    comment_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    actor_id: Mapped[str | None] = mapped_column(String(36))
+    actor_name: Mapped[str | None] = mapped_column(String(128))
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class RetrievalSnapshotRow(Base):
+    __tablename__ = "retrieval_snapshots"
+    __table_args__ = (
+        Index("ix_retrieval_snapshots_run_section", "run_id", "section_id"),
+        Index("ix_retrieval_snapshots_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    hits: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    evidence_chars: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_key: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class PromptRegistryRow(Base):
+    __tablename__ = "prompt_registry"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "version", name="uq_prompt_registry_kind_version"
+        ),
+        Index("ix_prompt_registry_kind", "kind", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    template_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    template_path: Mapped[str] = mapped_column(Text, nullable=False)
+    model_default: Mapped[str | None] = mapped_column(String(64))
+    temperature_default: Mapped[float | None] = mapped_column(Float)
+    git_sha: Mapped[str | None] = mapped_column(String(64))
+    deprecated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
 
 

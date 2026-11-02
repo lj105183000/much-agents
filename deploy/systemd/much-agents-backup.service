@@ -1,0 +1,14 @@
+[Unit]
+Description=Much Agents encrypted backup
+Documentation=file:///opt/much-agents/docs/deployment.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/much-agents
+EnvironmentFile=-/etc/much-agents/backup.env
+ExecStart=/opt/much-agents/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

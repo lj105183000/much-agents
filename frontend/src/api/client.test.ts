@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  api,
   request,
   setAuthToken,
   setProjectId,
@@ -24,6 +25,110 @@ function unauthorizedResponse(): Response {
     headers: { 'Content-Type': 'application/json' },
   })
 }
+
+describe('bid approval endpoints', () => {
+  it('reads, approves and rejects a run', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ run_id: 'run-1', status: 'approved' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await api.getBidApproval('run-1')
+    await api.approveBidRun('run-1', { reason: 'ok' })
+    await api.rejectBidRun('run-1', { reason: 'no' })
+
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [string, RequestInit]
+    >
+    expect(calls[0][0]).toContain('/api/bid-runs/run-1/approval')
+    expect(calls[1][0]).toContain('/api/bid-runs/run-1/approve')
+    expect(calls[1][1].method).toBe('POST')
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ reason: 'ok' })
+    expect(calls[2][0]).toContain('/api/bid-runs/run-1/reject')
+  })
+})
+
+describe('project DOCX templates', () => {
+  it('uploads, lists, updates, downloads and deletes templates', async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/download')) {
+          return new Response(new Blob(['PK']), { status: 200 })
+        }
+        if (url.includes('/preview?')) {
+          return new Response(new Blob(['PNG']), {
+            status: 200,
+            headers: {
+              'X-Template-Preview-Page': '1',
+              'X-Template-Preview-Pages': '3',
+            },
+          })
+        }
+        if (init?.method === 'DELETE') {
+          return new Response(null, { status: 204 })
+        }
+        return new Response(
+          JSON.stringify({
+            templates: [],
+            id: 'template-1',
+            name: '企业模板',
+            is_active: true,
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        )
+      },
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    setAuthToken('token')
+    setProjectId(PROJECT_ID)
+
+    await api.listBidTemplates()
+    await api.uploadBidTemplate(new File(['docx'], 'corporate.docx'), {
+      name: '企业模板',
+      description: '页眉页脚',
+    })
+    await api.updateBidTemplate('template-1', { is_active: true })
+    const blob = await api.downloadBidTemplate('template-1')
+    const preview = await api.previewBidTemplate('template-1', 1)
+    await api.deleteBidTemplate('template-1')
+
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [RequestInfo | URL, RequestInit]
+    >
+    const headers = calls.map((call) => new Headers(call[1].headers))
+    expect(String(calls[0][0])).toContain('/api/templates')
+    expect(calls[0][1].method).toBeUndefined()
+    expect(String(calls[1][0])).toContain('/api/templates')
+    expect(calls[1][1].method).toBe('POST')
+    const form = calls[1][1].body as FormData
+    expect(form.get('name')).toBe('企业模板')
+    expect(form.get('description')).toBe('页眉页脚')
+    expect((form.get('file') as File).name).toBe('corporate.docx')
+    expect(String(calls[2][0])).toContain('/api/templates/template-1')
+    expect(calls[2][1].method).toBe('PATCH')
+    expect(JSON.parse(String(calls[2][1].body))).toEqual({ is_active: true })
+    expect(String(calls[3][0])).toContain('/api/templates/template-1/download')
+    expect(String(calls[4][0])).toContain(
+      '/api/templates/template-1/preview?page=1',
+    )
+    expect(String(calls[5][0])).toContain('/api/templates/template-1')
+    expect(calls[5][1].method).toBe('DELETE')
+    expect(await blob.text()).toBe('PK')
+    expect(await preview.blob.text()).toBe('PNG')
+    expect(preview.page).toBe(1)
+    expect(preview.pages).toBe(3)
+    expect(headers.every((header) => header.get('X-Project-Id') === PROJECT_ID))
+      .toBe(true)
+  })
+})
 
 describe('project context header', () => {
   it('adds X-Project-Id to business requests and skips exempt endpoints', async () => {

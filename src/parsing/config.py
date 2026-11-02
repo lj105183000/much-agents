@@ -101,6 +101,8 @@ class Settings:
     embedding_model: str
     embedding_batch_size: int
     embedding_timeout: float
+    mineru_price_per_page_cny: float
+    embedding_price_per_1k_tokens_cny: float
 
     chroma_host: str
     chroma_port: int
@@ -167,6 +169,15 @@ class Settings:
             embedding_model=_str(env, "EMBEDDING_MODEL", "embedding-3"),
             embedding_batch_size=_int(env, "EMBEDDING_BATCH_SIZE", 16, minimum=1),
             embedding_timeout=_float(env, "EMBEDDING_TIMEOUT", 60.0, minimum=1.0),
+            mineru_price_per_page_cny=_float(
+                env, "MINERU_PRICE_PER_PAGE_CNY", 0.0, minimum=0.0
+            ),
+            embedding_price_per_1k_tokens_cny=_float(
+                env,
+                "EMBEDDING_PRICE_PER_1K_TOKENS_CNY",
+                0.0,
+                minimum=0.0,
+            ),
             chroma_host=_str(env, "CHROMA_HOST", "localhost"),
             chroma_port=_int(env, "CHROMA_PORT", 8000, minimum=1),
             chroma_collection=_str(env, "CHROMA_COLLECTION", "bidding_documents"),

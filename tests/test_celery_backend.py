@@ -48,6 +48,7 @@ def test_celery_dispatcher_publishes_task() -> None:
             "task_id": "job-1",
             "queue": PARSE_QUEUE,
             "ignore_result": True,
+            "headers": None,
         }
     ]
 
@@ -239,15 +240,14 @@ def test_celery_mode_bid_submit_publishes_write_bid_task(
         body = response.json()
         assert body["kind"] == "bid"
         job_id = body["job_id"]
-        assert fake.calls == [
-            {
-                "name": BID_TASK_NAME,
-                "args": [job_id],
-                "task_id": job_id,
-                "queue": BID_QUEUE,
-                "ignore_result": True,
-            }
-        ]
+        assert len(fake.calls) == 1
+        call = fake.calls[0]
+        assert call["name"] == BID_TASK_NAME
+        assert call["args"] == [job_id]
+        assert call["task_id"] == job_id
+        assert call["queue"] == BID_QUEUE
+        assert call["ignore_result"] is True
+        assert call["headers"]["request_id"]
         view = client.get(body["poll_url"]).json()
         assert view["status"] == "queued"
         assert view["kind"] == "bid"

@@ -68,9 +68,13 @@ class BidSettings:
     max_tokens: int = 8192
     temperature: float = 0.2
     max_review_revisions: int = 1
+    heartbeat_seconds: int = 60
     llm_concurrency: int = 2
     use_chroma: bool = True
     profile_max_mb: int = 5
+    section_version_keep: int = 50
+    requirements_block: bool = False
+    citation_min_coverage: float = 0.8
     figures_enabled: bool = True
     figures_max: int = 4
     figures_use_llm: bool = True
@@ -79,6 +83,9 @@ class BidSettings:
     figure_image_width_cm: float = 15.5
     figure_page_estimate: float = 0.5
     figures_external: bool = False
+    docx_template: str = ""
+    run_budget_cents: int = 0
+    budget_enforcement: str = "warn"
 
     @property
     def parsed_dir(self) -> Path:
@@ -109,6 +116,11 @@ class BidSettings:
         bids_dir = Path(_str(env, "BIDS_DIR", str(base.project_root / "upload" / "bids")))
         if not bids_dir.is_absolute():
             bids_dir = base.project_root / bids_dir
+        budget_enforcement = (
+            _str(env, "BID_BUDGET_ENFORCEMENT", "warn").strip().lower()
+        )
+        if budget_enforcement not in {"warn", "stop"}:
+            budget_enforcement = "warn"
 
         return cls(
             base=base,
@@ -119,9 +131,19 @@ class BidSettings:
             max_tokens=_int(env, "BID_MAX_TOKENS", 8192, minimum=512),
             temperature=_float(env, "BID_TEMPERATURE", 0.2, minimum=0.0),
             max_review_revisions=_int(env, "BID_MAX_REVIEW_REVISIONS", 1, minimum=0),
+            heartbeat_seconds=_int(env, "BID_HEARTBEAT_SECONDS", 60, minimum=5),
             llm_concurrency=_int(env, "BID_LLM_CONCURRENCY", 2, minimum=1),
             use_chroma=_bool(env, "BID_USE_CHROMA", True),
             profile_max_mb=_int(env, "BID_PROFILE_MAX_MB", 5, minimum=1),
+            section_version_keep=_int(
+                env, "BID_SECTION_VERSION_KEEP", 50, minimum=1
+            ),
+            requirements_block=_bool(
+                env, "BID_REQUIREMENTS_BLOCK", False
+            ),
+            citation_min_coverage=_float(
+                env, "BID_CITATION_MIN_COVERAGE", 0.8, minimum=0.0
+            ),
             figures_enabled=_bool(env, "BID_FIGURES_ENABLED", True),
             figures_max=_int(env, "BID_FIGURES_MAX", 4, minimum=0),
             figures_use_llm=_bool(env, "BID_FIGURES_USE_LLM", True),
@@ -134,6 +156,11 @@ class BidSettings:
                 env, "BID_FIGURES_PAGE_ESTIMATE", 0.5, minimum=0.0
             ),
             figures_external=_bool(env, "BID_FIGURES_EXTERNAL", False),
+            docx_template=_str(env, "BID_DOCX_TEMPLATE", "").strip(),
+            run_budget_cents=_int(
+                env, "BID_RUN_BUDGET_CENTS", 0, minimum=0
+            ),
+            budget_enforcement=budget_enforcement,
         )
 
 

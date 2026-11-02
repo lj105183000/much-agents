@@ -42,6 +42,14 @@ _NON_NAME_TOKENS = (
     "详见",
     "附件",
     "待填写",
+    "工程师",
+    "建造师",
+    "经理",
+    "董事长",
+    "总监",
+    "职称",
+    "职务",
+    "岗位",
 )
 
 # Table header cells are sometimes picked up as values (e.g. the row
@@ -66,6 +74,14 @@ _HEADER_VALUES = {
     "工期",
     "计划工期",
     "服务期",
+    "计划开工日期",
+    "计划完成日期",
+    "计划竣工日期",
+    "开工日期",
+    "完工日期",
+    "竣工日期",
+    "开始日期",
+    "完成日期",
     "质量要求",
     "质量标准",
     "质量目标",
@@ -598,6 +614,11 @@ def build_consistency_ledger(
         for section_id, markdown in section_markdowns.items():
             section = section_meta.get(section_id)
             if section is None or not (markdown or "").strip():
+                continue
+            # The evaluation index is a navigation table of review stages and
+            # criteria ("符合性" etc.), not a bid statement.  Scanning it would
+            # turn those criteria into conflicting fact values.
+            if section.kind == "index":
                 continue
             if section.kind == "narrative" and not section.selected:
                 continue

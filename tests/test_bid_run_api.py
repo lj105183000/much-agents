@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from api.bid_run_repo import RunUsageRecord
 from api.bid_runs import BidRunService
 from api.jobs import JobStore
 from api.runner import InlineRunner
@@ -24,7 +25,7 @@ from tests.fakes import (
 )
 
 
-def make_app(tmp_path: Path, *, llm_factory=None):
+def make_app(tmp_path: Path, *, llm_factory=None, require_approval: bool = False):
     write_parsed_fixture(tmp_path)
     repo = FakeBidRunRepository()
     bid_settings = make_bid_settings(tmp_path)
@@ -38,6 +39,7 @@ def make_app(tmp_path: Path, *, llm_factory=None):
         store=store,
         dispatch=dispatcher.dispatch,
         llm_factory=llm_factory,
+        require_approval=require_approval,
     )
     app = create_app(
         api_settings=make_api_settings(tmp_path, TASK_BACKEND="local"),
@@ -352,6 +354,14 @@ def test_bid_run_generate_validation_and_stale_resume(tmp_path: Path) -> None:
 
 
 
+def _section_sha(client, run_id: str, section_id: str = "narr-06-01") -> str:
+    response = client.get(
+        f"/api/bid-runs/{run_id}/sections/{section_id}"
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["content_sha256"]
+
+
 def _mark_section_final(repo, run_id: str, section_id: str = "narr-06-01") -> None:
     repo.states[run_id] = [
         replace(
@@ -393,6 +403,20 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         assert (run_dir / "report.json").is_file()
         assert (run_dir / "outline.json").is_file()
         assert (run_dir / "gate.json").is_file()
+        assert (run_dir / "requirements.json").is_file()
+        assert (run_dir / "citations.json").is_file()
+        requirements = client.get(f"/api/bid-runs/{run_id}/requirements")
+        assert requirements.status_code == 200
+        assert "summary" in requirements.json()
+        citations = client.get(f"/api/bid-runs/{run_id}/citations")
+        assert citations.status_code == 200
+        assert "summary" in citations.json()
+        report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+        provenance = report["provenance"]
+        assert report["model"] == provenance["model"]
+        assert provenance["llm_calls"] >= 0
+        assert len(provenance["prompt_fingerprint"]) == 64
+        assert "assemble" in provenance["timings_seconds"]
 
         fetched = client.get(f"/api/bid-runs/{run_id}/gate")
         assert fetched.status_code == 200
@@ -401,10 +425,563 @@ def test_bid_run_assemble_gate_and_export(tmp_path: Path) -> None:
         exported = client.post(f"/api/bid-runs/{run_id}/export")
         assert exported.status_code == 200
         assert exported.content[:2] == b"PK"
+        assert repo.runs[run_id].content_sha256
+
+        (run_dir / "bid.md").write_text("tampered\n", encoding="utf-8")
+        tampered = client.post(f"/api/bid-runs/{run_id}/export")
+        assert tampered.status_code == 409
+        assert "re-assemble" in tampered.json()["detail"]
 
         detail = client.get(f"/api/bid-runs/{run_id}").json()
         assert detail["status"] == "assembled"
         assert detail["gate_status"] == gate["status"]
+
+
+def test_bid_run_citations_are_validated_and_stripped(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.states[run_id] = [
+            replace(
+                item,
+                final_markdown="合同金额 100万元[E1]。质量要求合格。",
+            )
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+        repo.retrieval_snapshots.append(
+            {
+                "run_id": run_id,
+                "section_id": "narr-06-01",
+                "mode": "semantic",
+                "query_text": "query",
+                "query_sha256": "a" * 64,
+                "top_k": 1,
+                "hits": [
+                    {
+                        "chunk_id": "doc-1:s1:0001",
+                        "page_start": 3,
+                        "page_end": 3,
+                        "section_path": "第八章 > 六、施工组织设计",
+                        "score": 0.9,
+                        "text_sha256": "b" * 64,
+                        "text_chars": 20,
+                    }
+                ],
+                "evidence_chars": 20,
+            }
+        )
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        bid_md = (run_dir / "bid.md").read_text(encoding="utf-8")
+        section_md = (run_dir / "sections" / "narr-06-01.md").read_text(
+            encoding="utf-8"
+        )
+        assert "[E1]" not in bid_md
+        assert "[E1]" not in section_md
+        assert "合同金额 100万元" in bid_md
+
+        citations = client.get(
+            f"/api/bid-runs/{run_id}/citations"
+        ).json()
+        section = next(
+            item
+            for item in citations["sections"]
+            if item["section_id"] == "narr-06-01"
+        )
+        assert section["coverage"] == 1.0
+        assert section["citations"][0]["evidence_id"] == "E1"
+        assert section["citations"][0]["page_start"] == 3
+        assert citations["summary"]["invalid_markers"] == 0
+
+
+def test_bid_run_pdf_export_uses_converter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def fake_convert(docx_path, pdf_path, **kwargs):
+        Path(pdf_path).write_bytes(b"%PDF-1.4\n% fake pdf\n")
+        return Path(pdf_path)
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_pdf", fake_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/pdf?force=true&reason=test"
+        )
+        assert exported.status_code == 200, exported.text
+        assert exported.content.startswith(b"%PDF-")
+        assert exported.headers["content-type"].startswith("application/pdf")
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "bid.pdf").is_file()
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "修改后正文，需要重新导出。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert not (run_dir / "bid.pdf").is_file()
+
+
+def test_bid_run_pdf_export_reports_converter_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.bidding.errors import PdfExportError
+
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def failing_convert(docx_path, pdf_path, **kwargs):
+        raise PdfExportError("LibreOffice is not installed")
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_pdf", failing_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/pdf?force=true&reason=test"
+        )
+        assert exported.status_code == 503
+        assert "LibreOffice" in exported.json()["detail"]
+
+
+def test_bid_run_doc_export_uses_converter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    doc_magic = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+    def fake_convert(docx_path, doc_path, **kwargs):
+        Path(doc_path).write_bytes(doc_magic + b"fake word 97 body")
+        return Path(doc_path)
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_doc", fake_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/doc?force=true&reason=test"
+        )
+        assert exported.status_code == 200, exported.text
+        assert exported.content.startswith(doc_magic)
+        assert "bid.doc" in exported.headers["content-disposition"]
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "bid.doc").is_file()
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "修改后正文，需要重新导出 DOC。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert not (run_dir / "bid.doc").is_file()
+
+
+def test_bid_run_doc_export_reports_converter_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.bidding.doc_export import DocExportError
+
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def failing_convert(docx_path, doc_path, **kwargs):
+        raise DocExportError("LibreOffice is not installed")
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_doc", failing_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/doc?force=true&reason=test"
+        )
+        assert exported.status_code == 503
+        assert "LibreOffice" in exported.json()["detail"]
+
+
+def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        assert len(repo.quality_snapshots) == 1
+        snapshot = repo.quality_snapshots[0]
+        assert snapshot.run_id == run_id
+        assert snapshot.gate_status in {"pass", "warn", "block"}
+
+        asyncio.run(
+            repo.add_external_usage(
+                [
+                    {
+                        "project_id": "00000000-0000-0000-0000-000000000001",
+                        "doc_id": "doc-1",
+                        "job_id": "job-1",
+                        "provider": "mineru",
+                        "operation": "parse",
+                        "units": 10,
+                        "unit_type": "page",
+                        "cost_cny": 0.2,
+                        "status": "ok",
+                    }
+                ]
+            )
+        )
+        repo.run_usage[run_id] = RunUsageRecord(
+            run_id=run_id,
+            project_id="00000000-0000-0000-0000-000000000001",
+            llm_calls=2,
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            cost_cny=0.5,
+            retries=0,
+            fallback_calls=0,
+            duration_ms=10_000,
+            updated_at=datetime.now(timezone.utc),
+        )
+        usage = client.get(f"/api/bid-runs/{run_id}/usage")
+        assert usage.status_code == 200, usage.text
+        assert usage.json()["cost_cny"] == 0.5
+        assert usage.json()["external"][0]["provider"] == "mineru"
+        assert usage.json()["run_budget_cents"] is None
+        analytics = client.get("/api/analytics/overview?days=30")
+        assert analytics.status_code == 200, analytics.text
+        payload = analytics.json()
+        assert payload["runs"]["total"] == 1
+        assert payload["quality"]["snapshots"] == 1
+        assert payload["usage"]["llm_calls"] == 0
+        assert payload["external"]["units"] == 10
+        assert payload["external"]["cost_cny"] == 0.2
+
+        feedback = client.post(
+            f"/api/bid-runs/{run_id}/feedback",
+            json={
+                "section_id": "narr-06-01",
+                "event_type": "rating",
+                "score": 5,
+                "reason": "内容完整，可采纳",
+            },
+        )
+        assert feedback.status_code == 201, feedback.text
+        assert feedback.json()["score"] == 5
+        assert feedback.json()["content_sha256"]
+
+        listed = client.get(f"/api/bid-runs/{run_id}/feedback")
+        assert listed.status_code == 200
+        assert len(listed.json()["feedback"]) == 1
+
+        missing_score = client.post(
+            f"/api/bid-runs/{run_id}/feedback",
+            json={"event_type": "rating"},
+        )
+        assert missing_score.status_code == 422
+
+        edit = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "人工修改后的章节正文，用于反馈事件验证。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edit.status_code == 200, edit.text
+        assert any(
+            record.event_type == "edit" for record in repo.feedback_events
+        )
+
+        refreshed = client.get("/api/analytics/overview?days=30").json()
+        assert refreshed["feedback"]["total"] == 2
+        assert refreshed["feedback"]["avg_rating"] == 5.0
+
+        trend = client.get("/api/analytics/budget-trend?days=30")
+        assert trend.status_code == 200, trend.text
+        assert trend.json()["days"] == 30
+        assert trend.json()["budget_cents"] is None
+        assert trend.json()["daily"][0]["cumulative_cost_cny"] == 0.0
+        unknown_project = client.get(
+            "/api/analytics/budget-trend?project_id=missing"
+        )
+        assert unknown_project.status_code == 404
+
+        exported = client.get("/api/analytics/export.csv?days=30")
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["content-type"].startswith("text/csv")
+        assert "Summary" in exported.text
+        assert "runs_total" in exported.text
+        assert "External" in exported.text
+        assert "mineru" in exported.text
+        assert "BudgetAlerts" in exported.text
+
+
+def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(
+        tmp_path, require_approval=True
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.get(f"/api/bid-runs/{run_id}/approval").json()["status"] == (
+            "not_requested"
+        )
+
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        denied = client.post(f"/api/bid-runs/{run_id}/export")
+        assert denied.status_code == 409
+        assert "approval" in denied.json()["detail"]
+
+        approved = client.post(
+            f"/api/bid-runs/{run_id}/approve", json={"reason": "内容确认"}
+        )
+        assert approved.status_code == 200, approved.text
+        approval = approved.json()
+        assert approval["status"] == "approved"
+        assert approval["content_sha256"]
+        history = client.get(f"/api/bid-runs/{run_id}/approvals")
+        assert history.status_code == 200
+        history_body = history.json()
+        assert (
+            history_body["current_content_sha256"]
+            == approval["content_sha256"]
+        )
+        assert history_body["approvals"][0]["status"] == "approved"
+        assert (
+            history_body["approvals"][0]["content_sha256"]
+            == approval["content_sha256"]
+        )
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 200
+
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "人工修改后的正文，用于触发新的内容哈希。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        reassembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert reassembled.status_code == 200, reassembled.text
+        stale = client.post(f"/api/bid-runs/{run_id}/export")
+        assert stale.status_code == 409
+        assert "approval" in stale.json()["detail"]
+
+        rejected = client.post(
+            f"/api/bid-runs/{run_id}/reject", json={"reason": "需重写"}
+        )
+        assert rejected.status_code == 200, rejected.text
+        assert rejected.json()["status"] == "rejected"
+        history_after = client.get(
+            f"/api/bid-runs/{run_id}/approvals"
+        ).json()
+        assert history_after["approvals"][0]["status"] == "rejected"
+        assert history_after["approvals"][0]["reason"] == "需重写"
+        assert len(history_after["approvals"]) >= 2
+
+
+def test_bid_run_section_versions_diff_and_restore(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        section_id = "narr-06-01"
+        _mark_section_final(repo, run_id)
+
+        listing = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        )
+        assert listing.status_code == 200, listing.text
+        versions = listing.json()["versions"]
+        assert len(versions) == 1
+        version = versions[0]
+        assert version["source"] == "draft"
+        assert version["content_sha256"]
+        assert version["outline_revision"] == 0
+
+        detail = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["markdown"].startswith("本工程施工组织设计")
+
+        same = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/diff"
+        )
+        assert same.status_code == 200, same.text
+        assert same.json()["changed"] is False
+
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/{section_id}",
+            json={
+                "markdown": "人工修改后的第二版正文。",
+                "expected_sha256": _section_sha(
+                    client, run_id, section_id
+                ),
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        versions_after_edit = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        ).json()["versions"]
+        assert len(versions_after_edit) == 2
+        assert versions_after_edit[0]["source"] == "manual"
+        assert versions_after_edit[0]["created_by"] == "local"
+        assert versions_after_edit[0]["created_by_name"] == "本地模式"
+
+        diff = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/diff"
+        )
+        assert diff.status_code == 200, diff.text
+        assert diff.json()["changed"] is True
+        assert "人工修改后的第二版正文" in diff.json()["diff"]
+
+        stale_restore = client.post(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore",
+            params={"expected_sha256": "0" * 64},
+        )
+        assert stale_restore.status_code == 409
+
+        restored = client.post(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions/{version['id']}/restore",
+            params={"expected_sha256": _section_sha(client, run_id, section_id)},
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["final_markdown"].startswith("本工程施工组织设计")
+        versions_after_restore = client.get(
+            f"/api/bid-runs/{run_id}/sections/{section_id}/versions"
+        ).json()["versions"]
+        assert len(versions_after_restore) == 3
+        assert versions_after_restore[0]["source"] == "manual"
+        assert versions_after_restore[0]["created_by_name"] == "本地模式"
+
+
+def test_bid_run_section_edit_rejects_stale_content_hash(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        stale_sha = _section_sha(client, run_id)
+
+        first = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "第一版人工正文。", "expected_sha256": stale_sha},
+        )
+        assert first.status_code == 200, first.text
+        current_sha = first.json()["content_sha256"]
+        assert current_sha != stale_sha
+
+        conflict = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={"markdown": "基于旧内容的第二版。", "expected_sha256": stale_sha},
+        )
+        assert conflict.status_code == 409
+        latest = client.get(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01"
+        ).json()
+        assert latest["final_markdown"] == "第一版人工正文。"
+        assert latest["content_sha256"] == current_sha
+        versions = client.get(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/versions"
+        ).json()["versions"]
+        assert len(versions) == 1
+        assert versions[0]["source"] == "manual"
+
+
+def test_force_override_is_valid_for_24_hours(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(
+        tmp_path, require_approval=True
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        repo.runs[run_id] = replace(
+            repo.runs[run_id],
+            gate_status="block",
+            gate={"status": "block", "checks": []},
+        )
+        service = app.state.bid_run_service
+        override = asyncio.run(
+            service.record_force_override(
+                run_id,
+                reason="客户要求先出稿",
+                actor_id="admin-1",
+                actor_name="管理员",
+            )
+        )
+        assert override is not None
+        assert override["override"] is True
+        assert override["created_at"]
+        assert client.post(f"/api/bid-runs/{run_id}/export").status_code == 200
+
+        expired = replace(
+            repo.approvals[run_id][-1],
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+        repo.approvals[run_id][-1] = expired
+        blocked = client.post(f"/api/bid-runs/{run_id}/export")
+        assert blocked.status_code == 409
 
 
 def test_bid_run_figures_api_and_regeneration(tmp_path: Path) -> None:
@@ -492,7 +1069,10 @@ def test_bid_run_edit_invalidates_figures_and_gate(tmp_path: Path) -> None:
 
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "人工修改后的施工组织设计正文。"},
+            json={
+                "markdown": "人工修改后的施工组织设计正文。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         assert not manifest.exists()
@@ -575,7 +1155,10 @@ def test_bid_run_manual_section_edit_and_gate(tmp_path: Path) -> None:
         dirty = "本工程施工组织设计正文。" * 40 + "合同金额 999万元。"
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": dirty},
+            json={
+                "markdown": dirty,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         body = edited.json()
@@ -624,7 +1207,10 @@ def test_bid_run_manual_section_edit_and_gate(tmp_path: Path) -> None:
         clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 40
         cleaned = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": clean},
+            json={
+                "markdown": clean,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert cleaned.status_code == 200
         assert not any(
@@ -652,31 +1238,47 @@ def test_bid_run_manual_edit_guards(tmp_path: Path) -> None:
 
         pending = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert pending.status_code == 409
 
         form = client.patch(
             f"/api/bid-runs/{run_id}/sections/form-09-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(
+                    client, run_id, "form-09-01"
+                ),
+            },
         )
         assert form.status_code == 422
 
         unselected = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-02",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(
+                    client, run_id, "narr-06-02"
+                ),
+            },
         )
         assert unselected.status_code == 422
 
         unknown = client.patch(
             f"/api/bid-runs/{run_id}/sections/unknown",
-            json={"markdown": "正文"},
+            json={"markdown": "正文", "expected_sha256": "0" * 64},
         )
         assert unknown.status_code == 404
 
         blank = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "   "},
+            json={
+                "markdown": "   ",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert blank.status_code == 422
 
@@ -689,7 +1291,10 @@ def test_bid_run_manual_edit_guards(tmp_path: Path) -> None:
         )
         active = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": "正文"},
+            json={
+                "markdown": "正文",
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert active.status_code == 409
 
@@ -744,7 +1349,7 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         repo.runs[run_id] = replace(
             repo.runs[run_id],
             status="assembled",
-            attempt=2,
+            attempt=1,
             gate_status="warn",
             gate={"status": "warn", "checks": []},
         )
@@ -768,7 +1373,7 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         assert state.warnings == []
         run = repo.runs[run_id]
         assert run.status == "queued"
-        assert run.attempt == 1
+        assert run.attempt == 2
         assert run.gate is None
         assert run.gate_status is None
 
@@ -787,8 +1392,36 @@ def test_bid_run_section_regenerate_preserves_old_content(tmp_path: Path) -> Non
         again = client.post(
             f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
         )
-        assert again.status_code == 202, again.text
-        assert repo.runs[run_id].attempt == 1
+        assert again.status_code == 409
+        assert repo.runs[run_id].attempt == 2
+
+
+def test_bid_run_section_regenerate_respects_section_attempt_limit(
+    tmp_path: Path,
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        repo.runs[run_id] = replace(
+            repo.runs[run_id], status="assembled", attempt=0
+        )
+        repo.states[run_id] = [
+            replace(item, attempt=2)
+            if item.section_id == "narr-06-01"
+            else item
+            for item in repo.states[run_id]
+        ]
+
+        response = client.post(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01/regenerate"
+        )
+        assert response.status_code == 409
+        assert "maximum attempts" in response.json()["detail"]
 
 
 def test_bid_run_section_regenerate_rolls_back_on_enqueue_failure(
@@ -942,7 +1575,10 @@ def test_bid_run_compliance_check_and_stale_reports_after_edit(tmp_path: Path) -
         clean = "本工程施工组织设计正文，覆盖施工方案与质量安全要求。" * 20
         edited = client.patch(
             f"/api/bid-runs/{run_id}/sections/narr-06-01",
-            json={"markdown": clean},
+            json={
+                "markdown": clean,
+                "expected_sha256": _section_sha(client, run_id),
+            },
         )
         assert edited.status_code == 200, edited.text
         assert edited.json()["final_source"] == "manual"
@@ -1001,6 +1637,7 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
             f"/api/bid-runs/{run_id}/compliance/fixes/apply",
             json={
                 "section_id": item["section_id"],
+                "expected_sha256": item["section_sha256"],
                 "find": item["find"],
                 "replace": item["replace"],
             },
@@ -1010,6 +1647,11 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
         assert detail["final_source"] == "manual"
         assert "错误建设有限公司" not in detail["final_markdown"]
         assert "测试建设有限公司" in detail["final_markdown"]
+        versions = client.get(
+            f"/api/bid-runs/{run_id}/sections/{detail['section_id']}/versions"
+        ).json()["versions"]
+        assert versions[0]["source"] == "manual"
+        assert versions[0]["created_by_name"] == "本地模式"
         run = repo.runs[run_id]
         assert run.status == "paused"
         assert run.stage == "edited"
@@ -1021,6 +1663,7 @@ def test_bid_run_fix_plan_and_apply_clears_gate(tmp_path: Path) -> None:
             f"/api/bid-runs/{run_id}/compliance/fixes/apply",
             json={
                 "section_id": item["section_id"],
+                "expected_sha256": item["section_sha256"],
                 "find": item["find"],
                 "replace": item["replace"],
             },

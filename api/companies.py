@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from src.bidding.errors import BidInputError
 from src.bidding.profile import BidderProfile
 
-from .database import CompanyRow, make_engine, make_session_factory
+from .database import (
+    CompanyQualificationRow,
+    CompanyRow,
+    make_engine,
+    make_session_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,22 @@ class CompanyRecord:
 
     def to_profile(self) -> BidderProfile:
         return BidderProfile.from_mapping(self.profile)
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyQualificationRecord:
+    id: str
+    company_id: str
+    name: str
+    qualification_type: str
+    certificate_no: str | None
+    issuer: str | None
+    issued_at: date | None
+    expires_at: date | None
+    notes: str
+    created_by: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class CompanyService:
@@ -198,6 +219,190 @@ class CompanyService:
                 return self._record(row)
         except SQLAlchemyError as exc:
             logger.exception("could not update company %s", company_id)
+            raise CompanyError(503, "company database is unavailable") from exc
+
+    @staticmethod
+    def _qualification_record(
+        row: CompanyQualificationRow,
+    ) -> CompanyQualificationRecord:
+        now = datetime.now(timezone.utc)
+        return CompanyQualificationRecord(
+            id=row.id,
+            company_id=row.company_id,
+            name=row.name,
+            qualification_type=row.qualification_type or "",
+            certificate_no=row.certificate_no,
+            issuer=row.issuer,
+            issued_at=row.issued_at,
+            expires_at=row.expires_at,
+            notes=row.notes or "",
+            created_by=row.created_by,
+            created_at=row.created_at or now,
+            updated_at=row.updated_at or now,
+        )
+
+    @staticmethod
+    def _validate_qualification(
+        *,
+        name: str,
+        issued_at: date | None,
+        expires_at: date | None,
+    ) -> str:
+        clean = (name or "").strip()
+        if not clean:
+            raise CompanyError(400, "资质名称不能为空")
+        if len(clean) > 200:
+            raise CompanyError(400, "资质名称过长")
+        if issued_at and expires_at and expires_at < issued_at:
+            raise CompanyError(422, "到期日期不能早于发证日期")
+        return clean
+
+    async def list_qualifications(
+        self, company_id: str
+    ) -> list[CompanyQualificationRecord]:
+        self._require_enabled()
+        assert self._session_factory is not None
+        try:
+            async with self._session_factory() as session:
+                company = await session.get(CompanyRow, company_id)
+                if company is None:
+                    raise CompanyError(404, "公司不存在")
+                rows = (
+                    await session.execute(
+                        select(CompanyQualificationRow)
+                        .where(
+                            CompanyQualificationRow.company_id == company_id
+                        )
+                        .order_by(
+                            CompanyQualificationRow.expires_at.asc().nulls_last(),
+                            CompanyQualificationRow.created_at.desc(),
+                        )
+                    )
+                ).scalars().all()
+                return [self._qualification_record(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.exception("could not list qualifications for %s", company_id)
+            raise CompanyError(503, "company database is unavailable") from exc
+
+    async def create_qualification(
+        self,
+        company_id: str,
+        *,
+        name: str,
+        qualification_type: str,
+        certificate_no: str | None,
+        issuer: str | None,
+        issued_at: date | None,
+        expires_at: date | None,
+        notes: str,
+        created_by: str | None,
+    ) -> CompanyQualificationRecord:
+        self._require_enabled()
+        assert self._session_factory is not None
+        clean = self._validate_qualification(
+            name=name, issued_at=issued_at, expires_at=expires_at
+        )
+        row = CompanyQualificationRow(
+            id=uuid4().hex,
+            company_id=company_id,
+            name=clean,
+            qualification_type=(qualification_type or "").strip()[:64],
+            certificate_no=(certificate_no or "").strip() or None,
+            issuer=(issuer or "").strip() or None,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            notes=(notes or "").strip(),
+            created_by=created_by,
+        )
+        try:
+            async with self._session_factory() as session:
+                company = await session.get(CompanyRow, company_id)
+                if company is None:
+                    raise CompanyError(404, "公司不存在")
+                session.add(row)
+                await session.commit()
+                await session.refresh(row)
+                return self._qualification_record(row)
+        except SQLAlchemyError as exc:
+            logger.exception("could not create qualification for %s", company_id)
+            raise CompanyError(503, "company database is unavailable") from exc
+
+    async def update_qualification(
+        self,
+        company_id: str,
+        qualification_id: str,
+        *,
+        fields: dict[str, Any],
+    ) -> CompanyQualificationRecord | None:
+        self._require_enabled()
+        assert self._session_factory is not None
+        try:
+            async with self._session_factory() as session:
+                row = await session.get(
+                    CompanyQualificationRow, qualification_id
+                )
+                if row is None or row.company_id != company_id:
+                    return None
+                validated = dict(fields)
+                if "name" in validated and validated["name"] is None:
+                    raise CompanyError(422, "资质名称不能为空")
+                if "name" in validated:
+                    validated["name"] = self._validate_qualification(
+                        name=str(validated["name"]),
+                        issued_at=validated.get("issued_at", row.issued_at),
+                        expires_at=validated.get("expires_at", row.expires_at),
+                    )
+                elif "issued_at" in validated or "expires_at" in validated:
+                    self._validate_qualification(
+                        name=row.name,
+                        issued_at=validated.get("issued_at", row.issued_at),
+                        expires_at=validated.get("expires_at", row.expires_at),
+                    )
+                for key in (
+                    "name",
+                    "qualification_type",
+                    "certificate_no",
+                    "issuer",
+                    "issued_at",
+                    "expires_at",
+                    "notes",
+                ):
+                    if key not in validated:
+                        continue
+                    value = validated[key]
+                    if key in {"certificate_no", "issuer"}:
+                        value = (str(value).strip() if value else None) or None
+                    elif key in {"qualification_type", "notes"}:
+                        value = str(value or "").strip()
+                    setattr(row, key, value)
+                await session.commit()
+                await session.refresh(row)
+                return self._qualification_record(row)
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "could not update qualification %s", qualification_id
+            )
+            raise CompanyError(503, "company database is unavailable") from exc
+
+    async def delete_qualification(
+        self, company_id: str, qualification_id: str
+    ) -> bool:
+        self._require_enabled()
+        assert self._session_factory is not None
+        try:
+            async with self._session_factory() as session:
+                row = await session.get(
+                    CompanyQualificationRow, qualification_id
+                )
+                if row is None or row.company_id != company_id:
+                    return False
+                await session.delete(row)
+                await session.commit()
+                return True
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "could not delete qualification %s", qualification_id
+            )
             raise CompanyError(503, "company database is unavailable") from exc
 
     async def delete(self, company_id: str) -> bool:

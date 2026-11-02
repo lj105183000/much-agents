@@ -1,6 +1,6 @@
 # 生产部署与运维（P0-D）
 
-> 状态：已实现（2026-10-24）。目标形态是**单台 Linux 主机 + Docker Compose + Nginx TLS** 的内网小团队部署。Windows `start.bat` 仍用于本机开发，不是生产方案。
+> 状态：已实现（2026-10-24）。目标形态是**单台 Linux 主机 + Docker Compose + Nginx TLS** 的内网小团队部署。Windows `start.bat` 仍用于本机开发，不是生产方案。干净主机的自动/人工验收清单见 [`production-acceptance.md`](production-acceptance.md)。
 
 ## 1. 拓扑
 
@@ -46,6 +46,7 @@
 - `openssl`（生成自签证书）与 `bash`。
 - 至少 4 GB 内存、20 GB 可用磁盘（含镜像、Postgres、MinIO、Chroma）。
 - 部署机可访问模型 API（DeepSeek/智谱/MinerU）；完全离线时这些功能会降级，见第 11 节。
+- PDF 导出依赖 Headless LibreOffice（`soffice`/`libreoffice`，或设置 `SOFFICE_PATH`）。生产镜像的 `api` 阶段已安装 LibreOffice Writer；非 Docker 部署需自行安装。未安装时 DOCX 导出不受影响，PDF 导出返回 503。
 
 ## 3. 首次部署
 
@@ -195,7 +196,27 @@ scripts/backup.sh                              # 默认 backups/<UTC 时间戳>/
 scripts/backup.sh /mnt/nas/much-agents/20261024
 BACKUP_CHROMA=1 scripts/backup.sh              # 额外备份 Chroma 卷
 BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天）
+# 加密归档 + 异地副本
+BACKUP_ENCRYPT=age BACKUP_AGE_RECIPIENT=age1... \
+  BACKUP_OFFSITE_TARGET=remote:much-agents-backups scripts/backup.sh
+# 让 node_exporter 抓取最后成功时间
+BACKUP_METRICS_DIR=/var/lib/node_exporter/textfile scripts/backup.sh
 ```
+
+### 6.1 自动调度
+
+仓库提供 `deploy/systemd/much-agents-backup.{service,timer}`：
+
+```bash
+sudo cp deploy/systemd/much-agents-backup.* /etc/systemd/system/
+sudo install -d -m 700 /etc/much-agents
+sudoedit /etc/much-agents/backup.env   # BACKUP_ENCRYPT/BACKUP_AGE_RECIPIENT/BACKUP_OFFSITE_TARGET 等
+sudo systemctl daemon-reload
+sudo systemctl enable --now much-agents-backup.timer
+systemctl list-timers much-agents-backup.timer
+```
+
+定时器默认每天 02:00（服务器时区）执行，`Persistent=true` 补跑错过的窗口。
 
 内容：
 
@@ -210,7 +231,9 @@ BACKUP_RETENTION_DAYS=30 scripts/backup.sh     # 修改保留期（默认 14 天
 - 脚本在 Git Bash/MSYS 下会用 `cygpath -m` 转换 Docker bind mount 路径，便于 Windows 本机演练；生产 Linux 主机行为不变。
 - 如果 MinIO 备份为空，脚本默认失败，避免生成一个恢复时会清空 bucket 的不可用备份。确实使用空 bucket 时才设置 `ALLOW_EMPTY_MINIO=1`。
 - `deploy/env.production` 与 TLS 私钥**不在备份内**，单独加密保存。
-- 保留策略只删除 `backups/` 下的旧目录；自定义目标目录需自行清理。
+- `BACKUP_ENCRYPT=age|gpg` 会额外生成 `backups/<timestamp>.tar.gz.age|gpg` 供异地保存；本地目录仍是快速恢复源，主机磁盘应启用全盘加密。`BACKUP_OFFSITE_TARGET` 用 `rclone`（`remote:path`）或 `rsync`（本地/NAS 路径）推送该加密归档。
+- 保留策略删除 `backups/` 下的旧目录与旧加密归档；自定义目标目录需自行清理。
+- 加密私钥/身份文件必须与备份分开保存；丢失后无法解密异地归档。
 
 ## 7. 恢复
 
@@ -231,6 +254,20 @@ ALLOW_EMPTY_MINIO=1 scripts/restore.sh <dir>        # 仅限确实为空的 buck
 - 恢复顺序是先 MinIO、后 PostgreSQL。任一步失败时脚本退出，**API/worker 保持停止**，不会把半恢复的数据库暴露给用户；排查后重跑同一备份，或改用更早的备份。脚本不自动执行迁移。
 
 恢复后必须验证：登录、打开一个 run、下载产物、`GET /api/ready`、`python -m api.audit verify`。建议每季度在测试栈演练一次，并记录实际 RPO/RTO。
+
+## 7.1 监控（可选 monitoring profile）
+
+```bash
+# 先设置 GRAFANA_ADMIN_PASSWORD
+docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus alertmanager grafana
+```
+
+- Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
+- Alertmanager 绑定 `127.0.0.1:9093`；`deploy/alertmanager/alertmanager.yml` 默认是一个占位 webhook（`host.docker.internal:9099`），**需要替换为你的 webhook 或 email_configs 后才会真正投递**。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。
+- Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`，并预置 `Much Agents Overview` 看板（5xx、readiness、24h LLM 成本、队列深度、run 状态、LLM 调用状态）。
+- 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（信息级）。
+- `METRICS_TOKEN` 非空时，需要给 Prometheus 增加 `authorization` 配置；默认假设 API 只在内部 Compose 网络可达。
+- `monitoring` profile 默认不启动，不影响普通部署；Grafana 管理员密码缺失时会回退到 `change_me`，生产必须显式设置。
 
 ## 8. 日志与排障
 
@@ -305,11 +342,13 @@ docker compose -f docker-compose.prod.yml config
 ## 12. 已知限制
 
 - 单机 Compose，无 HA/多副本；Postgres/Redis/MinIO 故障会导致服务不可用。
-- `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前 `chromadb/chroma:latest` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
-- 没有内置监控/告警、Celery beat、自动备份调度；备份需由主机 cron/systemd timer 触发。
+- `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前固定 digest 的 `chromadb/chroma` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
+- 没有内置 Prometheus/Grafana 栈；API 暴露受保护的 `/api/metrics`，需自行部署抓取与告警。Celery beat 与 `deploy/systemd/much-agents-backup.timer` 分别负责 stale reaper 与每日备份。
+- PDF 导出在 API 进程内同步调用 Headless LibreOffice（生产 `api` 镜像已安装 Writer，非 Docker 部署需自行安装并确保 `soffice` 可执行，或设置 `SOFFICE_PATH`）；每个 API 进程用信号量串行转换，高并发场景仍建议迁移到独立队列。`GET /api/health` 返回 `pdf_export_available`，`/api/metrics` 暴露 `much_agents_pdf_exports_total` 与 `much_agents_pdf_export_duration_seconds`。PDF 与 DOCX 使用同一份组装结果，转换失败不会影响 DOCX 导出。模板分页预览同样依赖 LibreOffice（先将模板转为 PDF，再用 PyMuPDF 渲染 PNG）；未安装时预览返回 503，前端隐藏预览入口。
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。
+- Electron preload 仅通过 `contextBridge` 暴露「打开本地目录」：主进程校验 IPC sender URL、本地绝对路径（拒绝 UNC/网络路径）且目标必须是目录，不暴露 shell/fs/任意文件打开。
 - Electron 生产建议直接加载 HTTPS 页面；`file://` 仅作离线开发模式。
 
 ## 13. 许可证与源码提供（AGPL-3.0）

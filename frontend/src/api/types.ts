@@ -1,4 +1,4 @@
-export type JobKind = 'parse' | 'bid'
+export type JobKind = 'parse' | 'bid' | 'attach'
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type ParserChoice = 'auto' | 'mineru' | 'pymupdf'
 export type ViewKey =
@@ -9,6 +9,7 @@ export type ViewKey =
   | 'library'
   | 'history'
   | 'projects'
+  | 'analytics'
   | 'audit'
   | 'users'
 
@@ -78,6 +79,8 @@ export interface HealthResponse {
   database_ok?: boolean | null
   storage_backend: 'local' | 'minio'
   storage_ok: boolean
+  pdf_export_available: boolean
+  doc_export_available: boolean
 }
 
 export interface JobCreatedResponse {
@@ -139,7 +142,48 @@ export interface BidSummary {
   error: string | null
 }
 
-export type JobResult = ParseSummary | BidSummary
+export interface AttachmentSummary {
+  attachment_id: string
+  file_name: string
+  sha256: string
+  chunk_count: number
+  pages: number
+  parser: string
+  warnings: string[]
+  attached_at: string | null
+}
+
+export interface AttachmentListResponse {
+  doc_id: string
+  attachments: AttachmentSummary[]
+}
+
+export interface AttachmentDeleteResponse {
+  doc_id: string
+  attachment_id: string
+  removed_chunks: number
+  remaining_attachments: number
+  chroma_deleted: number
+  storage_synced: boolean
+  warnings: string[]
+}
+
+export interface AttachmentJobSummary {
+  kind?: 'attach'
+  ok?: boolean
+  doc_id?: string
+  attachment_id?: string
+  file?: string
+  sha256?: string
+  chunk_count?: number
+  pages?: number
+  parser?: string
+  ingested?: number | null
+  storage_synced?: boolean
+  warnings?: string[]
+}
+
+export type JobResult = ParseSummary | BidSummary | AttachmentJobSummary
 
 export interface JobStatusResponse {
   job_id: string
@@ -204,6 +248,38 @@ export interface CompanyDetail extends CompanySummary {
 export interface CompanyListResponse {
   companies: CompanySummary[]
 }
+
+export interface CompanyQualification {
+  id: string
+  company_id: string
+  name: string
+  qualification_type: string
+  certificate_no: string | null
+  issuer: string | null
+  issued_at: string | null
+  expires_at: string | null
+  notes: string
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CompanyQualificationListResponse {
+  company_id: string
+  qualifications: CompanyQualification[]
+}
+
+export interface CompanyQualificationInput {
+  name: string
+  qualification_type?: string
+  certificate_no?: string | null
+  issuer?: string | null
+  issued_at?: string | null
+  expires_at?: string | null
+  notes?: string
+}
+
+export type CompanyQualificationUpdate = Partial<CompanyQualificationInput>
 
 export interface CompanyUpsertRequest {
   profile: Record<string, unknown>
@@ -313,6 +389,7 @@ export interface BidRunSummary {
   revision: number
   job_id: string | null
   gate_status: 'pass' | 'warn' | 'block' | null
+  content_sha256: string | null
   warnings: string[]
   error: string | null
   created_at: string
@@ -418,14 +495,54 @@ export interface BidSectionDetail {
   status: string
   attempt: number
   final_markdown: string
+  content_sha256: string
   final_source: string | null
   issues: Array<Record<string, unknown>>
   warnings: string[]
   error: string | null
 }
 
+export interface BidSectionVersion {
+  id: number
+  version: number
+  source: string
+  content_sha256: string
+  char_count: number
+  outline_revision: number | null
+  review_summary: string | null
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+}
+
+export interface BidSectionVersionListResponse {
+  run_id: string
+  section_id: string
+  versions: BidSectionVersion[]
+}
+
+export interface BidSectionVersionDetail extends BidSectionVersion {
+  run_id: string
+  section_id: string
+  markdown: string
+}
+
+export interface BidSectionVersionDiffResponse {
+  run_id: string
+  section_id: string
+  version_id: number
+  against_version_id: number | null
+  from_label: string
+  to_label: string
+  from_sha256: string
+  to_sha256: string
+  changed: boolean
+  diff: string
+}
+
 export interface BidSectionUpdateRequest {
   markdown: string
+  expected_sha256: string
 }
 
 export interface BidGateCheck {
@@ -535,6 +652,7 @@ export interface BidFixPlanItem {
   check_id: string
   title: string
   section_id: string | null
+  section_sha256: string | null
   action: 'replace' | 'manual'
   find: string
   replace: string
@@ -552,8 +670,122 @@ export interface BidFixPlanResponse {
 
 export interface BidFixApplyRequest {
   section_id: string
+  expected_sha256: string
   find: string
   replace: string
+}
+
+export interface BidRequirementsSummary {
+  total: number
+  evaluation_total: number
+  qualification_total: number
+  covered: number
+  partial: number
+  missing: number
+  not_applicable: number
+  mandatory_total: number
+  mandatory_missing: number
+  mandatory_partial: number
+  weighted_coverage: number
+  narrative_coverage: number | null
+}
+
+export interface BidRequirementItem {
+  id: string
+  kind: 'evaluation' | 'qualification'
+  category: string
+  text: string
+  source_page: number | null
+  source_section: string | null
+  evidence: string
+  max_score: number | null
+  mandatory: boolean
+  status: 'covered' | 'partial' | 'missing' | 'not_applicable'
+  section_ids: string[]
+  section_titles?: string[]
+  reason: string
+}
+
+export interface BidRequirementsResponse {
+  schema_version: string
+  run_id: string
+  generated_at: string
+  summary: BidRequirementsSummary
+  items: BidRequirementItem[]
+  warnings: string[]
+}
+
+export interface BidCitationEvidence {
+  id: string
+  chunk_id: string
+  page_start: number | null
+  page_end: number | null
+  section_path: string
+  score: number | null
+  text_sha256: string | null
+  text_chars: number | null
+  marker?: string
+  evidence_id?: string
+}
+
+export interface BidCitationSection {
+  section_id: string
+  title: string
+  written: boolean
+  mode: string | null
+  evidence: BidCitationEvidence[]
+  citations: BidCitationEvidence[]
+  invalid_markers: string[]
+  key_claims: number
+  cited_key_claims: number
+  coverage: number
+  uncited_claims: Array<{ quote: string; reasons: string[] }>
+  warnings: string[]
+}
+
+export interface BidCitationsSummary {
+  sections: number
+  sections_with_evidence: number
+  evidence_items: number
+  citation_markers: number
+  invalid_markers: number
+  key_claims: number
+  cited_key_claims: number
+  coverage: number
+  sections_with_uncited_claims: number
+}
+
+export interface BidCitationsResponse {
+  schema_version: string
+  run_id: string
+  generated_at: string
+  summary: BidCitationsSummary
+  sections: BidCitationSection[]
+  warnings: string[]
+}
+
+export interface BidApprovalRequest {
+  reason?: string
+  override?: boolean
+}
+
+export interface BidApprovalResponse {
+  run_id: string
+  status: 'approved' | 'rejected' | 'not_requested'
+  content_sha256: string | null
+  gate_status: 'pass' | 'warn' | 'block' | null
+  approved_by: string | null
+  approved_by_name: string | null
+  reason: string
+  override: boolean
+  expires_at: string | null
+  created_at: string | null
+}
+
+export interface BidApprovalListResponse {
+  run_id: string
+  current_content_sha256: string | null
+  approvals: BidApprovalResponse[]
 }
 
 export interface BidGateResponse {
@@ -567,6 +799,310 @@ export interface BidGateResponse {
   compliance_summary: BidComplianceSummary | null
   consistency_status: 'consistent' | 'warning' | 'conflict' | null
   consistency_summary: BidConsistencySummary | null
+}
+
+export interface BidCommentMention {
+  user_id: string
+  display_name: string
+}
+
+export interface BidCommentView {
+  comment_id: string
+  run_id: string
+  section_id: string | null
+  section_title: string | null
+  author_id: string | null
+  author_name: string
+  body: string
+  mentions: BidCommentMention[]
+  assignee_id: string | null
+  assignee_name: string | null
+  status: 'open' | 'resolved'
+  resolved_by: string | null
+  resolved_by_name: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface BidCommentListResponse {
+  run_id: string
+  comments: BidCommentView[]
+}
+
+export interface BidCommentCreateInput {
+  body: string
+  section_id?: string | null
+  mentions?: string[]
+  assignee_id?: string | null
+}
+
+export interface BidCommentUpdateInput {
+  body?: string
+  status?: 'open' | 'resolved'
+  assignee_id?: string | null
+}
+
+export type BidFeedbackEventType =
+  | 'rating'
+  | 'adopt'
+  | 'reject'
+  | 'edit'
+  | 'rewrite'
+  | 'restore'
+
+export interface BidFeedbackView {
+  id: number
+  run_id: string
+  section_id: string | null
+  user_id: string | null
+  user_name: string
+  event_type: BidFeedbackEventType | string
+  score: number | null
+  reason: string
+  content_sha256: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface BidExternalUsageView {
+  id: number
+  provider: string
+  operation: string
+  units: number
+  unit_type: string
+  cost_cny: number | null
+  status: string
+  created_at: string
+}
+
+export interface BidUsageResponse {
+  run_id: string
+  doc_id: string
+  project_id: string
+  llm_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost_cny: number
+  retries: number
+  fallback_calls: number
+  duration_ms: number
+  run_budget_cents: number | null
+  budget_enforcement: string
+  project_monthly_budget_cents: number | null
+  project_month_cost_cny: number
+  external: BidExternalUsageView[]
+}
+
+export interface BidFeedbackListResponse {
+  run_id: string
+  feedback: BidFeedbackView[]
+}
+
+export interface BidFeedbackCreate {
+  section_id?: string | null
+  event_type: 'rating' | 'adopt' | 'reject'
+  score?: number | null
+  reason?: string
+  content_sha256?: string | null
+}
+
+export interface AnalyticsRuns {
+  total: number
+  by_status: Record<string, number>
+  by_gate: Record<string, number>
+  failed: number
+  avg_duration_seconds: number | null
+}
+
+export interface AnalyticsUsage {
+  llm_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost_cny: number
+  retries: number
+  fallback_calls: number
+}
+
+export interface AnalyticsFeedback {
+  total: number
+  by_type: Record<string, number>
+  avg_rating: number | null
+  top_reasons: Array<{ reason: string; count: number }>
+}
+
+export interface AnalyticsProviderUsage {
+  records: number
+  units: number
+  cost_cny: number
+}
+
+export interface AnalyticsExternal {
+  records: number
+  units: number
+  cost_cny: number
+  by_provider: Record<string, AnalyticsProviderUsage>
+}
+
+export interface AnalyticsQuality {
+  snapshots: number
+  by_gate: Record<string, number>
+  avg_requirements_coverage: number | null
+  avg_citation_coverage: number | null
+}
+
+export interface AnalyticsProject {
+  project_id: string
+  project_name: string
+  runs: number
+  llm_calls: number
+  cost_cny: number
+  gate_blocked: number
+  monthly_budget_cents: number | null
+  month_cost_cny: number
+}
+
+export interface AnalyticsBudgetTrendPoint {
+  date: string
+  llm_cost_cny: number
+  external_cost_cny: number
+  total_cost_cny: number
+  cumulative_cost_cny: number
+}
+
+export interface AnalyticsBudgetTrend {
+  days: number
+  project_id: string | null
+  project_name: string | null
+  month_start: string
+  range_start: string
+  budget_cents: number | null
+  month_cost_cny: number
+  budget_status: 'none' | 'ok' | 'warning' | 'exceeded'
+  daily: AnalyticsBudgetTrendPoint[]
+}
+
+export interface AnalyticsBudgetAlert {
+  kind: string
+  title: string
+  body: string
+  run_id: string | null
+  doc_id: string | null
+  user_id: string
+  read: boolean
+  created_at: string
+}
+
+export interface AnalyticsDaily {
+  date: string
+  runs: number
+  gate_blocked: number
+  cost_cny: number
+}
+
+export interface AnalyticsOverview {
+  days: number
+  runs: AnalyticsRuns
+  usage: AnalyticsUsage
+  external: AnalyticsExternal
+  feedback: AnalyticsFeedback
+  quality: AnalyticsQuality
+  projects: AnalyticsProject[]
+  daily: AnalyticsDaily[]
+  budget_alerts: AnalyticsBudgetAlert[]
+}
+
+export type NotificationKind =
+  | 'comment_mention'
+  | 'comment_assigned'
+  | 'run_assembled'
+  | 'gate_blocked'
+  | 'approval_pending'
+  | 'run_budget_warning'
+  | 'run_budget_exceeded'
+  | 'project_budget_warning'
+  | 'project_budget_exceeded'
+
+export interface NotificationView {
+  notification_id: string
+  kind: NotificationKind | string
+  title: string
+  body: string
+  resource_type: string
+  resource_id: string
+  run_id: string | null
+  doc_id: string | null
+  comment_id: string | null
+  section_id: string | null
+  actor_name: string | null
+  read_at: string | null
+  created_at: string
+}
+
+export interface NotificationPreferences {
+  comment_enabled: boolean
+  run_enabled: boolean
+  budget_enabled: boolean
+}
+
+export interface NotificationPreferencesUpdate {
+  comment_enabled?: boolean
+  run_enabled?: boolean
+  budget_enabled?: boolean
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationView[]
+  unread: number
+}
+
+export interface NotificationUnreadResponse {
+  unread: number
+}
+
+export interface NotificationReadResponse {
+  read: boolean
+}
+
+export interface NotificationReadAllResponse {
+  updated: number
+}
+
+export interface BidRunEventSection {
+  section_id: string
+  title: string
+  status: string
+}
+
+export interface BidRunEventJob {
+  job_id: string
+  status: string
+  stage: string | null
+  percent: number
+  message: string | null
+  exit_code: number | null
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface BidRunEventSnapshot {
+  run_id: string
+  status: BidRunStatus
+  stage: string | null
+  percent: number
+  message: string | null
+  gate_status: 'pass' | 'warn' | 'block' | null
+  content_sha256: string | null
+  revision: number
+  updated_at: string
+  counts: BidRunCounts
+  sections: BidRunEventSection[]
+  job: BidRunEventJob | null
+  server_time: string
+  terminal: boolean
 }
 
 export type BidFigureKind =
@@ -606,6 +1142,37 @@ export interface BidFigureRegenerateRequest {
   force?: boolean
 }
 
+export interface BidTemplateView {
+  id: string
+  name: string
+  description: string
+  filename: string
+  sha256: string
+  size_bytes: number
+  is_active: boolean
+  version: number
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+  download_url: string
+}
+
+export interface BidTemplateListResponse {
+  templates: BidTemplateView[]
+}
+
+export interface BidTemplatePreview {
+  blob: Blob
+  page: number
+  pages: number
+}
+
+export interface BidTemplateUpdateInput {
+  name?: string
+  description?: string
+  is_active?: boolean
+}
+
 export type ProjectRole = 'manager' | 'writer' | 'reviewer' | 'viewer'
 
 export interface ProjectSummary {
@@ -615,6 +1182,7 @@ export interface ProjectSummary {
   description: string
   role: ProjectRole | null
   member_count: number
+  monthly_budget_cents: number | null
   created_at: string
   updated_at: string
 }
@@ -632,6 +1200,7 @@ export interface ProjectCreateInput {
 export interface ProjectUpdateInput {
   name?: string
   description?: string
+  monthly_budget_cents?: number | null
 }
 
 export interface ProjectMemberSummary {
@@ -645,6 +1214,17 @@ export interface ProjectMemberSummary {
 
 export interface ProjectMemberListResponse {
   members: ProjectMemberSummary[]
+}
+
+export interface ProjectMemberBrief {
+  user_id: string
+  username: string
+  display_name: string
+  role: ProjectRole
+}
+
+export interface ProjectMemberBriefListResponse {
+  members: ProjectMemberBrief[]
 }
 
 export interface AuditEventSummary {

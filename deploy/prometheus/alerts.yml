@@ -1,0 +1,55 @@
+groups:
+  - name: much-agents
+    rules:
+      - alert: MuchAgentsApi5xxRate
+        expr: |
+          sum(rate(much_agents_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(much_agents_http_requests_total[5m])), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Much Agents API 5xx rate above 5%"
+          description: "Check API logs and dependencies (DB/Redis/MinIO/Chroma)."
+
+      - alert: MuchAgentsReadinessDegraded
+        expr: min_over_time(much_agents_ready_checks[2m]) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Much Agents readiness check is failing"
+          description: "Inspect GET /api/ready and the failing component."
+
+      - alert: MuchAgentsLlmErrorRate
+        expr: |
+          sum(rate(much_agents_llm_calls_total{status="error"}[10m]))
+          /
+          clamp_min(sum(rate(much_agents_llm_calls_total[10m])), 1)
+          > 0.10
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Much Agents LLM error rate above 10%"
+          description: "Check provider status, budget and model configuration."
+
+      - alert: MuchAgentsQueueBacklog
+        expr: max_over_time(much_agents_queue_depth[10m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Much Agents Celery queue backlog"
+          description: "A parse/bid/maintenance queue has more than five pending jobs."
+
+      - alert: MuchAgentsDailyCostBudget
+        expr: increase(much_agents_llm_cost_cny_total[24h]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Daily LLM cost is visible"
+          description: "Use this series with your configured budget in a dashboard."

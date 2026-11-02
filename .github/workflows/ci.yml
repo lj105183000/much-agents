@@ -15,13 +15,14 @@ concurrency:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.12"
           enable-cache: true
+          cache-suffix: ${{ github.job }}
       - run: uv sync --frozen
       - name: Install CJK font for figure tests
         run: |
@@ -31,7 +32,7 @@ jobs:
       - run: uv run pytest
 
   migrations:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -50,25 +51,29 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://much_agents:ci_password@127.0.0.1:5432/much_agents
       DB_AUTO_MIGRATE: "false"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.12"
           enable-cache: true
+          cache-suffix: ${{ github.job }}
       - run: uv sync --frozen
       - run: uv run alembic upgrade head
       - run: uv run alembic downgrade -1
       - run: uv run alembic upgrade head
       - run: uv run alembic current
+      - run: uv run pytest tests/test_repository_integration.py -q
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://much_agents:ci_password@127.0.0.1:5432/much_agents
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -79,20 +84,124 @@ jobs:
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
 
-  docker:
-    runs-on: ubuntu-latest
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: much_agents
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: much_agents
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U much_agents -d much_agents"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      E2E_DATABASE_URL: postgresql+asyncpg://much_agents:ci_password@127.0.0.1:5432/much_agents_e2e
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.12"
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run browser E2E against an isolated database
+        run: uv run python scripts/run_e2e.py --database-url "$E2E_DATABASE_URL"
+      - name: Upload E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-diagnostics
+          if-no-files-found: ignore
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            .e2e/logs
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
       - name: Prepare production env and TLS placeholders
         run: |
           cp deploy/env.production.example deploy/env.production
           ./deploy/nginx/generate-self-signed.sh localhost
       - name: Validate compose file
         run: docker compose -f docker-compose.prod.yml config > /dev/null
+      - name: Check production images are pinned
+        run: python3 scripts/check_image_pins.py docker-compose.prod.yml
       - name: Build API image
         run: docker build --target api -t much-agents-api:ci .
       - name: Build web image
         run: docker build --target web -t much-agents-web:ci .
+      - name: Scan API image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: much-agents-api:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Report-only until the baseline is triaged; tighten to 1 afterwards.
+          exit-code: "0"
+      - name: Scan web image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: much-agents-web:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Scan repository configuration (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,config
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: much-agents-api:ci
+          format: spdx-json
+          artifact-name: much-agents-api-sbom.spdx.json
+      - name: Generate web SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: much-agents-web:ci
+          format: spdx-json
+          artifact-name: much-agents-web-sbom.spdx.json
+      - name: Install cosign (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        uses: sigstore/cosign-installer@v4.1.2
+      - name: Sign API image (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-api:ci
+      - name: Sign web image (optional)
+        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-web:ci
       - name: Verify license files in images
         run: |
           docker run --rm --entrypoint sh much-agents-api:ci \
@@ -106,18 +215,19 @@ jobs:
             much-agents-web:ci nginx -t
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.12"
           enable-cache: true
+          cache-suffix: ${{ github.job }}
       - name: Python dependency audit
         # chromadb 1.5.9 (latest) has four unfixed server-side advisories; our usage is
         # client-only and Chroma is not published outside the Compose network. See

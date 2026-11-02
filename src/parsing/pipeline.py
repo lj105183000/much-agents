@@ -7,7 +7,7 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .artifacts import (
     atomic_write_json,
@@ -34,6 +34,7 @@ from .errors import (
 )
 from .extraction import extract_document
 from .ingest import ChromaStore, run_ingest
+from .usage import embedding_usage, mineru_usage
 from .models import ContentBlock, ParseOptions, ParseResult, ParsedDocument, TocEntry
 from .parsers.mineru.parser import MineruParser
 from .parsers.pymupdf_parser import PyMuPDFParser
@@ -293,6 +294,7 @@ def parse_document(
 
     # ---- ingest ----
     ingested = False
+    fresh_ingest_summary: dict[str, Any] | None = None
     collection_name: str | None = options.collection or settings.chroma_collection
     started = time.perf_counter()
     if options.ingest:
@@ -331,6 +333,7 @@ def parse_document(
                         store=store,
                         collection=collection_name,
                     )
+                    fresh_ingest_summary = summary
                     atomic_write_json(ingest_path, summary)
                     ingested = True
             except IngestError as exc:
@@ -353,6 +356,29 @@ def parse_document(
     else:
         status = "failed"
 
+    external_usage: list[dict[str, Any]] = []
+    if document.parser_used == "mineru":
+        mineru = mineru_usage(
+            document.page_count,
+            settings,
+            operation="parse",
+            latency_ms=int(timings.get("parse", 0) * 1000),
+            metadata={
+                "model": settings.mineru_model_version,
+                "parser_requested": options.parser,
+            },
+        )
+        if mineru is not None:
+            external_usage.append(mineru)
+    embedding = embedding_usage(
+        fresh_ingest_summary,
+        settings,
+        chunks=len(chunks),
+        latency_ms=int(timings.get("ingest", 0) * 1000),
+    )
+    if embedding is not None:
+        external_usage.append(embedding)
+
     return ParseResult(
         ok=exit_code == EXIT_OK,
         status=status,
@@ -370,4 +396,5 @@ def parse_document(
         collection=collection_name if options.ingest else None,
         warnings=list(dict.fromkeys(warnings)),
         timings_seconds=timings,
+        external_usage=external_usage,
     )

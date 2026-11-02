@@ -1,7 +1,7 @@
 # 第三方组件与许可证声明
 
 > 项目：Much Agents 0.1.0（多 Agent 标书编写系统）
-> 更新日期：2026-10-24
+> 更新日期：2026-11-02
 > 适用范围：本仓库源码、Docker 镜像、Electron 桌面端及前端静态站点所包含的第三方组件。
 
 本文件汇总本项目使用的主要第三方组件及其许可证，供再分发与合规审查使用。它是归属信息汇总，**不构成法律意见**；再分发前请核对各上游项目的最新许可证与版权声明。若本文件与上游许可证原文冲突，以上游原文为准。
@@ -34,6 +34,7 @@
 | mcp | >=1.20,<2 | MIT | <https://github.com/modelcontextprotocol/python-sdk> |
 | minio | >=7.2.20 | Apache-2.0 | <https://github.com/minio/minio-py> |
 | openai | >=3.36.1 | Apache-2.0 | <https://github.com/openai/openai-python> |
+| openpyxl | >=3.1.5 | MIT | <https://foss.heptapod.net/openpyxl/openpyxl> |
 | pillow | >=11 | MIT-CMU | <https://github.com/python-pillow/Pillow> |
 | pydantic | >=2.14.1 | MIT | <https://github.com/pydantic/pydantic> |
 | pymupdf | >=2.0 | **AGPL-3.0 或 Artifex 商业许可（双许可）** | <https://github.com/pymupdf/pymupdf> |
@@ -62,6 +63,7 @@
 - mcp：`Copyright (c) 2024 Anthropic, PBC`
 - minio（Python SDK）：`MinIO Cloud Storage, (C) 2014-2023 MinIO, Inc.`，NOTICE 原文见第 5.1 节。
 - openai：许可证文件为 Apache-2.0 正文，未单独列版权行；版权归 OpenAI 及贡献者。
+- openpyxl：`Copyright (c) 2010-2024 openpyxl`
 - pillow：`Copyright © 1997-2011 by Secret Labs AB`；`Copyright © 1995-2011 by Fredrik Lundh and contributors`；`Copyright © 2010 by Jeffrey 'Alex' Clark and contributors`
 - pydantic：`Copyright (c) 2017 to present Pydantic Services Inc. and individual contributors.`
 - pymupdf：`Copyright (c) Artifex Software, Inc.`
@@ -94,6 +96,7 @@ Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License
 | 组件 | 许可证 | 说明 |
 |---|---|---|
 | certifi | MPL-2.0 | CA 证书包；未修改，按 MPL-2.0 分发。 |
+| et-xmlfile | MIT | openpyxl 的 XML 读写依赖；`Copyright (c) 1999-2008 by Fredrik Lundh`、`Copyright (c) 2010-2015 openpyxl`。 |
 | orjson | MPL-2.0 AND (Apache-2.0 OR MIT) | 可选择 Apache-2.0 或 MIT 选项；未修改。 |
 | tqdm | MPL-2.0 AND MIT | 不同文件分别适用；未修改。 |
 | numpy | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | 组件级宽松许可；未修改。 |
@@ -119,7 +122,7 @@ MPL-2.0 是文件级 copyleft：只要不修改 MPL 覆盖的文件，可与 AGP
 
 ### 4.3 构建与开发依赖
 
-`vite`、`typescript`、`tailwindcss`、`@vitejs/plugin-react`、`oxlint`、`vitest`、`electron`、`electron-builder` 等仅用于构建/开发，不进入浏览器运行时产物。它们自身的许可证以 `frontend/package-lock.json` 与各包 `LICENSE` 为准。
+`vite`、`typescript`、`tailwindcss`、`@vitejs/plugin-react`、`oxlint`、`vitest`、`@playwright/test`、`electron`、`electron-builder` 等仅用于构建/开发（`@playwright/test` 为 Apache-2.0，仅用于 E2E），不进入浏览器运行时产物。它们自身的许可证以 `frontend/package-lock.json` 与各包 `LICENSE` 为准。
 
 ### 4.4 Electron 桌面端
 
@@ -133,11 +136,14 @@ MPL-2.0 是文件级 copyleft：只要不修改 MPL 覆盖的文件，可与 AGP
 
 | 组件 | 镜像/来源 | 许可证 | 说明 |
 |---|---|---|---|
-| MinIO Server | `minio/minio:latest` | AGPL-3.0 | 未修改，作为独立服务运行。 |
-| MinIO Client | `minio/mc:latest` | AGPL-3.0 | 未修改，仅用于初始化 bucket。 |
-| Chroma | `chromadb/chroma:latest` | Apache-2.0 | 独立向量数据库服务。 |
-| PostgreSQL | `postgres:16-alpine` | PostgreSQL License | 宽松许可证，类 BSD。 |
-| Redis | `redis:7-alpine` | 取决于实际解析版本 | 7.2 及更早为 BSD-3-Clause；7.4 起改为 RSALv2/SSPLv1。**必须固定 digest 或小版本后再分发。** |
+| MinIO Server | `minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | AGPL-3.0 | 未修改，作为独立服务运行；digest 固定。 |
+| MinIO Client | `minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727` | AGPL-3.0 | 未修改，仅用于初始化 bucket；digest 固定。 |
+| Chroma | `chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6` | Apache-2.0 | 独立向量数据库服务；digest 固定。 |
+| Prometheus | `prom/prometheus@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3` | Apache-2.0 | 可选 monitoring profile；指标抓取与告警规则，digest 固定。 |
+| Grafana OSS | `grafana/grafana-oss@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3` | AGPL-3.0 | 可选 monitoring profile；仅绑定 127.0.0.1:3000，digest 固定。 |
+| Alertmanager | `prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5` | Apache-2.0 | 可选 monitoring profile；仅绑定 127.0.0.1:9093，digest 固定。 |
+| PostgreSQL | `postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36` | PostgreSQL License | 宽松许可证，类 BSD；digest 固定。 |
+| Redis | `redis:7-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541` | 取决于实际解析版本 | 7.2 及更早为 BSD-3-Clause；7.4 起改为 RSALv2/SSPLv1；digest 已固定。 |
 | Nginx | `nginx:1.27-alpine` | BSD-2-Clause | 前端静态托管与反向代理。 |
 | Python 基础镜像 | `python:3.12-slim` | PSF-2.0 及第三方组件 | 含 Debian 系统包。 |
 | Node 构建镜像 | `node:22-alpine` | MIT 及第三方组件 | 仅构建阶段使用。 |

@@ -56,6 +56,30 @@ def test_run_ingest_upserts_and_prunes(settings: Settings, document: ParsedDocum
     assert set(collection.upserted) == {chunk.id for chunk in chunks}
 
 
+def test_run_ingest_append_does_not_prune(
+    settings: Settings, document: ParsedDocument
+) -> None:
+    chunks = chunk_document(document, size=200, overlap=30, min_size=30)
+    existing = f"{document.doc_id}:s000:main"
+    collection = FakeCollection(existing=[existing])
+    store = ChromaStore(settings, collection=collection)
+
+    summary = run_ingest(
+        chunks,
+        doc_id=document.doc_id,
+        source_sha256="sha",
+        settings=settings,
+        store=store,
+        embedder=FakeEmbedder(),
+        prune=False,
+    )
+
+    assert summary["deleted_stale"] == 0
+    assert collection.deleted == []
+    assert existing in collection.ids
+    assert set(collection.upserted) == {chunk.id for chunk in chunks}
+
+
 def test_rerun_is_idempotent(settings: Settings, document: ParsedDocument) -> None:
     chunks = chunk_document(document, size=200, overlap=30, min_size=30)
     collection = FakeCollection()

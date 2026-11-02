@@ -41,8 +41,12 @@ CI 通过 `--ignore-vuln` 精确忽略以上 4 个 GHSA ID；PYSEC/CVE 别名由
 
 ```bash
 uv export --frozen --no-dev --no-hashes --format requirements-txt > /tmp/requirements.txt
-uvx --from pip-audit pip-audit -r /tmp/requirements.txt --format columns
+uvx --from pip-audit pip-audit -r /tmp/requirements.txt \
+  --vulnerability-service osv \
+  --index-url https://mirrors.aliyun.com/pypi/simple
 ```
+
+2026-11-01 本地复核结果：OSV 返回 8 条记录 / 4 个唯一漏洞，全部仍是上表中的 chromadb 漏洞；无新增依赖漏洞。`npm audit --omit=dev --audit-level=high` 返回 0 vulnerabilities。Trivy 镜像扫描需要下载约 131MB 漏洞库；本机访问 `mirror.gcr.io` 被拒绝、GHCR 速度不足，未能完成本地镜像扫描，CI 中仍按 report-only 运行。
 
 如输出中出现新的 ID，不要直接扩大忽略列表；先评估可达性并记录到本文，再修改 `.github/workflows/ci.yml`。
 

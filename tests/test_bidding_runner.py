@@ -6,6 +6,7 @@ import pytest
 from docx import Document
 
 from src.bidding.docx_export import markdown_to_docx
+from src.bidding.docx_quality import check_docx
 from src.bidding.errors import BidInputError
 from src.bidding.profile import BidderProfile
 from src.bidding.runner import run_bid_writing
@@ -57,6 +58,11 @@ def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:
     assert len(document.paragraphs) > 20
     assert len(document.tables) >= 5
     assert any("测试供水工程" in paragraph.text for paragraph in document.paragraphs)
+    quality = check_docx(result.bid_docx)
+    quality_checks = {item["id"]: item for item in quality["checks"]}
+    assert quality_checks["docx_toc"]["status"] == "pass"
+    assert quality_checks["docx_page_number"]["status"] == "pass"
+    assert quality_checks["docx_table_headers"]["status"] == "pass"
 
     import json
 
@@ -64,6 +70,9 @@ def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:
     assert report["kind"] == "bid"
     assert report["coverage"]["total"] >= 5
     assert report["coverage"]["counts"]["template"] >= 1
+    assert report["coverage"]["weighted"]["total"] > 0
+    assert "reviewer_gap" in report["coverage"]
+    assert report["coverage"]["reviewer_gap"]["sections_reviewed"] >= 1
     assert report["missing_profile_fields"]
     assert report["placeholders"]["count"] > 0
 

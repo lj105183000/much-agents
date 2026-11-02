@@ -90,7 +90,12 @@ class ApiSettings:
     celery_worker_pool: str = "solo"
     job_ttl_seconds: int = 24 * 3600
     bid_run_max_attempts: int = 2
+    bid_section_max_attempts: int = 2
+    bid_require_approval: bool = False
     bid_run_stale_seconds: int = 900
+    readiness_strict: bool = False
+    metrics_enabled: bool = True
+    metrics_token: str = ""
     auth_enabled: bool = True
     auth_session_ttl_hours: int = 12
     auth_login_max_failures: int = 5
@@ -225,7 +230,17 @@ class ApiSettings:
             celery_worker_pool=_str(env, "CELERY_WORKER_POOL", "solo"),
             job_ttl_seconds=_int(env, "JOB_TTL_SECONDS", 24 * 3600),
             bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
+            bid_section_max_attempts=_int(env, "BID_SECTION_MAX_ATTEMPTS", 2),
+            bid_require_approval=_bool(env, "BID_REQUIRE_APPROVAL", False),
             bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
+            readiness_strict=_bool(
+                env,
+                "READINESS_STRICT",
+                _str(env, "ENVIRONMENT", "development").strip().lower()
+                == "production",
+            ),
+            metrics_enabled=_bool(env, "METRICS_ENABLED", True),
+            metrics_token=_str(env, "METRICS_TOKEN", ""),
             auth_enabled=_bool(env, "AUTH_ENABLED", True),
             auth_session_ttl_hours=_int(env, "AUTH_SESSION_TTL_HOURS", 12),
             auth_login_max_failures=_int(env, "AUTH_LOGIN_MAX_FAILURES", 5),
