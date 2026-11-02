@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { AnalyticsOverview } from '../api/types'
+import type {
+  AnalyticsBudgetTrend,
+  AnalyticsOverview,
+} from '../api/types'
+import { BudgetTrendChart } from '../components/BudgetTrendChart'
 import { usePermissions } from '../hooks/usePermissions'
 import { formatDate } from '../lib/format'
 import {
@@ -41,6 +45,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
   const { isAdmin } = usePermissions()
   const [days, setDays] = useState(30)
   const [data, setData] = useState<AnalyticsOverview | null>(null)
+  const [trend, setTrend] = useState<AnalyticsBudgetTrend | null>(null)
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
@@ -53,11 +58,11 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
     if (!isAdmin) return
     let cancelled = false
     const key = requestKey
-    api
-      .getAnalyticsOverview(days)
-      .then((response) => {
+    Promise.all([api.getAnalyticsOverview(days), api.getBudgetTrend(days)])
+      .then(([response, trendResponse]) => {
         if (cancelled) return
         setData(response)
+        setTrend(trendResponse)
         setError(null)
         setLoadedKey(key)
       })
@@ -198,6 +203,8 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               hint={`${compact(usage?.total_tokens ?? 0)} tokens`}
             />
           </div>
+
+          {trend ? <BudgetTrendChart trend={trend} /> : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="p-4 md:p-5">

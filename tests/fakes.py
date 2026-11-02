@@ -1190,6 +1190,47 @@ class FakeBidRunRepository:
     async def project_month_cost(self, project_id: str) -> float:
         return float(self.project_month_costs.get(project_id, 0.0))
 
+    async def budget_trend(
+        self, *, days: int = 30, project_id: str | None = None
+    ) -> dict[str, Any] | None:
+        if project_id and project_id not in self.project_monthly_budgets:
+            return None
+        if project_id:
+            budget = self.project_monthly_budgets.get(project_id)
+            cost = float(self.project_month_costs.get(project_id, 0.0))
+        else:
+            budgets = [
+                value
+                for value in self.project_monthly_budgets.values()
+                if value is not None
+            ]
+            budget = sum(budgets) if budgets else None
+            cost = sum(self.project_month_costs.values())
+        today = datetime.now(timezone.utc).date().isoformat()
+        return {
+            "days": days,
+            "project_id": project_id,
+            "project_name": None,
+            "month_start": f"{today[:8]}01",
+            "range_start": today,
+            "budget_cents": budget,
+            "month_cost_cny": round(cost, 4),
+            "budget_status": "none"
+            if not budget
+            else "exceeded"
+            if cost * 100 >= budget
+            else "ok",
+            "daily": [
+                {
+                    "date": today,
+                    "llm_cost_cny": round(cost, 4),
+                    "external_cost_cny": 0.0,
+                    "total_cost_cny": round(cost, 4),
+                    "cumulative_cost_cny": round(cost, 4),
+                }
+            ],
+        }
+
     async def list_external_usage(
         self,
         *,

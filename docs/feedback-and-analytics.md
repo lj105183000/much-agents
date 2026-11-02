@@ -110,6 +110,8 @@ BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 
 前端左侧「运营看板」仅管理员可见，支持 7/30/90 天切换与刷新。查询全部走 PostgreSQL 聚合，不新增外部服务。
 
+**预算趋势图**：`GET /api/analytics/budget-trend?days=7|30|90&project_id=`（admin，global 或单项目）返回本月每日 LLM/外部成本、每日累计月成本、月度预算（项目配额；未指定项目时为所有非空项目配额之和）与 `ok|warning|exceeded|none` 状态。前端手写 SVG：上方每日堆叠柱（LLM/外部）、下方本月累计线 + 预算横线，同一成本单位、非双轴；含悬停十字线/提示、图例、端点直标、数据表视图与键盘左右切换。图表范围最多回溯到本月 1 日，超出窗口的月内成本仍计入累计。
+
 `GET /api/analytics/export.csv?days=7|30|90`（仅 admin）导出 UTF-8 BOM CSV，包含 Summary、Daily、Projects（含本月成本/预算）、Feedback、External、BudgetAlerts 分节；所有单元格做 CSV 公式注入前缀转义。前端「导出 CSV」按钮下载。运营看板同时展示最近预算告警历史（kind/title/body/时间/已读）。
 
 `GET /api/bid-runs/{run_id}/usage`（项目只读）返回该 run 的 LLM 调用/token/成本/重试/耗时、run 预算与策略、项目本月成本/月度配额，以及该文档的 MinerU/Embedding 外部用量；前端「成本与预算」面板显示进度条与外部用量明细。

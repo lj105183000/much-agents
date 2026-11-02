@@ -1,5 +1,6 @@
 import { isTrustedApiUrl } from './trustedUrl'
 import type {
+  AnalyticsBudgetTrend,
   AnalyticsOverview,
   ArtifactInfo,
   ArtifactListResponse,
@@ -908,6 +909,17 @@ export const api = {
   getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
     return request<AnalyticsOverview>(
       `/api/analytics/overview?days=${days}`,
+    )
+  },
+
+  getBudgetTrend(
+    days = 30,
+    projectId?: string,
+  ): Promise<AnalyticsBudgetTrend> {
+    const query = new URLSearchParams({ days: String(days) })
+    if (projectId) query.set('project_id', projectId)
+    return request<AnalyticsBudgetTrend>(
+      `/api/analytics/budget-trend?${query.toString()}`,
     )
   },
 

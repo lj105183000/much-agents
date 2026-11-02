@@ -283,6 +283,11 @@ async def seed(database_url: str, root: Path) -> dict[str, str]:
         await project_service.add_member(
             DEFAULT_PROJECT_ID, user_id=viewer.id, role="viewer"
         )
+        await project_service.update_project(
+            DEFAULT_PROJECT_ID,
+            monthly_budget_cents=10000,
+            set_monthly_budget=True,
+        )
         await project_service.register_document(
             DEFAULT_PROJECT_ID,
             E2E_DOC_ID,

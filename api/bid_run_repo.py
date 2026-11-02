@@ -1957,6 +1957,129 @@ class BidRunRepository:
                 record = _quality_record(row) if row is not None else None
         return record
 
+    async def budget_trend(
+        self, *, days: int = 30, project_id: str | None = None
+    ) -> dict[str, Any] | None:
+        window = max(1, min(int(days), 365))
+        now = _now()
+        today = now.date()
+        month_start = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        window_start = (now - timedelta(days=window - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        output_start = max(month_start, window_start).date()
+        budget_cents: int | None = None
+        project_name: str | None = None
+        async with self._session_factory() as session:
+            if project_id:
+                project = await session.get(ProjectRow, project_id)
+                if project is None:
+                    return None
+                project_name = project.name
+                budget_cents = project.monthly_budget_cents
+            else:
+                budget_cents = (
+                    await session.execute(
+                        select(func.sum(ProjectRow.monthly_budget_cents)).where(
+                            ProjectRow.monthly_budget_cents.is_not(None)
+                        )
+                    )
+                ).scalar_one_or_none()
+                budget_cents = (
+                    int(budget_cents) if budget_cents is not None else None
+                )
+
+            llm_day = func.date_trunc(
+                text("'day'"), RunUsageRow.updated_at
+            )
+            external_day = func.date_trunc(
+                text("'day'"), ExternalUsageRow.created_at
+            )
+            llm_statement = (
+                select(
+                    llm_day,
+                    func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                )
+                .where(RunUsageRow.updated_at >= month_start)
+                .group_by(llm_day)
+                .order_by(llm_day)
+            )
+            external_statement = (
+                select(
+                    external_day,
+                    func.coalesce(func.sum(ExternalUsageRow.cost_cny), 0.0),
+                )
+                .where(ExternalUsageRow.created_at >= month_start)
+                .group_by(external_day)
+                .order_by(external_day)
+            )
+            if project_id:
+                llm_statement = llm_statement.where(
+                    RunUsageRow.project_id == project_id
+                )
+                external_statement = external_statement.where(
+                    ExternalUsageRow.project_id == project_id
+                )
+            llm_rows = (await session.execute(llm_statement)).all()
+            external_rows = (
+                await session.execute(external_statement)
+            ).all()
+
+        llm_by_day = {
+            day.date().isoformat(): float(cost or 0)
+            for day, cost in llm_rows
+            if day is not None
+        }
+        external_by_day = {
+            day.date().isoformat(): float(cost or 0)
+            for day, cost in external_rows
+            if day is not None
+        }
+        daily: list[dict[str, Any]] = []
+        cumulative = 0.0
+        current = month_start.date()
+        while current <= today:
+            key = current.isoformat()
+            llm_cost = llm_by_day.get(key, 0.0)
+            external_cost = external_by_day.get(key, 0.0)
+            total = llm_cost + external_cost
+            cumulative += total
+            if current >= output_start:
+                daily.append(
+                    {
+                        "date": key,
+                        "llm_cost_cny": round(llm_cost, 4),
+                        "external_cost_cny": round(external_cost, 4),
+                        "total_cost_cny": round(total, 4),
+                        "cumulative_cost_cny": round(cumulative, 4),
+                    }
+                )
+            current += timedelta(days=1)
+        month_cost = cumulative
+        if budget_cents is not None and budget_cents > 0:
+            ratio = month_cost * 100 / budget_cents
+            if ratio >= 1:
+                status = "exceeded"
+            elif ratio >= 0.8:
+                status = "warning"
+            else:
+                status = "ok"
+        else:
+            status = "none"
+        return {
+            "days": window,
+            "project_id": project_id,
+            "project_name": project_name,
+            "month_start": month_start.date().isoformat(),
+            "range_start": output_start.isoformat(),
+            "budget_cents": budget_cents,
+            "month_cost_cny": round(month_cost, 4),
+            "budget_status": status,
+            "daily": daily,
+        }
+
     async def get_project_monthly_budget(
         self, project_id: str
     ) -> int | None:

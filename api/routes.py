@@ -98,6 +98,7 @@ from .projects import (
     require_run_write,
 )
 from .schemas import (
+    AnalyticsBudgetTrend,
     AnalyticsOverview,
     ArtifactListResponse,
     AttachmentDeleteResponse,
@@ -2451,6 +2452,18 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> AnalyticsOverview:
         return await service.analytics_overview(days=days)
+
+    @router.get(
+        "/analytics/budget-trend",
+        response_model=AnalyticsBudgetTrend,
+        dependencies=[Depends(require_admin)],
+    )
+    async def get_analytics_budget_trend(
+        days: int = Query(30, ge=1, le=365),
+        project_id: str | None = Query(default=None, max_length=36),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> AnalyticsBudgetTrend:
+        return await service.budget_trend(days=days, project_id=project_id)
 
     @router.get(
         "/analytics/export.csv",

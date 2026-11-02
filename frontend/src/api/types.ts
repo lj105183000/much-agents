@@ -964,6 +964,26 @@ export interface AnalyticsProject {
   month_cost_cny: number
 }
 
+export interface AnalyticsBudgetTrendPoint {
+  date: string
+  llm_cost_cny: number
+  external_cost_cny: number
+  total_cost_cny: number
+  cumulative_cost_cny: number
+}
+
+export interface AnalyticsBudgetTrend {
+  days: number
+  project_id: string | null
+  project_name: string | null
+  month_start: string
+  range_start: string
+  budget_cents: number | null
+  month_cost_cny: number
+  budget_status: 'none' | 'ok' | 'warning' | 'exceeded'
+  daily: AnalyticsBudgetTrendPoint[]
+}
+
 export interface AnalyticsBudgetAlert {
   kind: string
   title: string

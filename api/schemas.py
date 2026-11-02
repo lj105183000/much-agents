@@ -546,6 +546,26 @@ class AnalyticsDaily(BaseModel):
     cost_cny: float = 0.0
 
 
+class AnalyticsBudgetTrendPoint(BaseModel):
+    date: str
+    llm_cost_cny: float = 0.0
+    external_cost_cny: float = 0.0
+    total_cost_cny: float = 0.0
+    cumulative_cost_cny: float = 0.0
+
+
+class AnalyticsBudgetTrend(BaseModel):
+    days: int
+    project_id: str | None = None
+    project_name: str | None = None
+    month_start: str
+    range_start: str
+    budget_cents: int | None = None
+    month_cost_cny: float = 0.0
+    budget_status: Literal["none", "ok", "warning", "exceeded"] = "none"
+    daily: list[AnalyticsBudgetTrendPoint] = Field(default_factory=list)
+
+
 class AnalyticsBudgetAlert(BaseModel):
     kind: str
     title: str = ""
