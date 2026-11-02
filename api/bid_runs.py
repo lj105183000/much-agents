@@ -90,6 +90,7 @@ from .bid_run_repo import (
 )
 from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
+from .notifications import NotificationService
 from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
     BidCommentCreateRequest,
@@ -372,6 +373,7 @@ class BidRunService:
         stale_seconds: int = 900,
         llm_factory: Callable[[], Any] | None = None,
         storage: Storage | None = None,
+        notifier: NotificationService | None = None,
     ) -> None:
         self.bid_settings = bid_settings
         self.repo = repo
@@ -384,6 +386,7 @@ class BidRunService:
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
         self.storage = storage
+        self.notifier = notifier
         # LibreOffice is CPU and memory hungry; serialize conversions per
         # process so concurrent exports cannot exhaust the API host.
         self._pdf_semaphore = asyncio.Semaphore(1)
@@ -891,6 +894,22 @@ class BidRunService:
                 self._comment_payload(record, titles.get(record.section_id or ""))
                 for record in records
             ],
+        )
+
+    async def get_comment(
+        self, run_id: str, comment_id: str
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        return self._comment_payload(
+            record, titles.get(record.section_id or "")
         )
 
     async def create_comment(
@@ -2341,6 +2360,20 @@ class BidRunService:
         updated = await repo.get_run(run_id)
         if updated is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
+        if self.notifier is not None:
+            try:
+                await self.notifier.notify_run_assembled(
+                    run=updated,
+                    gate_status=str(gate.get("status") or "warn"),
+                    content_sha256=content_sha256,
+                    approval_required=self.require_approval,
+                )
+            except Exception:  # noqa: BLE001 - notifications are best-effort
+                logger.warning(
+                    "could not record run notifications for %s",
+                    run_id,
+                    exc_info=True,
+                )
         return self._gate_response(updated)
 
     async def get_gate(self, run_id: str) -> BidGateResponse:

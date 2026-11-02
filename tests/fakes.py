@@ -16,6 +16,8 @@ from api.bid_run_repo import (
     BidApprovalRecord,
     BidCommentRecord,
     BidRunRecord,
+    NotificationRecord,
+    NotificationRecipient,
     OutlineSectionRecord,
     SectionStateRecord,
     SectionVersionRecord,
@@ -714,6 +716,10 @@ class FakeBidRunRepository:
         self.approvals: dict[str, list[BidApprovalRecord]] = {}
         self.versions: dict[str, list[SectionVersionRecord]] = {}
         self.comments: dict[str, BidCommentRecord] = {}
+        self.notifications: dict[str, NotificationRecord] = {}
+        self.notification_recipients: dict[
+            str, list[NotificationRecipient]
+        ] = {}
         self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
@@ -925,6 +931,115 @@ class FakeBidRunRepository:
         updated = replace(record, **values)
         self.comments[comment_id] = updated
         return updated
+
+    async def add_notifications(
+        self, rows: list[dict[str, Any]]
+    ) -> list[NotificationRecord]:
+        inserted: list[NotificationRecord] = []
+        seen = {
+            (record.user_id, record.dedupe_key)
+            for record in self.notifications.values()
+        }
+        for row in rows:
+            key = (row["user_id"], row["dedupe_key"])
+            if key in seen:
+                continue
+            seen.add(key)
+            record = NotificationRecord(
+                id=row["id"],
+                project_id=row["project_id"],
+                user_id=row["user_id"],
+                kind=row["kind"],
+                title=row["title"],
+                body=row.get("body") or "",
+                resource_type=row.get("resource_type") or "",
+                resource_id=row.get("resource_id") or "",
+                run_id=row.get("run_id"),
+                doc_id=row.get("doc_id"),
+                comment_id=row.get("comment_id"),
+                section_id=row.get("section_id"),
+                actor_id=row.get("actor_id"),
+                actor_name=row.get("actor_name"),
+                dedupe_key=row["dedupe_key"],
+                read_at=None,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.notifications[record.id] = record
+            inserted.append(record)
+        return inserted
+
+    async def list_notifications(
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        unread_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[NotificationRecord]:
+        rows = [
+            record
+            for record in self.notifications.values()
+            if record.user_id == user_id
+            and record.project_id == project_id
+            and (not unread_only or record.read_at is None)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[offset : offset + max(1, min(int(limit), 200))]
+
+    async def unread_notification_count(
+        self, user_id: str, project_id: str
+    ) -> int:
+        return sum(
+            1
+            for record in self.notifications.values()
+            if record.user_id == user_id
+            and record.project_id == project_id
+            and record.read_at is None
+        )
+
+    async def mark_notification_read(
+        self, user_id: str, project_id: str, notification_id: str
+    ) -> bool:
+        record = self.notifications.get(notification_id)
+        if (
+            record is None
+            or record.user_id != user_id
+            or record.project_id != project_id
+            or record.read_at is not None
+        ):
+            return False
+        self.notifications[notification_id] = replace(
+            record, read_at=datetime.now(timezone.utc)
+        )
+        return True
+
+    async def mark_all_notifications_read(
+        self, user_id: str, project_id: str
+    ) -> int:
+        updated = 0
+        for key, record in list(self.notifications.items()):
+            if (
+                record.user_id == user_id
+                and record.project_id == project_id
+                and record.read_at is None
+            ):
+                self.notifications[key] = replace(
+                    record, read_at=datetime.now(timezone.utc)
+                )
+                updated += 1
+        return updated
+
+    async def list_project_recipients(
+        self,
+        project_id: str,
+        roles: tuple[str, ...] = ("manager", "reviewer"),
+    ) -> list[NotificationRecipient]:
+        return [
+            recipient
+            for recipient in self.notification_recipients.get(project_id, [])
+            if recipient.role in roles
+        ]
 
     def _section_versions(
         self, run_id: str, section_id: str

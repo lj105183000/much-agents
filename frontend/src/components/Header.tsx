@@ -8,6 +8,7 @@ import {
   ROLE_LABELS,
 } from '../lib/roles'
 import { Icon } from './icons'
+import { NotificationBell } from './NotificationBell'
 
 interface HeaderProps {
   title: string
@@ -26,6 +27,8 @@ interface HeaderProps {
   user: AuthUser
   authEnabled: boolean
   onLogout: () => void
+  apiBase: string
+  onOpenRun: (runId: string, docId: string | null) => void
 }
 
 const HEALTH_PILL = {
@@ -52,6 +55,8 @@ export function Header({
   user,
   authEnabled,
   onLogout,
+  apiBase,
+  onOpenRun,
 }: HeaderProps) {
   const navItems = NAV_ITEMS.filter(
     (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
@@ -78,6 +83,14 @@ export function Header({
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {authEnabled ? (
+            <NotificationBell
+              key={currentProjectId ?? 'none'}
+              apiBase={apiBase}
+              projectId={currentProjectId}
+              onOpenRun={onOpenRun}
+            />
+          ) : null}
           <label
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 py-1.5 pl-3 pr-1.5"
             title={

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from src.bidding.content_hash import compute_section_content_sha256
@@ -20,9 +21,12 @@ from .database import (
     BidSectionStateRow,
     BidSectionVersionRow,
     LlmCallLogRow,
+    NotificationRow,
+    ProjectMemberRow,
     PromptRegistryRow,
     RetrievalSnapshotRow,
     RunUsageRow,
+    UserRow,
 )
 
 
@@ -168,6 +172,35 @@ class SectionVersionRecord:
     created_by: str | None
     created_by_name: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRecord:
+    id: str
+    project_id: str
+    user_id: str
+    kind: str
+    title: str
+    body: str
+    resource_type: str
+    resource_id: str
+    run_id: str | None
+    doc_id: str | None
+    comment_id: str | None
+    section_id: str | None
+    actor_id: str | None
+    actor_name: str | None
+    dedupe_key: str
+    read_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRecipient:
+    user_id: str
+    username: str
+    display_name: str
+    role: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +352,28 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         resolved_at=row.resolved_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _notification_record(row: NotificationRow) -> NotificationRecord:
+    return NotificationRecord(
+        id=row.id,
+        project_id=row.project_id,
+        user_id=row.user_id,
+        kind=row.kind,
+        title=row.title,
+        body=row.body or "",
+        resource_type=row.resource_type or "",
+        resource_id=row.resource_id or "",
+        run_id=row.run_id,
+        doc_id=row.doc_id,
+        comment_id=row.comment_id,
+        section_id=row.section_id,
+        actor_id=row.actor_id,
+        actor_name=row.actor_name,
+        dedupe_key=row.dedupe_key,
+        read_at=row.read_at,
+        created_at=row.created_at,
     )
 
 
@@ -1443,10 +1498,156 @@ class BidRunRepository:
         return record
 
 
+    async def add_notifications(
+        self, rows: list[dict[str, Any]]
+    ) -> list[NotificationRecord]:
+        if not rows:
+            return []
+        values = []
+        for row in rows:
+            values.append(
+                {
+                    "id": row["id"],
+                    "project_id": row["project_id"],
+                    "user_id": row["user_id"],
+                    "kind": row["kind"],
+                    "title": row["title"],
+                    "body": row.get("body") or "",
+                    "resource_type": row.get("resource_type") or "",
+                    "resource_id": row.get("resource_id") or "",
+                    "run_id": row.get("run_id"),
+                    "doc_id": row.get("doc_id"),
+                    "comment_id": row.get("comment_id"),
+                    "section_id": row.get("section_id"),
+                    "actor_id": row.get("actor_id"),
+                    "actor_name": row.get("actor_name"),
+                    "dedupe_key": row["dedupe_key"],
+                    "created_at": _now(),
+                }
+            )
+        statement = (
+            pg_insert(NotificationRow)
+            .values(values)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    NotificationRow.user_id,
+                    NotificationRow.dedupe_key,
+                ]
+            )
+            .returning(NotificationRow)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                inserted = result.scalars().all()
+                records = [_notification_record(row) for row in inserted]
+        return records
+
+    async def list_notifications(
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        unread_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[NotificationRecord]:
+        statement = (
+            select(NotificationRow)
+            .where(
+                NotificationRow.user_id == user_id,
+                NotificationRow.project_id == project_id,
+            )
+            .order_by(NotificationRow.created_at.desc())
+            .limit(max(1, min(int(limit), 200)))
+            .offset(max(0, int(offset)))
+        )
+        if unread_only:
+            statement = statement.where(NotificationRow.read_at.is_(None))
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_notification_record(row) for row in rows]
+
+    async def unread_notification_count(
+        self, user_id: str, project_id: str
+    ) -> int:
+        statement = select(func.count(NotificationRow.id)).where(
+            NotificationRow.user_id == user_id,
+            NotificationRow.project_id == project_id,
+            NotificationRow.read_at.is_(None),
+        )
+        async with self._session_factory() as session:
+            return int((await session.execute(statement)).scalar_one() or 0)
+
+    async def mark_notification_read(
+        self, user_id: str, project_id: str, notification_id: str
+    ) -> bool:
+        statement = (
+            update(NotificationRow)
+            .where(
+                NotificationRow.id == notification_id,
+                NotificationRow.user_id == user_id,
+                NotificationRow.project_id == project_id,
+                NotificationRow.read_at.is_(None),
+            )
+            .values(read_at=_now())
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def mark_all_notifications_read(
+        self, user_id: str, project_id: str
+    ) -> int:
+        statement = (
+            update(NotificationRow)
+            .where(
+                NotificationRow.user_id == user_id,
+                NotificationRow.project_id == project_id,
+                NotificationRow.read_at.is_(None),
+            )
+            .values(read_at=_now())
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return int(result.rowcount or 0)
+
+    async def list_project_recipients(
+        self,
+        project_id: str,
+        roles: tuple[str, ...] = ("manager", "reviewer"),
+    ) -> list[NotificationRecipient]:
+        statement = (
+            select(ProjectMemberRow, UserRow)
+            .join(UserRow, UserRow.id == ProjectMemberRow.user_id)
+            .where(
+                ProjectMemberRow.project_id == project_id,
+                ProjectMemberRow.role.in_(roles),
+                UserRow.is_active.is_(True),
+            )
+            .order_by(UserRow.username)
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            NotificationRecipient(
+                user_id=user.id,
+                username=user.username,
+                display_name=user.display_name,
+                role=member.role,
+            )
+            for member, user in rows
+        ]
+
+
 __all__ = [
     "BidCommentRecord",
     "BidRunRecord",
     "BidRunRepository",
+    "NotificationRecord",
+    "NotificationRecipient",
     "OutlineSectionRecord",
     "SectionStateRecord",
     "SectionVersionRecord",

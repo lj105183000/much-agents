@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice），P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice），P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -272,10 +272,11 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - `GET .../sections/{id}/versions`、`GET .../diff?from=&to=`（统一 diff）、`POST .../restore`（走人工编辑语义，清 gate，留审计）。
 - 前端并排 diff / 渲染 diff；大纲 revision 历史可选。
 
-### 5.3 评论、指派与通知（评论/指派已实现，通知未实现）
+### 5.3 评论、指派与通知（已实现）
 
 - 已落地 `bid_comments`（run 级评论、可选章节定位、作者快照、正文、`open/resolved`、@提及与处理人快照）；`GET /api/project-members` 提供项目成员选择；`GET/POST/PATCH /api/bid-runs/{id}/comments*` 承载查看、发表、解决/重开、指派。详见 `docs/collaboration.md`。
-- 尚未实现：站内 + SMTP/Webhook 通知（run 完成、门禁阻断、待审批、@提及、资质到期）、截止时间、项目看板与评论删除/线程回复。
+- 已落地 `notifications`（迁移 `0015`）：@提及/指派、run 组装/门禁阻断/待审批的站内通知；可选 Webhook（HMAC-SHA256 签名）与 SMTP（全局收件人）；前端铃铛与已读管理。详见 `docs/notifications.md`。
+- 尚未实现：资质到期提醒（资质库本身未建）、用户级邮箱与通知偏好、截止时间、项目看板、评论删除/线程回复、通知重试/DLQ。
 
 ### 5.4 并发保护与实时进度（已实现）
 

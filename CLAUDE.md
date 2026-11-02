@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、Playwright 浏览器 E2E（隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、站内通知/Webhook/SMTP、Playwright 浏览器 E2E（隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -63,6 +63,9 @@ uv run python -m scripts.seed_prompts --dry-run                              # �
 uv run python -m scripts.seed_prompts                                       # 写入 prompt_registry
 uv run python -m scripts.dlq --limit 20                                      # 查看 Redis 死信列表
 uv run python -m scripts.check_image_pins docker-compose.prod.yml            # 检查生产镜像是否仍使用 :latest
+uv run python scripts/acceptance_check.py --config-only                     # 生产配置离线验收（无网络）
+DEPLOY_TEST_USERNAME=admin DEPLOY_TEST_PASSWORD=... uv run python scripts/acceptance_check.py \
+  --base-url https://much-agents.internal --cafile deploy/nginx/certs/fullchain.pem  # 生产主机验收
 TASK_BACKEND=local uv run uvicorn api.main:app --port 8001      # 无 Redis/worker 的本地模式
 uv run python -m src.cli write 6055594244948 --profile bidder_profile.example.json --max-sections 2  # 多 Agent 编写投标文件
 uv run python -m api.mcp_server --check      # 列出 MCP 服务端工具后退出
@@ -132,7 +135,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `vite.config.ts` 设置 `base: './'`，因为 Electron 生产环境用 `file://` 加载，资源路径必须相对——不要改成绝对路径。
 - 渲染层：React 19 + TypeScript + TailwindCSS 4（通过 `@tailwindcss/vite` 插件，无 `tailwind.config.*`）；Markdown 预览使用 `react-markdown` + `remark-gfm`，默认不渲染原始 HTML。
 - 工作台为左侧导航 + 六个业务视图：① 上传解析 ② 编写标书 ③ 公司库 ④ 文档检索 ⑤ 文档库 ⑥ 任务历史；管理员额外看到 ⑦ 用户管理。包含 job 进度、profile 表单/JSON、公司选择、结果统计、产物预览与下载。「文档库」每个文档新增「附件证据」面板：上传 PDF/CSV/XLSX/XLSM/TXT/MD、查看 attach job 进度、列出/删除附件；写操作按角色禁用，后端仍是权威。
-- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。生成进行中通过 SSE 显示「实时」徽章，进度/阶段/章节状态由 `GET /api/bid-runs/{id}/events` 推送，断线自动重连并以 2 秒轮询兜底。「评审评论与指派」面板位于生成工作台与门禁之间：可针对整份标书或单个章节发表评论、@项目成员、指派处理人、解决/重开；只读角色可查看，复核角色可发表与处理。门禁下方显示「合规检查与一致性台账」：21 项检查、跨章节事实核对、确定性/AI 修复方案与一键应用（应用等同人工编辑，需重新组装）。
+- 「编写标书」为分阶段流程：选择文档/公司/资料 → 创建 run 并编辑大纲（标题、目标字数、编写要点、写作重点；表单/附件锁定）→ 生成/续跑/取消 → 自动组装与门禁检查 → 严格导出 DOCX。已完成章节可编辑正文或重新生成本节；旧稿在新稿完成前保留。生成进行中通过 SSE 显示「实时」徽章，进度/阶段/章节状态由 `GET /api/bid-runs/{id}/events` 推送，断线自动重连并以 2 秒轮询兜底。「评审评论与指派」面板位于生成工作台与门禁之间：可针对整份标书或单个章节发表评论、@项目成员、指派处理人、解决/重开；只读角色可查看，复核角色可发表与处理。Header 的通知铃铛显示未读数（25 秒轮询 + 聚焦刷新），点击评论提及/指派或 run 组装/门禁通知可直接打开对应 run。门禁下方显示「合规检查与一致性台账」：21 项检查、跨章节事实核对、确定性/AI 修复方案与一键应用（应用等同人工编辑，需重新组装）。
 - 「AI 配图」面板位于合规台账与产物面板之间：缩略图/放大预览、图号/图题/章节/来源/免责声明、跳过与警告，以及「重新生成配图」；重新生成会清空 gate 并要求重新组装。产物图片与 Markdown 内图片通过 `AuthenticatedImage` 带 `Authorization` 取 Blob 后渲染（不能直接用 `<img src>` 指向 artifact URL）；`MarkdownPreview` 把 `bid.md`/`sections/*.md` 中的相对图片路径重写到 artifact URL 后再交给该组件（Electron `file://` 走 `apiUrl()`）。
 - 「任务历史」顶部显示服务端 `bid_runs`（可打开继续编辑/重写/组装），下方保留 localStorage 的解析/旧版任务记录；`LibraryView` 仍以磁盘产物为主。
 - 公司库：完整 `BidderProfile` 以 PostgreSQL JSONB 保存；前端支持新建/编辑/删除/搜索公司，编写标书时可选择公司并自动载入资料，提交时附带 `company_id`。
@@ -186,7 +189,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 - **项目隔离（P0-B）**：Alembic `0004` 新增 `projects`、`project_members`、`documents`（PK `(project_id, doc_id)`），`bid_runs.project_id` 非空；默认项目 `00000000-0000-0000-0000-000000000001`。业务请求必须带 `X-Project-Id`（缺失 400，非成员/不存在 404）；有效权限 = 全局角色 AND 项目角色（`manager|writer|reviewer|viewer`）。`require_project_read/write/review/manage` 和 `require_run_*` 是统一守卫；文档/检索/任务/产物/run 全部按项目过滤。公司库保持全局共享。CLI `python -m api.projects` 管理项目、成员与 `backfill-documents`；首次启用 ACL 前必须回填历史解析文档。详见 `docs/projects.md`。
 - **审计（P0-C）**：Alembic `0005` 新增 `audit_events`，数据库触发器禁止 UPDATE/DELETE/TRUNCATE；追加时用 `pg_advisory_xact_lock` 串行化并计算 `sha256(prev_hash + canonical_json)` 链。中间件校验/生成 `X-Request-ID`，所有写请求有显式事件或 `http.request` 兜底；敏感操作 `required=True`，审计失败返回 503。管理员接口 `GET /api/audit`、`/api/audit/verify`、`/api/audit/export.csv`（CSV 公式转义），CLI `python -m api.audit verify`。审计只记元数据，不记密码/token/profile/正文。详见 `docs/audit.md`。
-- **生产部署（P0-D）**：多阶段 `Dockerfile`（`api-base`/`api`/`worker`/`migrate`/`web-build`/`web`）+ `docker-compose.prod.yml`，仅 Nginx 发布 80/443，Postgres/Redis/MinIO/Chroma 仅内部；`migrate` 成功后才启动 API/worker；API/worker 非 root、只读根文件系统。Nginx TLS 1.2/1.3、HSTS、CSP（内联主题脚本 SHA-256 固定）、登录/API `limit_req`、`/docs` 404；`deploy/env.production.example` 为占位模板（真实文件已 gitignore）。Celery 拆分 `parse`/`bid` 队列（开发单 worker 用 `-Q parse,bid`），`acks_late`/`reject_on_worker_lost`/prefetch 1/time limits。健康检查 `GET /api/live`（进程）与 `GET /api/ready`（依赖，5s 缓存，失败 503）。`scripts/backup.sh`（pg_dump + MinIO mirror + 可选 Chroma + SHA256SUMS）与 `scripts/restore.sh`；`.github/workflows/ci.yml` 覆盖后端/迁移/前端/E2E/Docker/安全扫描。详见 `docs/deployment.md`。
+- **生产部署（P0-D）**：多阶段 `Dockerfile`（`api-base`/`api`/`worker`/`migrate`/`web-build`/`web`）+ `docker-compose.prod.yml`，仅 Nginx 发布 80/443，Postgres/Redis/MinIO/Chroma 仅内部；`migrate` 成功后才启动 API/worker；API/worker 非 root、只读根文件系统。Nginx TLS 1.2/1.3、HSTS、CSP（内联主题脚本 SHA-256 固定）、登录/API `limit_req`、`/docs` 404；`deploy/env.production.example` 为占位模板（真实文件已 gitignore）。Celery 拆分 `parse`/`bid` 队列（开发单 worker 用 `-Q parse,bid`），`acks_late`/`reject_on_worker_lost`/prefetch 1/time limits。健康检查 `GET /api/live`（进程）与 `GET /api/ready`（依赖，5s 缓存，失败 503）。`scripts/backup.sh`（pg_dump + MinIO mirror + 可选 Chroma + SHA256SUMS）与 `scripts/restore.sh`；`.github/workflows/ci.yml` 覆盖后端/迁移/前端/E2E/Docker/安全扫描。`scripts/acceptance_check.py`（仅标准库）在目标主机检查 env/证书/备份、DNS、内部端口暴露、TLS 剩余天数、`/healthz`/`/api/live`/`/api/ready`、`/docs` 与 `/api/metrics` 404、HSTS/CSP 等安全头、HTTP→HTTPS 跳转和可选登录冒烟；`--config-only` 可离线检查配置。详见 `docs/deployment.md` 与 `docs/production-acceptance.md`。
 
 ### FastAPI 上传接口（已实现，`api/`）
 
@@ -202,6 +205,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET/POST /api/companies`、`GET/PUT/DELETE /api/companies/{company_id}`：PostgreSQL 公司库 CRUD；`profile` 为完整 BidderProfile；公司名称必填。
 - `POST /api/bids` 与 `/api/bid-runs*` 需要 `X-Project-Id`；`POST /api/bids` 支持可选 `company_id`：未提供 profile 时从公司库载入；提供 profile 时使用当前编辑内容，company_id 写入 job payload 便于追踪。
 - 评论与实时进度：`GET /api/project-members` 返回当前项目成员摘要；`GET/POST /api/bid-runs/{run_id}/comments`、`PATCH /api/bid-runs/{run_id}/comments/{comment_id}` 管理评论/@提及/指派/解决；`GET /api/bid-runs/{run_id}/events` 返回 `text/event-stream` 实时快照（需 Bearer 头，token 不进 URL）。
+- 通知：`GET /api/notifications`（当前用户、当前项目，`unread_only/limit/offset` 与未读数）、`GET /api/notifications/unread`、`POST /api/notifications/{id}/read`、`POST /api/notifications/read-all`；全部挂 `require_project_read`，只能读写当前用户自己的通知。
 
   ```bash
   curl -X POST http://127.0.0.1:8001/api/search \
@@ -257,6 +261,15 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `scripts/load_test.py` 只读 HTTP/SSE 压测：`health/live/ready/runs/comments/search`（search 是只读 POST）与并发 SSE `snapshot` 帧统计；token/密码只从环境变量读取（`LOAD_TEST_TOKEN` 或 `LOAD_TEST_USERNAME`/`LOAD_TEST_PASSWORD`），不打印也不进 URL；输出 RPS、错误率、p50/p95/p99 与按端点统计，支持错误率/p95/SSE 失败退出码。
 - CI `.github/workflows/ci.yml` 新增 `e2e` job：PostgreSQL 16 service + Chromium，运行 `scripts/run_e2e.py`，失败时上传 Playwright 报告、`test-results` 与 `.e2e/logs`。单元测试 `tests/test_load_test_script.py` 覆盖百分位、请求构造与报告汇总。详见 `docs/e2e-and-load-testing.md`。
 
+### 站内通知、Webhook 与 SMTP（P2，`api/notifications.py`、迁移 `0015`）
+
+- Alembic `0015` 新增 `notifications`：项目/用户/kind/title/body/资源 id/run/doc/comment/section/actor/`dedupe_key`/`read_at`；唯一约束 `(user_id, dedupe_key)` 防重复，索引 `(user_id, read_at, created_at)`、`(project_id, created_at)`，项目删除级联。`user_id` 不加外键，删除账号保留历史。
+- 事件：`comment_mention`、`comment_assigned`（评论创建/改派，收件人为被提及/新处理人，排除作者）；`run_assembled`、`gate_blocked`、`approval_pending`（assemble 完成，收件人为项目 manager + reviewer）。同一评论/同一内容哈希的 run 事件按 dedupe key 去重；重复 assemble 不刷屏。
+- 触发点：评论路由在审计后调用 `NotificationService.notify_comment`；`BidRunService.assemble` 在写入 assembled/gate 后调用 `notify_run_assembled`，API 与 Celery worker 的 inline assembler 都注入 notifier。通知失败只 warning，不影响主流程。
+- 出站：`NotificationDispatcher` 在 API event loop 中用 `asyncio.to_thread`、在 worker 中同步发送；Webhook `POST` JSON，可带 `X-Much-Agents-Signature: sha256=HMAC-SHA256(secret, raw_body)`，载荷只含事件/id/门禁/操作人，不含评论正文、profile、文档文本、token；SMTP 用全局 `NOTIFY_EMAIL_TO`（用户表暂无 email 字段），正文只含元数据。超时默认 5 秒，无重试/DLQ。
+- 接口：`GET /api/notifications`、`GET /api/notifications/unread`、`POST /api/notifications/{id}/read`、`POST /api/notifications/read-all`，全部挂项目只读守卫且只操作本人通知。前端 Header 通知铃铛 25 秒轮询 + 聚焦刷新，点击带 `run_id` 的通知直接打开标书 run。
+- 边界：无通知偏好/用户级邮箱/资质到期提醒/项目看板；未对 Webhook 域名做白名单校验。详见 `docs/notifications.md`。
+
 ### 合规检查、一致性台账与修复方案（P1-B，`src/bidding/compliance.py`、`consistency.py`、`fix_plan.py`）
 
 - `assemble` 在组装后额外生成 `compliance.json`（21 项独立检查）与 `consistency.json`（跨章节事实台账），并把状态/summary 写入 `gate.json` 与 `report.json`；两文件也是 run 目录产物，可直接在 artifact 面板预览/下载。
@@ -297,7 +310,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、站内通知/SMTP/Webhook 与评论线程/删除、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
+- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、评论线程/回复/删除与截止时间/项目看板、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 
@@ -309,10 +322,11 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 章节版本：`BID_SECTION_VERSION_KEEP`（默认 50，每节保留的版本数）。
 - 需求与引用：`BID_REQUIREMENTS_BLOCK`（默认 false；true 时强制需求缺失阻断导出）、`BID_CITATION_MIN_COVERAGE`（默认 0.8，低于则门禁警告）。
 - PDF 导出：`SOFFICE_PATH`（可选，指定 `soffice`/`libreoffice` 可执行文件；留空自动探测 PATH 与 Windows 默认安装目录）。未安装 LibreOffice 时 `POST .../export/pdf` 返回 503。
+- 通知：`NOTIFY_WEBHOOK_URL`、`NOTIFY_WEBHOOK_SECRET`、`NOTIFY_WEBHOOK_TIMEOUT_SECONDS`、`NOTIFY_EMAIL_ENABLED`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM`、`SMTP_STARTTLS`、`SMTP_USE_SSL`、`NOTIFY_EMAIL_TO`。站内通知不需要配置；Webhook/SMTP 未配置时只写库。
 - MCP 服务端：`MCP_API_BASE_URL`、`MCP_HTTP_HOST`、`MCP_HTTP_PORT`、`MCP_HTTP_TOKEN`、`MCP_API_TOKEN`（调用业务 API 的 service token）。MCP 客户端：`MCP_CLIENT_ENABLED`、`MCP_CLIENT_CONFIG`、`MCP_CLIENT_MAX_SERVERS`、`MCP_CLIENT_MAX_TOOLS`、`MCP_CLIENT_MAX_CHARS`、`MCP_CLIENT_MAX_IMAGE_BYTES`、`MCP_CLIENT_MAX_IMAGE_DIMENSION`、`MCP_CLIENT_TIMEOUT_SECONDS`。
 - 生产部署：`deploy/env.production` 从 `deploy/env.production.example` 复制（真实文件已 gitignore），其中 `ENVIRONMENT=production` 触发 fail-fast；TLS 证书放在 `deploy/nginx/certs/{fullchain.pem,privkey.pem}`（已 gitignore，可用 `generate-self-signed.sh` 生成）。生产只通过 `docker compose -f docker-compose.prod.yml` 启动，详见 `docs/deployment.md`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
-- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建，项目/文档注册表由 `0004` 创建，`audit_events` 由 `0005` 创建，`llm_call_log`/`run_usage` 由 `0006` 创建，章节 `generation_token`/`last_heartbeat_at` 由 `0007` 增加，`bid_runs.content_sha256` 由 `0008` 增加，`bid_approvals` 由 `0009` 创建，`retrieval_snapshots` 由 `0010` 创建，`prompt_registry` 由 `0011` 创建，`bid_section_versions` 由 `0012` 创建，`outline_revision`/`review_summary` 由 `0013` 增加，`bid_comments` 由 `0014` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
+- PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建，项目/文档注册表由 `0004` 创建，`audit_events` 由 `0005` 创建，`llm_call_log`/`run_usage` 由 `0006` 创建，章节 `generation_token`/`last_heartbeat_at` 由 `0007` 增加，`bid_runs.content_sha256` 由 `0008` 增加，`bid_approvals` 由 `0009` 创建，`retrieval_snapshots` 由 `0010` 创建，`prompt_registry` 由 `0011` 创建，`bid_section_versions` 由 `0012` 创建，`outline_revision`/`review_summary` 由 `0013` 增加，`bid_comments` 由 `0014` 创建，`notifications` 由 `0015` 创建。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
