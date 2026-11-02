@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { getApiBase } from './api/client'
 import type { AuthUser, BidRunSummary, ViewKey } from './api/types'
 import { useAuth } from './auth/useAuth'
@@ -59,13 +59,16 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
     activeJobId,
   )
 
-  useEffect(() => {
-    // Business selections never carry across projects.
+  const [selectionProjectId, setSelectionProjectId] = useState(projectId)
+  if (projectId !== selectionProjectId) {
+    // Adjust derived selection state during render; business selections never
+    // carry across projects. React re-renders before committing children.
+    setSelectionProjectId(projectId)
     setSelectedDocId(null)
     setSelectedCompanyId(null)
     setSelectedRunId(null)
     setActiveJobId(null)
-  }, [projectId])
+  }
 
   const meta = VIEW_META[view]
   const needsProject =
