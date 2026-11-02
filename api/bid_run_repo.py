@@ -1928,6 +1928,28 @@ class BidRunRepository:
             row = await session.get(RunUsageRow, run_id)
         return _run_usage_record(row) if row is not None else None
 
+    async def list_external_usage(
+        self,
+        *,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ExternalUsageRecord]:
+        statement = (
+            select(ExternalUsageRow)
+            .order_by(ExternalUsageRow.created_at.desc())
+            .limit(max(1, min(int(limit), 200)))
+        )
+        if project_id:
+            statement = statement.where(
+                ExternalUsageRow.project_id == project_id
+            )
+        if doc_id:
+            statement = statement.where(ExternalUsageRow.doc_id == doc_id)
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_external_usage_record(row) for row in rows]
+
     async def add_external_usage(
         self, rows: list[dict[str, Any]]
     ) -> list[ExternalUsageRecord]:
@@ -2090,6 +2112,33 @@ class BidRunRepository:
                         BidQualitySnapshotRow.gate_status.is_not(None),
                     )
                     .group_by(BidQualitySnapshotRow.gate_status)
+                )
+            ).all()
+            budget_alert_rows = (
+                await session.execute(
+                    select(
+                        NotificationRow.kind,
+                        NotificationRow.title,
+                        NotificationRow.body,
+                        NotificationRow.run_id,
+                        NotificationRow.doc_id,
+                        NotificationRow.user_id,
+                        NotificationRow.read_at,
+                        NotificationRow.created_at,
+                    )
+                    .where(
+                        NotificationRow.created_at >= start,
+                        NotificationRow.kind.in_(
+                            (
+                                "run_budget_warning",
+                                "run_budget_exceeded",
+                                "project_budget_warning",
+                                "project_budget_exceeded",
+                            )
+                        ),
+                    )
+                    .order_by(NotificationRow.created_at.desc())
+                    .limit(50)
                 )
             ).all()
             project_run_rows = (
@@ -2310,6 +2359,28 @@ class BidRunRepository:
             },
             "projects": projects[:10],
             "daily": sorted(daily.values(), key=lambda item: item["date"]),
+            "budget_alerts": [
+                {
+                    "kind": str(kind),
+                    "title": str(title or ""),
+                    "body": str(body or ""),
+                    "run_id": run_id,
+                    "doc_id": doc_id,
+                    "user_id": str(user_id),
+                    "read": read_at is not None,
+                    "created_at": created_at,
+                }
+                for (
+                    kind,
+                    title,
+                    body,
+                    run_id,
+                    doc_id,
+                    user_id,
+                    read_at,
+                    created_at,
+                ) in budget_alert_rows
+            ],
         }
 
 

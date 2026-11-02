@@ -20,6 +20,7 @@ import { BidFiguresPanel } from '../components/BidFiguresPanel'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
+import { BidUsagePanel } from '../components/BidUsagePanel'
 import { BidSectionModal } from '../components/BidSectionModal'
 import { ProfileEditor } from '../components/ProfileEditor'
 import { ArtifactPanel } from '../components/ArtifactPanel'
@@ -1057,6 +1058,14 @@ export function BidView({
               onPreview={(sectionId) => void openSection(sectionId, false)}
               onEdit={(sectionId) => void openSection(sectionId, true)}
               onRegenerate={(sectionId) => void regenerateSection(sectionId)}
+            />
+          ) : null}
+
+          {run ? (
+            <BidUsagePanel
+              runId={run.run_id}
+              active={active}
+              refreshKey={`${run.updated_at}:${run.gate_status ?? ''}`}
             />
           ) : null}
 

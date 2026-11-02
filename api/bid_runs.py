@@ -112,9 +112,11 @@ from .schemas import (
     BidCommentUpdateRequest,
     BidCommentView,
     BidComplianceResponse,
+    BidExternalUsageView,
     BidFeedbackCreate,
     BidFeedbackListResponse,
     BidFeedbackView,
+    BidUsageResponse,
     BidConsistencyResponse,
     BidFixApplyRequest,
     BidFixPlanRequest,
@@ -1207,6 +1209,54 @@ class BidRunService:
     async def analytics_overview(self, days: int = 30) -> AnalyticsOverview:
         payload = await self._repo().analytics_overview(days=days)
         return AnalyticsOverview(**payload)
+
+    async def get_usage(self, run_id: str) -> BidUsageResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        usage = await repo.get_run_usage(run_id)
+        external = await repo.list_external_usage(
+            project_id=run.project_id, doc_id=run.doc_id, limit=50
+        )
+        project_budget = await repo.get_project_monthly_budget(
+            run.project_id
+        )
+        project_cost = await repo.project_month_cost(run.project_id)
+        return BidUsageResponse(
+            run_id=run_id,
+            doc_id=run.doc_id,
+            project_id=run.project_id,
+            llm_calls=usage.llm_calls if usage else 0,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            cost_cny=round(usage.cost_cny, 4) if usage else 0.0,
+            retries=usage.retries if usage else 0,
+            fallback_calls=usage.fallback_calls if usage else 0,
+            duration_ms=usage.duration_ms if usage else 0,
+            run_budget_cents=(
+                self.bid_settings.run_budget_cents
+                if self.bid_settings.run_budget_cents > 0
+                else None
+            ),
+            budget_enforcement=self.bid_settings.budget_enforcement,
+            project_monthly_budget_cents=project_budget,
+            project_month_cost_cny=round(project_cost, 4),
+            external=[
+                BidExternalUsageView(
+                    id=record.id,
+                    provider=record.provider,
+                    operation=record.operation,
+                    units=record.units,
+                    unit_type=record.unit_type,
+                    cost_cny=record.cost_cny,
+                    status=record.status,
+                    created_at=record.created_at,
+                )
+                for record in external
+            ],
+        )
 
     async def patch_outline(
         self,

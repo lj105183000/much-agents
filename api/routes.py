@@ -121,6 +121,7 @@ from .schemas import (
     BidFeedbackCreate,
     BidFeedbackListResponse,
     BidFeedbackView,
+    BidUsageResponse,
     BidFigureRegenerateRequest,
     BidFiguresResponse,
     BidFixApplyRequest,
@@ -1691,6 +1692,17 @@ def build_router() -> APIRouter:
         return result
 
     @router.get(
+        "/bid-runs/{run_id}/usage",
+        response_model=BidUsageResponse,
+    )
+    async def get_bid_run_usage(
+        run_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidUsageResponse:
+        return await service.get_usage(run_id)
+
+    @router.get(
         "/bid-runs/{run_id}/feedback",
         response_model=BidFeedbackListResponse,
     )
@@ -2508,6 +2520,19 @@ def build_router() -> APIRouter:
         row("provider", "records", "units", "cost_cny")
         for provider, item in sorted(payload.external.by_provider.items()):
             row(provider, item.records, item.units, item.cost_cny)
+
+        writer.writerow([])
+        row("BudgetAlerts")
+        row("kind", "title", "body", "run_id", "created_at", "read")
+        for alert in payload.budget_alerts:
+            row(
+                alert.kind,
+                alert.title,
+                alert.body,
+                alert.run_id or "",
+                alert.created_at.isoformat(),
+                alert.read,
+            )
 
         filename = f"much-agents-analytics-{payload.days}d.csv"
         return Response(

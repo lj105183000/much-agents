@@ -865,6 +865,36 @@ export interface BidFeedbackView {
   created_at: string
 }
 
+export interface BidExternalUsageView {
+  id: number
+  provider: string
+  operation: string
+  units: number
+  unit_type: string
+  cost_cny: number | null
+  status: string
+  created_at: string
+}
+
+export interface BidUsageResponse {
+  run_id: string
+  doc_id: string
+  project_id: string
+  llm_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost_cny: number
+  retries: number
+  fallback_calls: number
+  duration_ms: number
+  run_budget_cents: number | null
+  budget_enforcement: string
+  project_monthly_budget_cents: number | null
+  project_month_cost_cny: number
+  external: BidExternalUsageView[]
+}
+
 export interface BidFeedbackListResponse {
   run_id: string
   feedback: BidFeedbackView[]
@@ -934,6 +964,17 @@ export interface AnalyticsProject {
   month_cost_cny: number
 }
 
+export interface AnalyticsBudgetAlert {
+  kind: string
+  title: string
+  body: string
+  run_id: string | null
+  doc_id: string | null
+  user_id: string
+  read: boolean
+  created_at: string
+}
+
 export interface AnalyticsDaily {
   date: string
   runs: number
@@ -950,6 +991,7 @@ export interface AnalyticsOverview {
   quality: AnalyticsQuality
   projects: AnalyticsProject[]
   daily: AnalyticsDaily[]
+  budget_alerts: AnalyticsBudgetAlert[]
 }
 
 export type NotificationKind =
