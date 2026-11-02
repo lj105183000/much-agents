@@ -2,9 +2,23 @@
 
 多 Agent 标书编写系统：把招标文件 PDF 解析为结构化知识，检索相关章节，由多个 Agent 生成投标文件，并完成合规检查、跨章节一致性核对、AI 配图与严格门禁导出。
 
+[▶ 观看 60 秒产品介绍](https://lj105183000.github.io/much-agents/presentation/) · [源码](https://github.com/lj105183000/much-agents) · [生产验收边界](docs/m1-acceptance-report.md)
+
 > 本项目以 GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）发布。
-> 源码：<https://github.com/lj105183000/much-agents>。
-> 生产部署与本轮验收边界见 [`docs/m1-acceptance-report.md`](docs/m1-acceptance-report.md)。
+
+## 目录
+
+- [主要能力](#主要能力)
+- [快速开始](#快速开始)
+- [架构](#架构)
+- [Agent 工作流](#agent-工作流)
+- [RAG 与防幻觉](#rag-与防幻觉)
+- [知识库](#知识库)
+- [安全边界](#安全边界)
+- [测试与检查](#测试与检查)
+- [文档](#文档)
+- [状态与未实现项](#状态与未实现项)
+- [License](#license)
 
 ## 主要能力
 
@@ -17,6 +31,73 @@
 - **桌面与 Web**：React 19 + Vite + Electron 工作台；Nginx 生产托管与 API 反向代理。
 - **MCP**：MCP 服务端（stdio/HTTP）与白名单客户端（外部证据、企业资料、外部绘图）。
 - **生产运维**：Docker Compose、TLS、健康检查、备份/恢复脚本、CI 与安全扫描。
+
+## 快速开始
+
+### 依赖
+
+- Python 3.12（由 `uv` 管理）
+- Node.js 22+
+- Docker Desktop（PostgreSQL/Redis/MinIO；Chroma 可本机运行）
+- 模型密钥：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`
+
+### 一键启动（Windows，推荐）
+
+```text
+start.bat            # Docker 依赖 + 迁移 + Chroma + API + worker + Vite
+start.bat local      # 无 Redis/worker/MinIO 的本地模式
+start.bat prod       # 构建前端并由 Nginx 托管到 8080
+stop.bat             # 停止 start.bat 拉起的进程
+```
+
+首次运行会从 `.env.example` 复制 `.env`；缺少模型密钥时只警告，不阻塞启动。
+
+### 手动启动后端
+
+```bash
+uv sync
+cp .env.example .env            # 填写模型密钥；.env 永不入库
+uv run alembic upgrade head     # 应用 PostgreSQL 迁移
+uv run chroma run --path ./chroma_db
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
+```
+
+默认使用 Celery + Redis；Windows worker 必须 `--pool=solo`：
+
+```bash
+uv run celery -A api.celery_app:celery_app worker -Q parse,bid --pool=solo --loglevel=INFO
+```
+
+无 Redis/worker 的本机模式：
+
+```bash
+TASK_BACKEND=local uv run uvicorn api.main:app --port 8001
+```
+
+首次使用需创建管理员：
+
+```bash
+uv run python -m api.users create-admin --username admin --display-name 管理员
+```
+
+### 手动启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:5173
+npm run electron:dev # Electron + Vite
+```
+
+### 生产部署
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+生产只通过 Nginx 暴露 80/443；API/worker 非 root、只读根文件系统。部署前请阅读
+[`docs/deployment.md`](docs/deployment.md)，并使用 `deploy/env.production.example`
+与真实 TLS 证书。`ENVIRONMENT=production` 会在启动时拒绝不安全配置。
 
 ## 架构
 
@@ -168,71 +249,6 @@ RAG 不是独立服务，而是写作链路的一部分：先建向量库，再�
 - 图纸/清单未进入解析文本时，知识库无法补出对应事实；需要 OCR 或作为附件补充。
 - 知识库不包含投标 run 正文、评论、审计等业务数据；这些分别在 run 产物、`bid_comments`、`audit_events` 中。
 
-## 快速开始
-
-### 依赖
-
-- Python 3.12（由 `uv` 管理）
-- Node.js 22+
-- Docker Desktop（PostgreSQL/Redis/MinIO；Chroma 可本机运行）
-- 模型密钥：`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`、`MINERU_API_KEY`
-
-### 后端
-
-```bash
-uv sync
-cp .env.example .env            # 填写模型密钥；.env 永不入库
-uv run alembic upgrade head     # 应用 PostgreSQL 迁移
-uv run chroma run --path ./chroma_db
-uv run uvicorn api.main:app --host 0.0.0.0 --port 8001
-```
-
-默认使用 Celery + Redis；Windows worker 必须 `--pool=solo`：
-
-```bash
-uv run celery -A api.celery_app:celery_app worker -Q parse,bid --pool=solo --loglevel=INFO
-```
-
-无 Redis/worker 的本机模式：
-
-```bash
-TASK_BACKEND=local uv run uvicorn api.main:app --port 8001
-```
-
-首次使用需创建管理员：
-
-```bash
-uv run python -m api.users create-admin --username admin --display-name 管理员
-```
-
-### 前端
-
-```bash
-cd frontend
-npm install
-npm run dev          # http://localhost:5173
-npm run electron:dev # Electron + Vite
-```
-
-Windows 一键启动（Docker 依赖 + 迁移 + Chroma + API + worker + Vite）：
-
-```text
-start.bat            # 完整本地环境
-start.bat local      # 无 Redis/worker/MinIO 的本地模式
-start.bat prod       # 构建前端并由 Nginx 托管到 8080
-stop.bat             # 停止 start.bat 拉起的进程
-```
-
-### 生产部署
-
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-生产只通过 Nginx 暴露 80/443；API/worker 非 root、只读根文件系统。部署前请阅读
-[`docs/deployment.md`](docs/deployment.md)，并使用 `deploy/env.production.example`
-与真实 TLS 证书。`ENVIRONMENT=production` 会在启动时拒绝不安全配置。
-
 ## 安全边界
 
 - `.env`、`deploy/env.production`、TLS 私钥、备份与上传数据均在 `.gitignore` 中，禁止提交。
@@ -262,31 +278,75 @@ uv run python -m scripts.load_test --endpoint health --endpoint runs
 
 ## 文档
 
+### 产品与验收
+
+- [产品介绍视频（60 秒，GitHub Pages 播放）](https://lj105183000.github.io/much-agents/presentation/)
+- [M1 生产验收报告](docs/m1-acceptance-report.md)
+- [贡献指南](CONTRIBUTING.md)
+
+### 架构与功能
+
+- [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
+- [DOC 导出、DOCX 模板与企业资质库](docs/export-and-qualifications.md)
+- [反馈闭环、质量快照与运营看板](docs/feedback-and-analytics.md)
+- [站内通知、Webhook 与 SMTP](docs/notifications.md)
+
+### 安全与部署
+
 - [认证、会话与 RBAC](docs/authentication.md)
 - [项目与对象级 ACL](docs/projects.md)
 - [审计哈希链](docs/audit.md)
 - [MinIO 对象存储](docs/minio-storage.md)
 - [生产部署与运维](docs/deployment.md)
-- [依赖安全审计与例外](docs/dependency-security.md)
-- [AI 配图与 MCP](docs/ai-figures-and-mcp.md)
-- [前端 E2E 与压测](docs/e2e-and-load-testing.md)
-- [站内通知、Webhook 与 SMTP](docs/notifications.md)
 - [干净主机生产验收](docs/production-acceptance.md)
-- [DOC 导出、DOCX 模板与企业资质库](docs/export-and-qualifications.md)
-- [反馈闭环、质量快照与运营看板](docs/feedback-and-analytics.md)
+- [依赖安全审计与例外](docs/dependency-security.md)
+
+### 测试与评测
+
+- [前端 E2E 与压测](docs/e2e-and-load-testing.md)
 - [L1 评测集标注流程](docs/eval-annotation.md)
 - [L2 judge 与人工标签校准](docs/l2-judge-calibration.md)
+
+### 路线图
+
 - [产品化路线图](docs/productization-roadmap.md)
 - [生产就绪与评测路线图](docs/production-readiness.md)
-- [产品设计与技术架构演示（PPT）](docs/presentation/much-agents-product-architecture.pptx)
-- [产品介绍视频（1080p，60 秒，GitHub Pages 播放）](https://lj105183000.github.io/much-agents/presentation/)
-- [M1 生产验收报告](docs/m1-acceptance-report.md)
-- [贡献指南](CONTRIBUTING.md)
+
+### 许可证与第三方组件
+
 - [第三方组件与许可证](THIRD_PARTY_NOTICES.md)
 
 ## 状态与未实现项
 
-P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）、审批 UI（意见/override/历史/内容哈希提示）、经 Headless LibreOffice 的 PDF 导出、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，以及需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）。浏览器 E2E（Playwright，隔离 PostgreSQL 栈）、只读 HTTP/SSE 压测、站内通知与可选 Webhook/SMTP、章节反馈/质量快照/运营看板与 CSV 报表、MinerU/Embedding（含附件）用量账本、run 预算/项目月度配额、80%/100% 阈值告警与预算趋势图、L1 评测集 CSV 标注流程与 reviewed points 回归评分、L2 盲评工作簿与人工标签校准、DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览、企业资质库、Electron 本地产物目录打开、干净主机验收工具 `scripts/acceptance_check.py` 已落地。尚未完成：真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）、模板变量/公司级模板、资质扫描件与到期自动通知、Alertmanager 真实通知渠道、MCP OAuth 与前端配置 UI、Cosign 签名、L1 实际标注数据与 L2 评测校准。
+P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）。
+
+**已落地能力**
+
+- 完整真实 profile 的 11 节生成/组装/门禁/审批/DOCX 导出演练
+- 附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）
+- 审批 UI（意见/override/历史/内容哈希提示）
+- Headless LibreOffice PDF 导出、章节版本历史/diff/恢复
+- 评审评论/@提及/指派与 SSE 实时进度
+- 需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）
+- 浏览器 E2E（Playwright，隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测
+- 站内通知与可选 Webhook/SMTP
+- 章节反馈/质量快照/运营看板与 CSV 报表
+- MinerU/Embedding（含附件）用量账本、run 预算/项目月度配额、80%/100% 阈值告警与预算趋势图
+- L1 评测集 CSV 标注流程与 reviewed points 回归评分
+- L2 盲评工作簿与人工标签校准
+- DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览
+- 企业资质库、Electron 本地产物目录打开
+- 干净主机验收工具 `scripts/acceptance_check.py`
+
+**尚未完成**
+
+- 真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）
+- 模板变量/公司级模板
+- 资质扫描件与到期自动通知
+- Alertmanager 真实通知渠道
+- MCP OAuth 与前端配置 UI
+- Cosign 签名
+- L1 实际标注数据与 L2 评测校准
 
 ## License
 
