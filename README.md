@@ -90,6 +90,51 @@ Reviewer（确定性检查 + 最多 2 次 LLM JSON）
 
 **已知边界：** Reviewer 只看到前 3 条检索证据；Reviser 不接收检索证据；Writer 失败不自动重试；默认每节 1 轮修订。源码：`src/bidding/agents.py`、`src/bidding/graph.py`、`src/bidding/staged.py`；实现细节见 `CLAUDE.md` 的「多 Agent 投标文件编写」与「持久化投标 run」章节。
 
+## RAG 与防幻觉
+
+RAG 不是独立服务，而是写作链路的一部分：先建向量库，再按章节检索，最后把带编号的证据注入 Agent。防幻觉是在生成前、生成后和交付前做多层约束，不能保证 100% 无幻觉。
+
+### RAG 链路
+
+```text
+招标 PDF ──► 解析/结构对齐 ──► 章节切块（700/120）──► embedding-3 ──► Chroma
+                                                                     │
+每节：标题 + 编写要求 + 项目名 ──► 语义检索（失败回退关键词）◄────────┘
+                                      │
+                         附件 BOQ 专项 query + 可选 MCP 证据
+                                      │
+                                      ▼
+                     Writer 提示词中的带编号证据 + [E编号] 引用要求
+```
+
+- **建库**：`src/parsing/chunking.py` 按 TOC 章节切块；`src/parsing/ingest.py` 调智谱 `embedding-3` 写入 Chroma 集合 `bidding_documents`。
+- **检索**：`src/bidding/retrieval.py` 语义优先；Chroma/智谱不可用或空结果时回退关键词。
+- **附件**：PDF/CSV/XLSX 等工程量清单可追加为附件，检索时额外执行 BOQ 专项 query 并前置合并。
+- **外部证据**：MCP 证据标记为未核实来源，只作线索，最多占总证据预算 1/3。
+- **溯源**：每节 query/mode/hits/页码/文本哈希写入 `retrieval_snapshots`；引用编号按生成时实际提供的证据校验。
+
+### 防幻觉三层
+
+| 层级 | 机制 | 代码 |
+|---|---|---|
+| 生成前 | 只允许项目事实 + 招标证据；缺失事实必须 `【待填写：...】`；公司/人员/证书/业绩/报价/绝对日期不得编造；“拟投入/拟安排”必须标注为方案；MCP 证据不得作为具体事实 | `src/bidding/prompts.py` |
+| 生成后 | 白名单校验金额/日期/证件号；未授权值替换为 `【待填写：...】`；确定性审查 + LLM JSON 审查；修订需通过高危/篇幅/非空验收；`[E编号]` 引用校验 | `src/bidding/checks.py`、`src/bidding/citations.py` |
+| 交付前 | 需求覆盖矩阵、21 项合规、跨章节一致性、导出前门禁；block 时严格导出被拒；`force=true` 仅管理员且记审计 | `src/bidding/requirements.py`、`src/bidding/compliance.py`、`src/bidding/consistency.py`、`src/bidding/gate.py` |
+
+**其他约束：**
+
+- Writer/Reviewer/Reviser 只接收 `BidderProfile.brief()` 非敏感摘要，完整 profile 不进入提示词。
+- AI 配图确定性绘制，不做文生图；缺失数据用明确占位。
+- 解析/抽取阶段的 DeepSeek 与合规修复 LLM 都受各自的确定性校验/回退约束。
+
+**当前边界：**
+
+- RAG 质量取决于招标文件和附件是否完整；图纸/清单未进入文本时无法检索出对应事实。
+- 确定性检查主要覆盖金额、日期、证件号；其他事实性陈述仍依赖 Reviewer LLM，可能漏检。
+- Reviewer 只看到前 3 条证据，Reviser 不接收证据，这是当前链路的主要弱点。
+- 引用覆盖率和需求缺失默认是 warn（`BID_CITATION_MIN_COVERAGE=0.8`、`BID_REQUIREMENTS_BLOCK=false`），管理员可强制导出。
+- 没有 NLI/语义蕴含模型或外部事实核查服务；这是多层约束，不是 100% 保证。
+
 ## 快速开始
 
 ### 依赖
