@@ -335,7 +335,13 @@ def create_app(
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Project-Id", "X-Request-ID"],
-        expose_headers=["Content-Disposition", "ETag", "X-Request-ID"],
+        expose_headers=[
+            "Content-Disposition",
+            "ETag",
+            "X-Request-ID",
+            "X-Template-Preview-Page",
+            "X-Template-Preview-Pages",
+        ],
         max_age=600,
     )
     install_request_context(app, audit_service)

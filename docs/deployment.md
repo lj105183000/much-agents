@@ -344,7 +344,7 @@ docker compose -f docker-compose.prod.yml config
 - 单机 Compose，无 HA/多副本；Postgres/Redis/MinIO 故障会导致服务不可用。
 - `chroma` 是 `api`/`worker-bid` 启动时的健康依赖；运行时检索可以回退关键词，但 Chroma 容器无法启动时整套服务不会启动。当前固定 digest 的 `chromadb/chroma` 是 Rust 版本，镜像内没有 Python/curl/wget，健康检查用 `bash /dev/tcp` 请求 `/api/v2/heartbeat`。
 - 没有内置 Prometheus/Grafana 栈；API 暴露受保护的 `/api/metrics`，需自行部署抓取与告警。Celery beat 与 `deploy/systemd/much-agents-backup.timer` 分别负责 stale reaper 与每日备份。
-- PDF 导出在 API 进程内同步调用 Headless LibreOffice（生产 `api` 镜像已安装 Writer，非 Docker 部署需自行安装并确保 `soffice` 可执行，或设置 `SOFFICE_PATH`）；每个 API 进程用信号量串行转换，高并发场景仍建议迁移到独立队列。`GET /api/health` 返回 `pdf_export_available`，`/api/metrics` 暴露 `much_agents_pdf_exports_total` 与 `much_agents_pdf_export_duration_seconds`。PDF 与 DOCX 使用同一份组装结果，转换失败不会影响 DOCX 导出。
+- PDF 导出在 API 进程内同步调用 Headless LibreOffice（生产 `api` 镜像已安装 Writer，非 Docker 部署需自行安装并确保 `soffice` 可执行，或设置 `SOFFICE_PATH`）；每个 API 进程用信号量串行转换，高并发场景仍建议迁移到独立队列。`GET /api/health` 返回 `pdf_export_available`，`/api/metrics` 暴露 `much_agents_pdf_exports_total` 与 `much_agents_pdf_export_duration_seconds`。PDF 与 DOCX 使用同一份组装结果，转换失败不会影响 DOCX 导出。模板分页预览同样依赖 LibreOffice（先将模板转为 PDF，再用 PyMuPDF 渲染 PNG）；未安装时预览返回 503，前端隐藏预览入口。
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。

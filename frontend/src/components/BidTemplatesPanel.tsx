@@ -3,11 +3,13 @@ import { api, ApiError } from '../api/client'
 import type { BidTemplateView } from '../api/types'
 import { Badge, Button, Card, Field, Spinner, inputClass, textareaClass } from './ui'
 import { Icon } from './icons'
+import { BidTemplatePreviewModal } from './BidTemplatePreviewModal'
 import { formatBytes, formatDate } from '../lib/format'
 import { useProject } from '../project/useProject'
 
 interface BidTemplatesPanelProps {
   canManage: boolean
+  previewAvailable: boolean
 }
 
 function errorMessage(caught: unknown, fallback: string): string {
@@ -30,9 +32,14 @@ function downloadBlob(blob: Blob, filename: string): void {
  * Project-scoped DOCX template library. Enabling a template only affects the
  * next assembly; existing runs must be reassembled before export uses it.
  */
-export function BidTemplatesPanel({ canManage }: BidTemplatesPanelProps) {
+export function BidTemplatesPanel({
+  canManage,
+  previewAvailable,
+}: BidTemplatesPanelProps) {
   const { current } = useProject()
   const [open, setOpen] = useState(false)
+  const [previewTemplate, setPreviewTemplate] =
+    useState<BidTemplateView | null>(null)
   const [templates, setTemplates] = useState<BidTemplateView[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -264,6 +271,16 @@ export function BidTemplatesPanel({ canManage }: BidTemplatesPanelProps) {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {previewAvailable ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setPreviewTemplate(template)}
+                        >
+                          <Icon name="eye" className="h-3.5 w-3.5" />
+                          预览
+                        </Button>
+                      ) : null}
                       {canManage ? (
                         template.is_active ? (
                           <Button
@@ -378,12 +395,25 @@ export function BidTemplatesPanel({ canManage }: BidTemplatesPanelProps) {
             </p>
           )}
 
+          {!previewAvailable ? (
+            <p className="text-[11px] leading-5 text-amber-200/80">
+              模板预览依赖服务器安装 LibreOffice（与 PDF 导出相同）；当前
+              `GET /api/health` 显示预览不可用。
+            </p>
+          ) : null}
+
           <p className="text-[11px] leading-5 text-slate-500">
             模板只影响 Word 版式。启用、停用或切换模板后，已组装的标书需要重新
             组装，DOCX/PDF/DOC 导出才会应用新模板。
           </p>
         </div>
       ) : null}
+
+      <BidTemplatePreviewModal
+        key={previewTemplate?.id ?? 'closed'}
+        template={previewTemplate}
+        onClose={() => setPreviewTemplate(null)}
+      />
     </Card>
   )
 }

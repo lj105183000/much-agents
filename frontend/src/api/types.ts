@@ -1161,6 +1161,12 @@ export interface BidTemplateListResponse {
   templates: BidTemplateView[]
 }
 
+export interface BidTemplatePreview {
+  blob: Blob
+  page: number
+  pages: number
+}
+
 export interface BidTemplateUpdateInput {
   name?: string
   description?: string
