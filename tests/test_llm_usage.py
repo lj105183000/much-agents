@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,9 @@ from src.bidding.llm_usage import (
     LLMUsageRecord,
     MeteredChatClient,
     estimate_cost,
+    load_price_entries,
     load_price_table,
+    select_price_entry,
     usage_scope,
 )
 from src.bidding.errors import BidLLMError, BidLLMTruncatedError
@@ -129,7 +132,8 @@ def test_price_table_and_cost_estimation(tmp_path) -> None:
                     "effective_from": "2026-01-01",
                 }
             }
-        )
+        ),
+        as_of=date(2026, 1, 2),
     )
     assert estimate_cost("deepseek-flash", 1000, 500, table) == 0.002
     assert estimate_cost("unknown", 1000, 500, table) is None
@@ -137,7 +141,15 @@ def test_price_table_and_cost_estimation(tmp_path) -> None:
 
     price_file = tmp_path / "prices.json"
     price_file.write_text(json.dumps(table), encoding="utf-8")
-    assert estimate_cost("deepseek-flash", 1000, 0, load_price_table(str(price_file))) == 0.001
+    assert (
+        estimate_cost(
+            "deepseek-flash",
+            1000,
+            0,
+            load_price_table(str(price_file), as_of=date(2026, 1, 2)),
+        )
+        == 0.001
+    )
 
 
 class _MeteredInner:
@@ -234,3 +246,78 @@ def test_metered_client_records_errors() -> None:
     assert scope.records[0].status == "error"
     assert scope.records[0].error_type == "RuntimeError"
     assert scope.records[0].json_mode is True
+
+
+def test_price_entries_honour_effective_from() -> None:
+    raw = json.dumps(
+        {
+            "models": {
+                "deepseek-flash": [
+                    {
+                        "input_per_1k_cny": 1.0,
+                        "output_per_1k_cny": 2.0,
+                        "effective_from": "2026-01-01",
+                    },
+                    {
+                        "input_per_1k_cny": 3.0,
+                        "output_per_1k_cny": 4.0,
+                        "effective_from": "2026-07-01",
+                    },
+                    {
+                        "input_per_1k_cny": 9.0,
+                        "output_per_1k_cny": 9.0,
+                        "effective_from": "2027-01-01",
+                    },
+                ]
+            }
+        }
+    )
+    entries = load_price_entries(raw)
+    assert len(entries["deepseek-flash"]) == 3
+    assert (
+        select_price_entry(entries["deepseek-flash"], date(2026, 6, 30))[
+            "input_per_1k_cny"
+        ]
+        == 1.0
+    )
+    assert (
+        select_price_entry(entries["deepseek-flash"], date(2026, 7, 1))[
+            "input_per_1k_cny"
+        ]
+        == 3.0
+    )
+    assert (
+        estimate_cost(
+            "deepseek-flash",
+            1000,
+            500,
+            entries,
+            as_of=date(2026, 7, 1),
+        )
+        == 5.0
+    )
+    assert (
+        estimate_cost(
+            "deepseek-flash",
+            1000,
+            500,
+            entries,
+            as_of=date(2025, 12, 31),
+        )
+        is None
+    )
+    table = load_price_table(raw, as_of=date(2026, 7, 2))
+    assert table["deepseek-flash"]["input_per_1k_cny"] == 3.0
+
+
+def test_price_entry_without_effective_date_always_applies() -> None:
+    raw = json.dumps(
+        {
+            "deepseek-chat": {
+                "input_per_1k_cny": 0.002,
+                "output_per_1k_cny": 0.004,
+            }
+        }
+    )
+    table = load_price_table(raw, as_of=date(1999, 1, 1))
+    assert estimate_cost("deepseek-chat", 1000, 500, table) == 0.004

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
@@ -308,6 +309,138 @@ def _playwright_env(
     return env
 
 
+def _create_load_run(
+    seed: dict[str, str],
+    api_port: int,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> str:
+    """Create an empty run so the load probe can read comments and SSE."""
+
+    with httpx.Client(
+        base_url=f"http://127.0.0.1:{api_port}",
+        timeout=15.0,
+        transport=transport,
+    ) as client:
+        login = client.post(
+            "/api/auth/login",
+            json={
+                "username": seed["admin_username"],
+                "password": seed["admin_password"],
+            },
+        )
+        login.raise_for_status()
+        token = str(login.json().get("token") or "")
+        if not token:
+            raise RuntimeError("load-probe login did not return a token")
+        created = client.post(
+            "/api/bid-runs",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Project-Id": seed["project_id"],
+            },
+            json={
+                "doc_id": seed["doc_id"],
+                "profile": {},
+                "max_sections": 1,
+            },
+        )
+        created.raise_for_status()
+        run_id = str(created.json().get("run_id") or "")
+    if not run_id:
+        raise RuntimeError("load-probe run creation did not return run_id")
+    return run_id
+
+
+def _load_test_env(seed: dict[str, str], run_id: str) -> dict[str, str]:
+    env = _base_env()
+    env.pop("LOAD_TEST_TOKEN", None)
+    env.update(
+        {
+            "LOAD_TEST_USERNAME": seed["admin_username"],
+            "LOAD_TEST_PASSWORD": seed["admin_password"],
+            "LOAD_TEST_PROJECT_ID": seed["project_id"],
+            "LOAD_TEST_RUN_ID": run_id,
+            "LOAD_TEST_DOC_ID": seed["doc_id"],
+        }
+    )
+    return env
+
+
+def _load_test_command(
+    api_port: int,
+    *,
+    duration: float,
+    concurrency: int,
+    max_p95_ms: float,
+    sse_connections: int,
+    sse_seconds: float,
+) -> list[str]:
+    return [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "scripts.load_test",
+        "--base-url",
+        f"http://127.0.0.1:{api_port}",
+        "--endpoint",
+        "health",
+        "--endpoint",
+        "live",
+        "--endpoint",
+        "ready",
+        "--endpoint",
+        "runs",
+        "--endpoint",
+        "comments",
+        "--endpoint",
+        "search",
+        "--duration",
+        str(duration),
+        "--concurrency",
+        str(concurrency),
+        "--max-error-rate",
+        "0.01",
+        "--max-p95-ms",
+        str(max_p95_ms),
+        "--sse-connections",
+        str(sse_connections),
+        "--sse-seconds",
+        str(sse_seconds),
+        "--json",
+    ]
+
+
+def _run_load_test(
+    seed: dict[str, str],
+    *,
+    api_port: int,
+    duration: float,
+    concurrency: int,
+    max_p95_ms: float,
+    sse_connections: int,
+    sse_seconds: float,
+) -> int:
+    print("[e2e] creating a run for the read-only load probe")
+    run_id = _create_load_run(seed, api_port)
+    command = _load_test_command(
+        api_port,
+        duration=duration,
+        concurrency=concurrency,
+        max_p95_ms=max_p95_ms,
+        sse_connections=sse_connections,
+        sse_seconds=sse_seconds,
+    )
+    result = _run(command, env=_load_test_env(seed, run_id), capture=False)
+    if result.returncode != 0:
+        print(
+            "[e2e] load probe failed; see the JSON report above",
+            file=sys.stderr,
+        )
+    return result.returncode
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the browser E2E suite")
     parser.add_argument("--api-port", type=int, default=8021)
@@ -333,6 +466,21 @@ def main(argv: list[str] | None = None) -> int:
         help="provision the database and start API/Vite without running tests",
     )
     parser.add_argument(
+        "--load-test",
+        action="store_true",
+        help="run the read-only HTTP/SSE load probe with p95 gating",
+    )
+    parser.add_argument("--load-duration", type=float, default=10.0)
+    parser.add_argument("--load-concurrency", type=int, default=8)
+    parser.add_argument(
+        "--load-max-p95-ms",
+        type=float,
+        default=1500.0,
+        help="fail the load probe when overall p95 exceeds this (0 disables)",
+    )
+    parser.add_argument("--load-sse-connections", type=int, default=4)
+    parser.add_argument("--load-sse-seconds", type=float, default=5.0)
+    parser.add_argument(
         "--skip-install",
         action="store_true",
         help="do not run npm ci when frontend/node_modules is missing",
@@ -343,6 +491,14 @@ def main(argv: list[str] | None = None) -> int:
         help="arguments after -- are passed to playwright test",
     )
     args = parser.parse_args(argv)
+    if args.load_duration <= 0:
+        parser.error("--load-duration must be positive")
+    if args.load_concurrency < 1:
+        parser.error("--load-concurrency must be at least 1")
+    if args.load_sse_connections < 1:
+        parser.error("--load-sse-connections must be at least 1")
+    if args.load_sse_seconds <= 0:
+        parser.error("--load-sse-seconds must be positive")
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     logs = root / "logs"
@@ -407,6 +563,21 @@ def main(argv: list[str] | None = None) -> int:
         services.append(vite)
         _wait_for(f"http://127.0.0.1:{args.web_port}/", vite)
 
+        load_code = 0
+        if args.load_test:
+            print("[e2e] running read-only HTTP/SSE load probe")
+            load_code = _run_load_test(
+                seed,
+                api_port=args.api_port,
+                duration=args.load_duration,
+                concurrency=args.load_concurrency,
+                max_p95_ms=args.load_max_p95_ms,
+                sse_connections=args.load_sse_connections,
+                sse_seconds=args.load_sse_seconds,
+            )
+            if args.setup_only:
+                return load_code
+
         if args.setup_only:
             print("[e2e] setup complete; API/Vite are running")
             return 0
@@ -424,7 +595,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.returncode != 0:
             print(f"[e2e] API log tail:\n{_log_tail(logs / 'api.log')}")
             print(f"[e2e] Vite log tail:\n{_log_tail(logs / 'vite.log')}")
-        return result.returncode
+        return load_code or result.returncode
     except Exception as exc:  # noqa: BLE001 - CLI entry point
         print(f"[e2e] failed: {exc}", file=sys.stderr)
         for service in services:

@@ -8,6 +8,7 @@ from scripts.load_test import (
     SseStats,
     build_headers,
     build_specs,
+    main,
     percentile,
 )
 
@@ -62,3 +63,16 @@ def test_report_summary_includes_latency_and_sse() -> None:
     assert summary["latency_ms"]["p50"] == 10.0
     assert summary["by_endpoint"]["health"]["p95_ms"] == 14.5
     assert summary["sse"]["frames"] == 3
+
+
+def test_main_reports_p95_failure_reason(monkeypatch, capsys) -> None:
+    async def fake_probe(args):
+        return LoadReport(
+            samples=[HttpSample("health", 200, 5000.0)],
+            elapsed_seconds=1.0,
+        )
+
+    monkeypatch.setattr("scripts.load_test.probe", fake_probe)
+    code = main(["--max-p95-ms", "100", "--duration", "1"])
+    assert code == 1
+    assert "p95" in capsys.readouterr().err

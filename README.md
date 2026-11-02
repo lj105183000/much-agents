@@ -119,7 +119,7 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `migrations/` | Alembic 迁移（`0001`–`0021`） |
 | `frontend/` | React 19 + TypeScript + TailwindCSS 4 + Electron |
 | `deploy/` | Nginx/TLS、生产 Compose 环境模板 |
-| `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测 |
+| `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测、LLM 基准与成本对账 |
 | `docs/` | 认证、项目 ACL、审计、对象存储、部署、AI 配图/MCP、E2E/压测 |
 | `tests/` | 后端单元/接口测试（全部 mock 网络） |
 | `frontend/e2e/` | Playwright 浏览器 E2E（真实隔离 API + PostgreSQL） |
@@ -270,11 +270,21 @@ npm audit --omit=dev --audit-level=high
 cd frontend && npx playwright install chromium && cd ..
 uv run python scripts/run_e2e.py
 
+# E2E + 只读压测 + p95 门禁（CI 同款）
+uv run python scripts/run_e2e.py --load-test --load-max-p95-ms 2000
+
 # 只读 HTTP/SSE 压测（token 从环境变量读取）
 uv run python -m scripts.load_test --endpoint health --endpoint runs
+
+# 真实 LLM 预算封顶基准（需 DEEPSEEK_API_KEY 与 LLM_PRICE_TABLE）
+uv run python -m scripts.eval_benchmark --dry-run
+uv run python -m scripts.eval_benchmark --max-cost-cny 0.5 --baseline eval-data/benchmarks/llm-baseline.json
+
+# 账本成本与供应商发票对账
+uv run python -m scripts.reconcile_costs --since 2026-11-01 --llm-invoice-cny 12.34
 ```
 
-详见 [`docs/e2e-and-load-testing.md`](docs/e2e-and-load-testing.md)。
+详见 [`docs/e2e-and-load-testing.md`](docs/e2e-and-load-testing.md) 与 [`docs/llm-benchmark-and-cost-reconciliation.md`](docs/llm-benchmark-and-cost-reconciliation.md)。
 
 ## 文档
 
@@ -304,6 +314,7 @@ uv run python -m scripts.load_test --endpoint health --endpoint runs
 ### 测试与评测
 
 - [前端 E2E 与压测](docs/e2e-and-load-testing.md)
+- [LLM 基准、价格生效日期与成本对账](docs/llm-benchmark-and-cost-reconciliation.md)
 - [L1 评测集标注流程](docs/eval-annotation.md)
 - [L2 judge 与人工标签校准](docs/l2-judge-calibration.md)
 
@@ -328,7 +339,8 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - Headless LibreOffice PDF 导出、章节版本历史/diff/恢复
 - 评审评论/@提及/指派与 SSE 实时进度
 - 需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）
-- 浏览器 E2E（Playwright，隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测
+- 浏览器 E2E（Playwright，隔离 PostgreSQL 栈）与 CI 内置只读 HTTP/SSE 压测 p95 门禁
+- 真实 LLM 预算封顶基准与夜间 workflow、价格 `effective_from` 多版本与发票成本对账
 - 站内通知与可选 Webhook/SMTP
 - 章节反馈/质量快照/运营看板与 CSV 报表
 - MinerU/Embedding（含附件）用量账本、run 预算/项目月度配额、80%/100% 阈值告警与预算趋势图
