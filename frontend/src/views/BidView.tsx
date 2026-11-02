@@ -1022,7 +1022,7 @@ export function BidView({
 
           {run ? (
             <BidCommentsPanel
-              key={run.run_id}
+              key={`comments:${run.run_id}`}
               runId={run.run_id}
               outline={bidRun.outline ?? outlineDraft}
             />
@@ -1030,6 +1030,7 @@ export function BidView({
 
           {run ? (
             <BidGatePanel
+              key={`gate:${run.run_id}`}
               gate={gate}
               loading={gateLoading}
               error={gateError}
@@ -1054,7 +1055,7 @@ export function BidView({
 
           {run ? (
             <BidCompliancePanel
-              key={`${run.run_id}:${complianceRefresh}`}
+              key={`compliance:${run.run_id}:${complianceRefresh}`}
               runId={run.run_id}
               active={active}
               onApplied={handleFixApplied}
@@ -1063,7 +1064,7 @@ export function BidView({
 
           {run ? (
             <BidCoveragePanel
-              key={`${run.run_id}:${complianceRefresh}`}
+              key={`coverage:${run.run_id}:${complianceRefresh}`}
               runId={run.run_id}
               active={active}
               refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
@@ -1072,7 +1073,7 @@ export function BidView({
 
           {run ? (
             <BidFiguresPanel
-              key={run.run_id}
+              key={`figures:${run.run_id}`}
               runId={run.run_id}
               refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
               active={active}

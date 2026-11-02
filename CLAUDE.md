@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、Playwright 浏览器 E2E（隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -34,6 +34,10 @@ uv run python -m src.storage check           # 检查 MinIO 连通性与各前�
 uv run python -m src.storage sync            # 把本地存量 upload/ 增量同步到 MinIO
 uv run pytest                                # 运行全部测试（全部 mock 网络）
 uv run pytest tests/test_toc.py::test_hierarchy_and_end_pages   # 单个测试
+uv run python scripts/run_e2e.py            # 重建隔离 e2e 库 + 启动 API/Vite + Playwright
+uv run python scripts/run_e2e.py --reuse-db --setup-only --keep-stack  # 只准备环境供调试
+uv run python -m scripts.load_test --endpoint health --endpoint runs    # 只读 HTTP/SSE 压测
+cd frontend && npx playwright install chromium                          # 首次安装浏览器
 uv run python -m src.parsing upload/6055594244948.pdf           # 解析 + 抽取 + 入库
 uv run python -m src.parsing <pdf> --parser pymupdf --no-extract --no-ingest  # 离线仅解析
 uv run python -m scripts.attach_evidence --doc-id <doc_id> --file <boq.pdf|csv>  # 追加工程量清单/补充资料（BOQ 专项检索）
@@ -100,6 +104,8 @@ npm install
 npm run dev            # Vite 开发服务器 http://localhost:5173
 npm run build          # tsc -b && vite build，产物到 frontend/dist/
 npm run lint           # oxlint
+npm test               # Vitest 单元测试
+npm run test:e2e       # Playwright（需先由 scripts/run_e2e.py 准备栈）
 npm run electron       # 先 build，再用 Electron 打开生产构建
 npm run electron:dev   # 并行启动 Vite 与 Electron（--dev 模式）
 npm run dist           # electron-builder 打包，输出 frontend/release/
@@ -180,7 +186,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 - **项目隔离（P0-B）**：Alembic `0004` 新增 `projects`、`project_members`、`documents`（PK `(project_id, doc_id)`），`bid_runs.project_id` 非空；默认项目 `00000000-0000-0000-0000-000000000001`。业务请求必须带 `X-Project-Id`（缺失 400，非成员/不存在 404）；有效权限 = 全局角色 AND 项目角色（`manager|writer|reviewer|viewer`）。`require_project_read/write/review/manage` 和 `require_run_*` 是统一守卫；文档/检索/任务/产物/run 全部按项目过滤。公司库保持全局共享。CLI `python -m api.projects` 管理项目、成员与 `backfill-documents`；首次启用 ACL 前必须回填历史解析文档。详见 `docs/projects.md`。
 - **审计（P0-C）**：Alembic `0005` 新增 `audit_events`，数据库触发器禁止 UPDATE/DELETE/TRUNCATE；追加时用 `pg_advisory_xact_lock` 串行化并计算 `sha256(prev_hash + canonical_json)` 链。中间件校验/生成 `X-Request-ID`，所有写请求有显式事件或 `http.request` 兜底；敏感操作 `required=True`，审计失败返回 503。管理员接口 `GET /api/audit`、`/api/audit/verify`、`/api/audit/export.csv`（CSV 公式转义），CLI `python -m api.audit verify`。审计只记元数据，不记密码/token/profile/正文。详见 `docs/audit.md`。
-- **生产部署（P0-D）**：多阶段 `Dockerfile`（`api-base`/`api`/`worker`/`migrate`/`web-build`/`web`）+ `docker-compose.prod.yml`，仅 Nginx 发布 80/443，Postgres/Redis/MinIO/Chroma 仅内部；`migrate` 成功后才启动 API/worker；API/worker 非 root、只读根文件系统。Nginx TLS 1.2/1.3、HSTS、CSP（内联主题脚本 SHA-256 固定）、登录/API `limit_req`、`/docs` 404；`deploy/env.production.example` 为占位模板（真实文件已 gitignore）。Celery 拆分 `parse`/`bid` 队列（开发单 worker 用 `-Q parse,bid`），`acks_late`/`reject_on_worker_lost`/prefetch 1/time limits。健康检查 `GET /api/live`（进程）与 `GET /api/ready`（依赖，5s 缓存，失败 503）。`scripts/backup.sh`（pg_dump + MinIO mirror + 可选 Chroma + SHA256SUMS）与 `scripts/restore.sh`；`.github/workflows/ci.yml` 覆盖后端/迁移/前端/Docker/安全扫描。详见 `docs/deployment.md`。
+- **生产部署（P0-D）**：多阶段 `Dockerfile`（`api-base`/`api`/`worker`/`migrate`/`web-build`/`web`）+ `docker-compose.prod.yml`，仅 Nginx 发布 80/443，Postgres/Redis/MinIO/Chroma 仅内部；`migrate` 成功后才启动 API/worker；API/worker 非 root、只读根文件系统。Nginx TLS 1.2/1.3、HSTS、CSP（内联主题脚本 SHA-256 固定）、登录/API `limit_req`、`/docs` 404；`deploy/env.production.example` 为占位模板（真实文件已 gitignore）。Celery 拆分 `parse`/`bid` 队列（开发单 worker 用 `-Q parse,bid`），`acks_late`/`reject_on_worker_lost`/prefetch 1/time limits。健康检查 `GET /api/live`（进程）与 `GET /api/ready`（依赖，5s 缓存，失败 503）。`scripts/backup.sh`（pg_dump + MinIO mirror + 可选 Chroma + SHA256SUMS）与 `scripts/restore.sh`；`.github/workflows/ci.yml` 覆盖后端/迁移/前端/E2E/Docker/安全扫描。详见 `docs/deployment.md`。
 
 ### FastAPI 上传接口（已实现，`api/`）
 
@@ -243,6 +249,14 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - SSE：`GET /api/bid-runs/{id}/events` 每 1.5 秒推送快照（run 状态/阶段/百分比/门禁/内容哈希、章节计数与逐节状态、Redis/Celery job 视图、`terminal`），每 15 秒心跳，单连接最长 30 分钟。前端用 `fetch` + `ReadableStream` 消费而不是 `EventSource`，因为后者无法携带 `Authorization`；token 绝不进入 URL。`useBidRunEvents` 断线 3 秒重连，`useBidRun` 轮询仍为事实来源与兜底。响应带 `X-Accel-Buffering: no`，避免 Nginx 缓冲。
 - 当前边界：无站内通知/SMTP/Webhook、评论删除/线程回复、截止时间、项目看板、编辑租约；SSE 是快照流，没有 `run_events` 追加表或 `Last-Event-ID` 续传。详见 `docs/collaboration.md`。
 
+### 浏览器 E2E 与压测（`scripts/run_e2e.py`、`frontend/e2e/`、`scripts/load_test.py`）
+
+- `scripts/run_e2e.py` 编排隔离测试栈：重建名称含 `e2e` 的 PostgreSQL 库（默认 `much_agents_e2e`，非 e2e 名拒绝 DROP）→ `alembic upgrade head` → `scripts/e2e_seed.py` 写入 `e2e-admin`/`e2e-viewer`、默认项目成员、`e2e-doc` 解析 fixture 与 `.e2e/sample.pdf` → 启动 API（`127.0.0.1:8021`，`AUTH_ENABLED=true`、`TASK_BACKEND=local`、`STORAGE_BACKEND=local`、无 LLM/Chroma/MinIO）→ Vite（`127.0.0.1:5174`，`E2E_API_URL` 代理到 8021）→ Playwright。所有产物在 `.e2e/`（gitignored）；`--reuse-db`、`--setup-only`、`--keep-stack` 便于调试。
+- `frontend/vite.config.ts` 的代理目标支持 `E2E_API_URL`，默认仍是 `http://127.0.0.1:8001`，不影响开发/生产。`frontend/playwright.config.ts` 固定单 worker、失败保留 trace/screenshot。
+- 覆盖：错误密码拒绝；管理员登录→选文档→创建大纲→评论→标记解决→登出；只读用户写操作禁用；PyMuPDF 上传解析（关闭抽取/入库）。不覆盖真实 LLM、Celery/Redis、MinIO、多项目切换与浏览器 SSE 重连。
+- `scripts/load_test.py` 只读 HTTP/SSE 压测：`health/live/ready/runs/comments/search`（search 是只读 POST）与并发 SSE `snapshot` 帧统计；token/密码只从环境变量读取（`LOAD_TEST_TOKEN` 或 `LOAD_TEST_USERNAME`/`LOAD_TEST_PASSWORD`），不打印也不进 URL；输出 RPS、错误率、p50/p95/p99 与按端点统计，支持错误率/p95/SSE 失败退出码。
+- CI `.github/workflows/ci.yml` 新增 `e2e` job：PostgreSQL 16 service + Chromium，运行 `scripts/run_e2e.py`，失败时上传 Playwright 报告、`test-results` 与 `.e2e/logs`。单元测试 `tests/test_load_test_script.py` 覆盖百分位、请求构造与报告汇总。详见 `docs/e2e-and-load-testing.md`。
+
 ### 合规检查、一致性台账与修复方案（P1-B，`src/bidding/compliance.py`、`consistency.py`、`fix_plan.py`）
 
 - `assemble` 在组装后额外生成 `compliance.json`（21 项独立检查）与 `consistency.json`（跨章节事实台账），并把状态/summary 写入 `gate.json` 与 `report.json`；两文件也是 run 目录产物，可直接在 artifact 面板预览/下载。
@@ -283,7 +297,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、站内通知/SMTP/Webhook 与评论线程/删除、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、前端 E2E 与压力测试。
+- **待办**：前端 IPC（打开本地目录）、DOC（97-2003）导出、站内通知/SMTP/Webhook 与评论线程/删除、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 
@@ -302,7 +316,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
-- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是本地输入/产物目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）——minio 模式下它是工作缓存，权威对象在 MinIO bucket；Docker 数据卷 `much-agents-minio-data` 保存 MinIO 对象；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）；`backups/` 保存 `scripts/backup.sh` 输出；`deploy/nginx/certs/` 下的证书与私钥永不入库。
+- 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是本地输入/产物目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）——minio 模式下它是工作缓存，权威对象在 MinIO bucket；Docker 数据卷 `much-agents-minio-data` 保存 MinIO 对象；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）；`.e2e/` 保存 E2E 隔离上传/解析/产物、seed.json 与 API/Vite 日志，`frontend/playwright-report/`、`frontend/test-results/` 保存 Playwright 报告（均已 gitignore）；`backups/` 保存 `scripts/backup.sh` 输出；`deploy/nginx/certs/` 下的证书与私钥永不入库。
 - MCP 配置文件：真实 `mcp_servers.json` 与 `.mcp.json` 已 gitignore；提交的模板为 `mcp_servers.example.json`、`.mcp.json.example`。
 
 ## 注意

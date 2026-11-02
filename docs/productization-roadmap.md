@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice）以及 P1 的需求覆盖矩阵/引用契约最小版也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice），P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -16,7 +16,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **项目隔离与审计（P0-B/C 已补）**：`projects`/`project_members`/`documents` + `bid_runs.project_id`（`0004`）、`X-Project-Id` 与角色求交、append-only `audit_events` 哈希链（`0005`）。
 - **生产部署（P0-D 已补）**：多阶段 `Dockerfile`、`docker-compose.prod.yml`、Nginx TLS/安全头、`/api/live` 与 `/api/ready`、拆分 parse/bid 队列、备份/恢复脚本、GitHub Actions CI。
 - **开发默认仍不等于生产**：`.env.example` 保留 `0.0.0.0` 与 `CORS_ORIGINS=*` 以兼容本机启动；`ENVIRONMENT=production` 会拒绝这些值并 fail-fast。
-- **前端测试仍薄**：已有 Vitest 覆盖 URL 信任边界与 API 客户端，但没有组件/E2E 测试；token 仍存 localStorage。
+- **前端测试（已补 E2E）**：Vitest 覆盖 URL 信任边界与 API 客户端；Playwright 覆盖登录、建 run、评论解决、只读权限与上传解析；组件级测试、多项目切换与浏览器 SSE 重连仍未覆盖；token 仍存 localStorage。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
 - **协作与实时进度（已补，通知/看板未做）**：审批绑定内容哈希、章节版本 diff/恢复、评论/@提及/指派与 SSE 实时进度已落地；站内通知、SMTP/Webhook、截止时间与项目看板仍未实现。
 - **交付物有限**：`src/bidding/docx_export.py:286-370` 仅基础标题/段落/表格/图片；无 PDF；无模板管理。
@@ -331,7 +331,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **Celery 可靠性**：`acks_late=True` + `task_reject_on_worker_lost=True`（先完成幂等验证）、瞬时错误重试退避、任务时间上限、`prefetch_multiplier=1`；parse/bid 独立队列与 worker；beat 负责清理、到期提醒、备份触发（或主机 cron）。
 - **性能**：文档注册表分页、搜索分页、关键索引（`bid_runs(project_id, created_at)`、`audit_events(project_id, ts)`、`section_versions(section_id, version)`）；Chroma 元数据过滤与重建策略；健康检查缓存。
 - **容灾与配额**：Postgres PITR/每日备份、MinIO 版本化 + 异地镜像、Chroma 可重建；RPO/RTO 目标与季度演练；项目级存储/运行/Token 配额。
-- **测试**：Playwright e2e（登录→上传→run→审批→导出）、Vitest 前端单测、k6/Locust 压测（10/50 并发）、契约测试；上线前安全测评。
+- **测试**：Playwright E2E（登录→上传→run→评论；审批/导出仍待补）、Vitest 前端单测、`scripts/load_test.py` HTTP/SSE 压测（10/50 并发仍需在真实环境达标）、契约测试；上线前安全测评。
 - **离线版（如需要）**：vLLM/SGLang + bge-m3 + PaddleOCR + 自建 MinerU，全部走内网网关；作为独立交付变体。
 
 ## 8. 技术选型清单
