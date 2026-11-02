@@ -279,6 +279,7 @@ uv run python -m scripts.load_test --endpoint health --endpoint runs
 - [产品化路线图](docs/productization-roadmap.md)
 - [生产就绪与评测路线图](docs/production-readiness.md)
 - [产品设计与技术架构演示（PPT）](docs/presentation/much-agents-product-architecture.pptx)
+- [产品介绍视频（1080p，60 秒，GitHub Pages 播放）](https://lj105183000.github.io/much-agents/presentation/)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
 - [贡献指南](CONTRIBUTING.md)
 - [第三方组件与许可证](THIRD_PARTY_NOTICES.md)
