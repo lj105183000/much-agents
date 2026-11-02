@@ -12,8 +12,8 @@
 
   --app-bg: #020617;
   --app-bg-end: #030712;
-  --app-glow-1: rgba(8, 145, 178, 0.16);
-  --app-glow-2: rgba(16, 185, 129, 0.08);
+  --app-glow-1: rgba(37, 99, 235, 0.2);
+  --app-glow-2: rgba(59, 130, 246, 0.1);
   --app-text: #e2e8f0;
   --scroll-thumb: #334155;
   --scroll-thumb-hover: #475569;
@@ -22,15 +22,28 @@
   --md-heading: #f1f5f9;
   --md-border: #1e293b;
   --md-code-bg: #0f172a;
-  --md-code-text: #a5f3fc;
+  --md-code-text: #bfdbfe;
   --md-pre-text: #dbeafe;
-  --md-quote-bg: rgba(8, 145, 178, 0.08);
+  --md-quote-bg: rgba(37, 99, 235, 0.1);
   --md-quote-text: #94a3b8;
   --md-table-head-bg: #0f172a;
   --md-table-row-bg: rgba(15, 23, 42, 0.55);
-  --md-link: #67e8f9;
-  --md-selection-bg: rgba(34, 211, 238, 0.3);
+  --md-link: #93c5fd;
+  --md-selection-bg: rgba(59, 130, 246, 0.35);
   --md-selection-text: #f8fafc;
+
+  /* Brand accent: legacy cyan utility names now render the blue palette. */
+  --color-cyan-50: #eff6ff;
+  --color-cyan-100: #dbeafe;
+  --color-cyan-200: #bfdbfe;
+  --color-cyan-300: #93c5fd;
+  --color-cyan-400: #3b82f6;
+  --color-cyan-500: #2563eb;
+  --color-cyan-600: #1d4ed8;
+  --color-cyan-700: #1e40af;
+  --color-cyan-800: #1e3a8a;
+  --color-cyan-900: #172554;
+  --color-cyan-950: #172554;
 
   /* Budget trend chart (validated dark categorical pair: blue/orange). */
   --viz-surface: #0f172a;
@@ -46,10 +59,10 @@
 html[data-theme="light"] {
   color-scheme: light;
 
-  --app-bg: #f8fafc;
-  --app-bg-end: #f1f5f9;
-  --app-glow-1: rgba(8, 145, 178, 0.1);
-  --app-glow-2: rgba(16, 185, 129, 0.08);
+  --app-bg: #ffffff;
+  --app-bg-end: #f8fafc;
+  --app-glow-1: rgba(37, 99, 235, 0.08);
+  --app-glow-2: rgba(59, 130, 246, 0.06);
   --app-text: #0f172a;
   --scroll-thumb: #cbd5e1;
   --scroll-thumb-hover: #94a3b8;
@@ -58,14 +71,14 @@ html[data-theme="light"] {
   --md-heading: #0f172a;
   --md-border: #e2e8f0;
   --md-code-bg: #f1f5f9;
-  --md-code-text: #0e7490;
+  --md-code-text: #1d4ed8;
   --md-pre-text: #1e293b;
-  --md-quote-bg: rgba(8, 145, 178, 0.06);
+  --md-quote-bg: rgba(37, 99, 235, 0.06);
   --md-quote-text: #475569;
   --md-table-head-bg: #f1f5f9;
   --md-table-row-bg: #f8fafc;
-  --md-link: #0e7490;
-  --md-selection-bg: rgba(8, 145, 178, 0.18);
+  --md-link: #1d4ed8;
+  --md-selection-bg: rgba(37, 99, 235, 0.18);
   --md-selection-text: #0f172a;
 
   /* Budget trend chart (validated light categorical pair: blue/orange). */
@@ -92,9 +105,11 @@ html[data-theme="light"] {
   --color-slate-50: #020617;
 
   /* Keep accent/status backgrounds but darken their text shades. */
-  --color-cyan-100: #155e75;
-  --color-cyan-200: #0e7490;
-  --color-cyan-300: #0e7490;
+  --color-cyan-100: #1e3a8a;
+  --color-cyan-200: #1d4ed8;
+  --color-cyan-300: #1d4ed8;
+  --color-cyan-400: #2563eb;
+  --color-cyan-500: #1d4ed8;
   --color-emerald-200: #047857;
   --color-emerald-300: #047857;
   --color-emerald-400: #059669;
@@ -244,7 +259,7 @@ button:disabled {
 
 .markdown-body blockquote {
   margin: 0.9em 0;
-  border-left: 3px solid #0891b2;
+  border-left: 3px solid #2563eb;
   border-radius: 0 0.5rem 0.5rem 0;
   background: var(--md-quote-bg);
   padding: 0.55em 0.9em;
