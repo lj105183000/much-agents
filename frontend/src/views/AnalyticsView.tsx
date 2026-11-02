@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { AnalyticsOverview } from '../api/types'
 import { usePermissions } from '../hooks/usePermissions'
+import { formatDate } from '../lib/format'
 import {
   Badge,
   Button,
@@ -108,6 +109,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
   const feedback = data?.feedback
   const quality = data?.quality
   const external = data?.external
+  const budgetAlerts = data?.budget_alerts ?? []
   const totalRuns = runs?.total ?? 0
   const gatePass = runs?.by_gate.pass ?? 0
   const passRate = totalRuns ? gatePass / totalRuns : 0
@@ -422,6 +424,47 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               </ul>
             </Card>
           </div>
+
+          <Card className="p-4 md:p-5">
+            <SectionHeader
+              title="预算告警历史"
+              description="最近窗口内触发的 run/项目月度预算 80%/100% 告警（管理员可见）。"
+            />
+            {budgetAlerts.length === 0 ? (
+              <p className="mt-3 text-[11px] text-slate-600">
+                当前窗口没有预算告警。
+              </p>
+            ) : (
+              <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                {budgetAlerts.map((alert, index) => (
+                  <li
+                    key={`${alert.created_at}-${index}`}
+                    className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        tone={
+                          alert.kind.endsWith('exceeded') ? 'red' : 'amber'
+                        }
+                      >
+                        {alert.kind.endsWith('exceeded') ? '超限' : '预警'}
+                      </Badge>
+                      <span className="text-[11px] font-medium text-slate-200">
+                        {alert.title}
+                      </span>
+                      <span className="text-[10px] text-slate-600">
+                        {formatDate(alert.created_at)}
+                        {alert.read ? ' · 已读' : ' · 未读'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {alert.body}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
 
           <Card className="p-4 md:p-5">
             <SectionHeader title="最近 14 天趋势" />

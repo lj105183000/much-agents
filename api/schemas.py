@@ -413,6 +413,36 @@ class BidFeedbackCreate(BaseModel):
     )
 
 
+class BidExternalUsageView(BaseModel):
+    id: int
+    provider: str
+    operation: str
+    units: int = 0
+    unit_type: str
+    cost_cny: float | None = None
+    status: str = "ok"
+    created_at: datetime
+
+
+class BidUsageResponse(BaseModel):
+    run_id: str
+    doc_id: str
+    project_id: str
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_cny: float = 0.0
+    retries: int = 0
+    fallback_calls: int = 0
+    duration_ms: int = 0
+    run_budget_cents: int | None = None
+    budget_enforcement: str = "warn"
+    project_monthly_budget_cents: int | None = None
+    project_month_cost_cny: float = 0.0
+    external: list[BidExternalUsageView] = Field(default_factory=list)
+
+
 class BidFeedbackView(BaseModel):
     id: int
     run_id: str
@@ -502,6 +532,17 @@ class AnalyticsDaily(BaseModel):
     cost_cny: float = 0.0
 
 
+class AnalyticsBudgetAlert(BaseModel):
+    kind: str
+    title: str = ""
+    body: str = ""
+    run_id: str | None = None
+    doc_id: str | None = None
+    user_id: str
+    read: bool = False
+    created_at: datetime
+
+
 class AnalyticsOverview(BaseModel):
     days: int
     runs: AnalyticsRuns = Field(default_factory=AnalyticsRuns)
@@ -511,6 +552,7 @@ class AnalyticsOverview(BaseModel):
     quality: AnalyticsQuality = Field(default_factory=AnalyticsQuality)
     projects: list[AnalyticsProject] = Field(default_factory=list)
     daily: list[AnalyticsDaily] = Field(default_factory=list)
+    budget_alerts: list[AnalyticsBudgetAlert] = Field(default_factory=list)
 
 
 class BidRunEventSection(BaseModel):

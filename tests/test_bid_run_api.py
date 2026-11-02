@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from api.bid_run_repo import RunUsageRecord
 from api.bid_runs import BidRunService
 from api.jobs import JobStore
 from api.runner import InlineRunner
@@ -670,6 +671,24 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
                 ]
             )
         )
+        repo.run_usage[run_id] = RunUsageRecord(
+            run_id=run_id,
+            project_id="00000000-0000-0000-0000-000000000001",
+            llm_calls=2,
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            cost_cny=0.5,
+            retries=0,
+            fallback_calls=0,
+            duration_ms=10_000,
+            updated_at=datetime.now(timezone.utc),
+        )
+        usage = client.get(f"/api/bid-runs/{run_id}/usage")
+        assert usage.status_code == 200, usage.text
+        assert usage.json()["cost_cny"] == 0.5
+        assert usage.json()["external"][0]["provider"] == "mineru"
+        assert usage.json()["run_budget_cents"] is None
         analytics = client.get("/api/analytics/overview?days=30")
         assert analytics.status_code == 200, analytics.text
         payload = analytics.json()
@@ -725,6 +744,7 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert "runs_total" in exported.text
         assert "External" in exported.text
         assert "mineru" in exported.text
+        assert "BudgetAlerts" in exported.text
 
 
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:

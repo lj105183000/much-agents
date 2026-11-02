@@ -20,6 +20,7 @@ import type {
   BidFeedbackCreate,
   BidFeedbackListResponse,
   BidFeedbackView,
+  BidUsageResponse,
   BidFigureRegenerateRequest,
   BidFiguresResponse,
   BidFixApplyRequest,
@@ -849,6 +850,12 @@ export const api = {
     return request<NotificationReadAllResponse>('/api/notifications/read-all', {
       method: 'POST',
     })
+  },
+
+  getBidUsage(runId: string): Promise<BidUsageResponse> {
+    return request<BidUsageResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/usage`,
+    )
   },
 
   listBidFeedback(

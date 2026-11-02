@@ -1157,6 +1157,22 @@ class FakeBidRunRepository:
     async def project_month_cost(self, project_id: str) -> float:
         return float(self.project_month_costs.get(project_id, 0.0))
 
+    async def list_external_usage(
+        self,
+        *,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ExternalUsageRecord]:
+        rows = [
+            record
+            for record in self.external_usage
+            if (project_id is None or record.project_id == project_id)
+            and (doc_id is None or record.doc_id == doc_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 200))]
+
     async def add_external_usage(
         self, rows: list[dict[str, Any]]
     ) -> list[ExternalUsageRecord]:
@@ -1260,6 +1276,24 @@ class FakeBidRunRepository:
             },
             "projects": [],
             "daily": [],
+            "budget_alerts": [
+                {
+                    "kind": record.kind,
+                    "title": record.title,
+                    "body": record.body,
+                    "run_id": record.run_id,
+                    "doc_id": record.doc_id,
+                    "user_id": record.user_id,
+                    "read": record.read_at is not None,
+                    "created_at": record.created_at,
+                }
+                for record in sorted(
+                    self.notifications.values(),
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
+                if record.kind.startswith(("run_budget_", "project_budget_"))
+            ],
         }
 
     def _section_versions(

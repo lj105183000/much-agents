@@ -110,7 +110,9 @@ BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 
 前端左侧「运营看板」仅管理员可见，支持 7/30/90 天切换与刷新。查询全部走 PostgreSQL 聚合，不新增外部服务。
 
-`GET /api/analytics/export.csv?days=7|30|90`（仅 admin）导出 UTF-8 BOM CSV，包含 Summary、Daily、Projects（含本月成本/预算）、Feedback、External 分节；所有单元格做 CSV 公式注入前缀转义。前端「导出 CSV」按钮下载。
+`GET /api/analytics/export.csv?days=7|30|90`（仅 admin）导出 UTF-8 BOM CSV，包含 Summary、Daily、Projects（含本月成本/预算）、Feedback、External、BudgetAlerts 分节；所有单元格做 CSV 公式注入前缀转义。前端「导出 CSV」按钮下载。运营看板同时展示最近预算告警历史（kind/title/body/时间/已读）。
+
+`GET /api/bid-runs/{run_id}/usage`（项目只读）返回该 run 的 LLM 调用/token/成本/重试/耗时、run 预算与策略、项目本月成本/月度配额，以及该文档的 MinerU/Embedding 外部用量；前端「成本与预算」面板显示进度条与外部用量明细。
 
 ## 7. 隐私与边界
 
