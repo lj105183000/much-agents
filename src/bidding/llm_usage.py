@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 
@@ -111,16 +111,7 @@ def record_usage(record: LLMUsageRecord) -> None:
     scope.records.append(record)
 
 
-def load_price_table(raw: str | None = None) -> dict[str, dict[str, Any]]:
-    """Load a model price table from JSON text or a file path.
-
-    Supported shape::
-
-        {"deepseek-flash": {"input_per_1k_cny": 0.001,
-                            "output_per_1k_cny": 0.002,
-                            "effective_from": "2026-01-01"}}
-    """
-
+def _load_price_payload(raw: str | None) -> dict[str, Any] | None:
     value = raw if raw is not None else os.environ.get("LLM_PRICE_TABLE", "")
     value = (value or "").strip()
     if not value:
@@ -130,7 +121,7 @@ def load_price_table(raw: str | None = None) -> dict[str, dict[str, Any]]:
                 "LLM_PRICE_TABLE is not configured; LLM cost_cny will be null/zero"
             )
             _price_warning_emitted = True
-        return {}
+        return None
     try:
         if Path(value).is_file():
             text = Path(value).read_text(encoding="utf-8")
@@ -139,28 +130,116 @@ def load_price_table(raw: str | None = None) -> dict[str, dict[str, Any]]:
         payload = json.loads(text)
     except (OSError, ValueError) as exc:
         logger.warning("invalid LLM_PRICE_TABLE: %s", exc)
-        return {}
-    if not isinstance(payload, dict):
-        return {}
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _price_models(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     models = payload.get("models") if isinstance(payload.get("models"), dict) else payload
-    return {
-        str(model): dict(entry)
-        for model, entry in models.items()
-        if isinstance(entry, dict)
-    }
+    if not isinstance(models, dict):
+        return {}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for model, entry in models.items():
+        if isinstance(entry, dict):
+            result[str(model)] = [dict(entry)]
+        elif isinstance(entry, list):
+            entries = [dict(item) for item in entry if isinstance(item, dict)]
+            if entries:
+                result[str(model)] = entries
+    return result
+
+
+def load_price_entries(raw: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Load every price entry per model, preserving ``effective_from`` dates.
+
+    A model may map to a single object (legacy shape) or to a list of objects::
+
+        {"models": {"deepseek-flash": [
+            {"input_per_1k_cny": 0.001, "output_per_1k_cny": 0.002,
+             "effective_from": "2026-01-01"},
+            {"input_per_1k_cny": 0.0012, "output_per_1k_cny": 0.0024,
+             "effective_from": "2026-07-01"},
+        ]}}
+    """
+
+    payload = _load_price_payload(raw)
+    return _price_models(payload) if payload is not None else {}
+
+
+def _effective_date(entry: dict[str, Any]) -> date | None:
+    value = entry.get("effective_from")
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        logger.warning(
+            "invalid price effective_from %r; treating it as always effective",
+            value,
+        )
+        return None
+
+
+def select_price_entry(
+    entries: list[dict[str, Any]] | None,
+    as_of: date | None = None,
+) -> dict[str, Any] | None:
+    """Pick the latest entry effective on ``as_of`` (defaults to today, UTC)."""
+
+    if not entries:
+        return None
+    today = as_of or datetime.now(timezone.utc).date()
+    applicable: list[tuple[date, int, dict[str, Any]]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        effective = _effective_date(entry)
+        if effective is None or effective <= today:
+            applicable.append((effective or date.min, index, entry))
+    if not applicable:
+        return None
+    return max(applicable, key=lambda item: (item[0], item[1]))[2]
+
+
+def load_price_table(
+    raw: str | None = None,
+    *,
+    as_of: date | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load the effective price entry per model for ``as_of``."""
+
+    table: dict[str, dict[str, Any]] = {}
+    for model, entries in load_price_entries(raw).items():
+        entry = select_price_entry(entries, as_of)
+        if entry is not None:
+            table[model] = entry
+    return table
 
 
 def estimate_cost(
     model: str | None,
     prompt_tokens: int | None,
     completion_tokens: int | None,
-    table: dict[str, dict[str, Any]] | None = None,
+    table: dict[str, dict[str, Any] | list[dict[str, Any]]] | None = None,
+    *,
+    as_of: date | None = None,
 ) -> float | None:
     """Return cost in CNY, or ``None`` when the model/price/tokens are unknown."""
 
     if not model or prompt_tokens is None:
         return None
-    prices = (table if table is not None else load_price_table()).get(model)
+    if table is not None:
+        raw_entry = table.get(model)
+        if isinstance(raw_entry, dict):
+            # ``load_price_table`` already resolved the effective entry.
+            prices: dict[str, Any] | None = raw_entry
+        elif isinstance(raw_entry, list):
+            entries = [item for item in raw_entry if isinstance(item, dict)]
+            prices = select_price_entry(entries, as_of)
+        else:
+            prices = None
+    else:
+        prices = select_price_entry(load_price_entries().get(model, []), as_of)
     if not isinstance(prices, dict):
         return None
     input_price = prices.get("input_per_1k_cny", prices.get("input"))
@@ -287,7 +366,9 @@ __all__ = [
     "MeteredChatClient",
     "UsageScope",
     "estimate_cost",
+    "load_price_entries",
     "load_price_table",
     "record_usage",
+    "select_price_entry",
     "usage_scope",
 ]
