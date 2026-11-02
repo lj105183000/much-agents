@@ -1,6 +1,6 @@
 # 生产部署与运维（P0-D）
 
-> 状态：已实现（2026-10-24）。目标形态是**单台 Linux 主机 + Docker Compose + Nginx TLS** 的内网小团队部署。Windows `start.bat` 仍用于本机开发，不是生产方案。
+> 状态：已实现（2026-10-24）。目标形态是**单台 Linux 主机 + Docker Compose + Nginx TLS** 的内网小团队部署。Windows `start.bat` 仍用于本机开发，不是生产方案。干净主机的自动/人工验收清单见 [`production-acceptance.md`](production-acceptance.md)。
 
 ## 1. 拓扑
 
