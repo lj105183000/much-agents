@@ -809,6 +809,46 @@ export interface BidCommentUpdateInput {
   assignee_id?: string | null
 }
 
+export type NotificationKind =
+  | 'comment_mention'
+  | 'comment_assigned'
+  | 'run_assembled'
+  | 'gate_blocked'
+  | 'approval_pending'
+
+export interface NotificationView {
+  notification_id: string
+  kind: NotificationKind | string
+  title: string
+  body: string
+  resource_type: string
+  resource_id: string
+  run_id: string | null
+  doc_id: string | null
+  comment_id: string | null
+  section_id: string | null
+  actor_name: string | null
+  read_at: string | null
+  created_at: string
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationView[]
+  unread: number
+}
+
+export interface NotificationUnreadResponse {
+  unread: number
+}
+
+export interface NotificationReadResponse {
+  read: boolean
+}
+
+export interface NotificationReadAllResponse {
+  updated: number
+}
+
 export interface BidRunEventSection {
   section_id: string
   title: string

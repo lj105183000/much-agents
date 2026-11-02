@@ -68,6 +68,9 @@ test('admin creates a bid run and resolves a review comment', async ({
 
   const body = `E2E 评审意见 ${Date.now()}`
   await page.getByTestId('comment-body').fill(body)
+  await page
+    .getByTestId('comment-assignee')
+    .selectOption({ label: 'E2E 只读用户（e2e-viewer）' })
   await page.getByTestId('comment-submit').click()
 
   const card = page.getByTestId('comment-card').filter({ hasText: body })
@@ -76,6 +79,16 @@ test('admin creates a bid run and resolves a review comment', async ({
   await card.getByRole('button', { name: '标记解决' }).click()
   await expect(card.getByText('已解决')).toBeVisible()
 
+  await logout(page)
+  await login(page, VIEWER_USERNAME, VIEWER_PASSWORD)
+  await page.getByTestId('notification-bell').click()
+  const assignment = page
+    .getByTestId('notification-item')
+    .filter({ hasText: '指派给你' })
+  await expect(assignment).toBeVisible()
+  await page.getByTestId('notification-mark-all').click()
+  await expect(page.getByTestId('notification-mark-all')).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await logout(page)
 })
 

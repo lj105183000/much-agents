@@ -90,6 +90,12 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
     navigate('bid')
   }
 
+  const openNotificationRun = (runId: string, docId: string | null) => {
+    if (docId) setSelectedDocId(docId)
+    setSelectedRunId(runId)
+    navigate('bid')
+  }
+
   const saveBase = (value: string) => {
     setApiBase(saveApiBase(value, apiBase))
   }
@@ -124,6 +130,8 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
           user={user}
           authEnabled={authEnabled}
           onLogout={() => void logout()}
+          apiBase={apiBase}
+          onOpenRun={openNotificationRun}
         />
         <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">
           <div className="mx-auto w-full max-w-6xl space-y-5">

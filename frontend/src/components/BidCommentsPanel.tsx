@@ -259,6 +259,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
               hint={memberError ?? '选择项目成员作为处理人'}
             >
               <select
+                data-testid="comment-assignee"
                 className={selectClass}
                 value={assigneeId}
                 onChange={(event) => setAssigneeId(event.target.value)}

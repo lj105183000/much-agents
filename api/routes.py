@@ -66,6 +66,13 @@ from .bids import BidService
 from .companies import CompanyError, CompanyRecord, CompanyService
 from .documents import list_documents
 from .jobs import JobStoreError
+from .notifications import (
+    COMMENT_ASSIGNED,
+    COMMENT_MENTION,
+    NotificationService,
+    NotificationTarget,
+    notification_payload,
+)
 from .projects import (
     DEFAULT_PROJECT_ID,
     MemberRecord,
@@ -134,6 +141,11 @@ from .schemas import (
     JobStatusResponse,
     LoginRequest,
     LoginResponse,
+    NotificationListResponse,
+    NotificationReadAllResponse,
+    NotificationReadResponse,
+    NotificationUnreadResponse,
+    NotificationView,
     PasswordResetRequest,
     ProjectCreateRequest,
     ProjectListResponse,
@@ -180,6 +192,10 @@ def get_bid_service(request: Request) -> BidService:
 
 def get_bid_run_service(request: Request) -> BidRunService:
     return request.app.state.bid_run_service
+
+
+def get_notification_service(request: Request) -> NotificationService:
+    return request.app.state.notification_service
 
 
 def get_search_service(request: Request) -> SearchService:
@@ -1317,6 +1333,79 @@ def build_router() -> APIRouter:
         )
 
     @router.get(
+        "/notifications",
+        response_model=NotificationListResponse,
+    )
+    async def list_notifications(
+        unread_only: bool = Query(False),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        context: ProjectContext = Depends(require_project_read),
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationListResponse:
+        records, unread = await notifications.list_notifications(
+            user.id,
+            context.project_id,
+            unread_only=unread_only,
+            limit=limit,
+            offset=offset,
+        )
+        return NotificationListResponse(
+            notifications=[
+                NotificationView(**notification_payload(record))
+                for record in records
+            ],
+            unread=unread,
+        )
+
+    @router.get(
+        "/notifications/unread",
+        response_model=NotificationUnreadResponse,
+    )
+    async def get_notification_unread_count(
+        context: ProjectContext = Depends(require_project_read),
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationUnreadResponse:
+        return NotificationUnreadResponse(
+            unread=await notifications.unread_count(
+                user.id, context.project_id
+            )
+        )
+
+    @router.post(
+        "/notifications/read-all",
+        response_model=NotificationReadAllResponse,
+    )
+    async def mark_all_notifications_read(
+        context: ProjectContext = Depends(require_project_read),
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationReadAllResponse:
+        return NotificationReadAllResponse(
+            updated=await notifications.mark_all_read(
+                user.id, context.project_id
+            )
+        )
+
+    @router.post(
+        "/notifications/{notification_id}/read",
+        response_model=NotificationReadResponse,
+    )
+    async def mark_notification_read(
+        notification_id: str,
+        context: ProjectContext = Depends(require_project_read),
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationReadResponse:
+        return NotificationReadResponse(
+            read=await notifications.mark_read(
+                user.id, context.project_id, notification_id
+            )
+        )
+
+    @router.get(
         "/project-members",
         response_model=ProjectMemberBriefListResponse,
     )
@@ -1376,6 +1465,7 @@ def build_router() -> APIRouter:
         user: UserContext = Depends(require_user),
         projects: ProjectService = Depends(get_project_service),
         service: BidRunService = Depends(get_bid_run_service),
+        notifications: NotificationService = Depends(get_notification_service),
     ) -> BidCommentView:
         assignee_id = (payload.assignee_id or "").strip() or None
         needs_members = bool(payload.mentions) or assignee_id is not None
@@ -1444,6 +1534,32 @@ def build_router() -> APIRouter:
                 "mention_count": len(result.mentions),
             },
         )
+        targets = [
+            NotificationTarget(
+                user_id=mention.user_id,
+                display_name=mention.display_name,
+                kind=COMMENT_MENTION,
+            )
+            for mention in result.mentions
+        ]
+        if result.assignee_id:
+            targets.append(
+                NotificationTarget(
+                    user_id=result.assignee_id,
+                    display_name=result.assignee_name or result.assignee_id,
+                    kind=COMMENT_ASSIGNED,
+                )
+            )
+        await notifications.notify_comment(
+            run_id=run_id,
+            comment_id=result.comment_id,
+            comment_body=result.body,
+            section_id=result.section_id,
+            section_title=result.section_title,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            targets=targets,
+        )
         return result
 
     @router.patch(
@@ -1459,8 +1575,13 @@ def build_router() -> APIRouter:
         user: UserContext = Depends(require_user),
         projects: ProjectService = Depends(get_project_service),
         service: BidRunService = Depends(get_bid_run_service),
+        notifications: NotificationService = Depends(get_notification_service),
     ) -> BidCommentView:
         set_assignee = "assignee_id" in payload.model_fields_set
+        previous_assignee: str | None = None
+        if set_assignee:
+            previous = await service.get_comment(run_id, comment_id)
+            previous_assignee = previous.assignee_id
         assignee_name: str | None = None
         normalized = payload
         if set_assignee:
@@ -1504,6 +1625,30 @@ def build_router() -> APIRouter:
                 "changed_fields": sorted(payload.model_fields_set),
             },
         )
+        if (
+            set_assignee
+            and result.assignee_id
+            and result.assignee_id != user.id
+            and result.assignee_id != previous_assignee
+        ):
+            await notifications.notify_comment(
+                run_id=run_id,
+                comment_id=result.comment_id,
+                comment_body=result.body,
+                section_id=result.section_id,
+                section_title=result.section_title,
+                actor_id=user.id,
+                actor_name=user.display_name or user.username,
+                targets=[
+                    NotificationTarget(
+                        user_id=result.assignee_id,
+                        display_name=(
+                            result.assignee_name or result.assignee_id
+                        ),
+                        kind=COMMENT_ASSIGNED,
+                    )
+                ],
+            )
         return result
 
     @router.get("/bid-runs/{run_id}/events")

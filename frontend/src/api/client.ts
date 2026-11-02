@@ -45,6 +45,10 @@ import type {
   HealthResponse,
   JobCreatedResponse,
   JobStatusResponse,
+  NotificationListResponse,
+  NotificationReadAllResponse,
+  NotificationReadResponse,
+  NotificationUnreadResponse,
   ParseUploadOptions,
   ProjectMemberBriefListResponse,
   SearchRequest,
@@ -757,6 +761,38 @@ export const api = {
 
   listProjectMembers(): Promise<ProjectMemberBriefListResponse> {
     return request<ProjectMemberBriefListResponse>('/api/project-members')
+  },
+
+  listNotifications(
+    unreadOnly = false,
+    limit = 50,
+  ): Promise<NotificationListResponse> {
+    const query = new URLSearchParams({
+      unread_only: String(unreadOnly),
+      limit: String(limit),
+    })
+    return request<NotificationListResponse>(
+      `/api/notifications?${query.toString()}`,
+    )
+  },
+
+  notificationUnreadCount(): Promise<NotificationUnreadResponse> {
+    return request<NotificationUnreadResponse>('/api/notifications/unread')
+  },
+
+  markNotificationRead(
+    notificationId: string,
+  ): Promise<NotificationReadResponse> {
+    return request<NotificationReadResponse>(
+      `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'POST' },
+    )
+  },
+
+  markAllNotificationsRead(): Promise<NotificationReadAllResponse> {
+    return request<NotificationReadAllResponse>('/api/notifications/read-all', {
+      method: 'POST',
+    })
   },
 
   listBidComments(

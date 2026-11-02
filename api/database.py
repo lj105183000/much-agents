@@ -593,6 +593,57 @@ class BidCommentRow(Base):
     )
 
 
+class NotificationRow(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "dedupe_key",
+            name="uq_notifications_user_dedupe",
+        ),
+        Index(
+            "ix_notifications_user_read_created",
+            "user_id",
+            "read_at",
+            "created_at",
+        ),
+        Index("ix_notifications_project_created", "project_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Recipients are project members at creation time; no FK so a deleted
+    # account does not erase its unread history.
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    resource_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("''")
+    )
+    resource_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    doc_id: Mapped[str | None] = mapped_column(String(128))
+    comment_id: Mapped[str | None] = mapped_column(String(36))
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    actor_id: Mapped[str | None] = mapped_column(String(36))
+    actor_name: Mapped[str | None] = mapped_column(String(128))
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class RetrievalSnapshotRow(Base):
     __tablename__ = "retrieval_snapshots"
     __table_args__ = (

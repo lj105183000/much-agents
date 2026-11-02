@@ -367,6 +367,39 @@ class BidCommentListResponse(BaseModel):
     comments: list[BidCommentView] = Field(default_factory=list)
 
 
+class NotificationView(BaseModel):
+    notification_id: str
+    kind: str
+    title: str
+    body: str = ""
+    resource_type: str = ""
+    resource_id: str = ""
+    run_id: str | None = None
+    doc_id: str | None = None
+    comment_id: str | None = None
+    section_id: str | None = None
+    actor_name: str | None = None
+    read_at: datetime | None = None
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationView] = Field(default_factory=list)
+    unread: int = 0
+
+
+class NotificationUnreadResponse(BaseModel):
+    unread: int = 0
+
+
+class NotificationReadResponse(BaseModel):
+    read: bool = False
+
+
+class NotificationReadAllResponse(BaseModel):
+    updated: int = 0
+
+
 class BidRunEventSection(BaseModel):
     section_id: str
     title: str

@@ -46,6 +46,11 @@ from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
+from .notifications import (
+    NotificationError,
+    NotificationService,
+    NotificationSettings,
+)
 from .projects import ProjectError, ProjectRepository, ProjectService
 from .routes import build_router
 from .runner import JobRunner, ThreadJobRunner
@@ -71,6 +76,7 @@ def create_app(
     search_service: SearchService | None = None,
     company_service: CompanyService | None = None,
     bid_run_service: BidRunService | None = None,
+    notification_service: NotificationService | None = None,
     auth_service: AuthService | None = None,
     project_service: ProjectService | None = None,
     audit_service: AuditService | None = None,
@@ -208,6 +214,10 @@ def create_app(
         engine=database.engine,
         session_factory=database.session_factory,
     )
+    notification_service = notification_service or NotificationService(
+        bid_run_repo,
+        NotificationSettings.from_env(),
+    )
     bid_run_service = bid_run_service or BidRunService(
         bid_settings=bid_settings,
         repo=bid_run_repo,
@@ -219,6 +229,7 @@ def create_app(
         require_approval=api_settings.bid_require_approval,
         stale_seconds=api_settings.bid_run_stale_seconds,
         storage=storage,
+        notifier=notification_service,
     )
     resolved_auth_service = auth_service
     if resolved_auth_service is None and api_settings.auth_enabled:
@@ -295,6 +306,7 @@ def create_app(
     app.state.bid_service = bid_service
     app.state.bid_run_service = bid_run_service
     app.state.bid_run_repo = bid_run_repo
+    app.state.notification_service = notification_service
     app.state.database = database
     app.state.search_service = search_service
     app.state.company_service = company_service
@@ -344,6 +356,12 @@ def create_app(
     @app.exception_handler(BidRunError)
     async def handle_bid_run_error(
         _request: Request, exc: BidRunError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(NotificationError)
+    async def handle_notification_error(
+        _request: Request, exc: NotificationError
     ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 

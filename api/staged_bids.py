@@ -41,6 +41,7 @@ from .bid_runs import BidRunService
 from .config import ApiSettings
 from .db import Database
 from .jobs import Job, JobStoreError, JobStoreProtocol
+from .notifications import NotificationService, NotificationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,11 @@ async def execute_staged_bid_job(
                 bid_settings=bid_settings,
                 repo=repo,
                 storage=storage,
+                notifier=NotificationService(
+                    repo,
+                    NotificationSettings.from_env(),
+                    dispatch_inline=True,
+                ),
             )
             external_renderer = None
             if (
