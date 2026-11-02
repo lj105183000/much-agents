@@ -85,8 +85,26 @@ uv run python -m scripts.eval_review
 - 不提交 `profile.json`、公司真实信息、证书号、银行账号、完整招标正文或标注 CSV。
 - CSV 导出不含正文，仅因素/事实/覆盖点；导入日志不打印真实文本。
 
-## 6. 当前边界
+## 6. L1 回归评分
+
+```bash
+uv run python -m scripts.eval_regression \
+  --data-dir eval-data --bids-dir upload/bids \
+  --baseline upload/baseline/latest.json \
+  --max-l1-drop 0.02 --l1-threshold 0.6
+```
+
+- 仅当 `evaluation_factors`、`must_cover_points`、`key_facts` 全部 `reviewed` 且 points 非空时参与评分；否则 case 标为 `labels_not_ready`。
+- **覆盖点召回**：reviewed point 文本与 `bid.md`/`sections/*.md` 做归一化 2-gram 词面匹配，`ratio >= --l1-threshold`（默认 0.6）视为覆盖；按 factor `max_score` 在 factor 内分摊权重，输出 `point_recall` 与 `weighted_point_recall`。
+- **关键事实覆盖**：reviewed fact 的 value 归一化后是否出现在正文中，输出 `fact_coverage`。
+- 同时读取 `requirements.json`（加权覆盖率）与 `citations.json`（覆盖率/无效编号），并保留 L0 指标。
+- 汇总输出 `l1_cases_ready`、`avg_point_recall`、`avg_weighted_point_recall`、`avg_fact_coverage`、`avg_requirement_coverage`、`avg_citation_coverage`；回归比较新增 `l1_cases_ready` 与上述指标的下降检查（`--max-l1-drop`）。
+- `scripts.baseline_metrics` 现在也收集 L1 指标，基线 JSON 可直接用于回归比较。
+
+**这是词面代理，不是语义判断**：同义表达、跨句推理会漏判；L2 judge/人工复核仍是质量结论的权威。阈值与权重仅在 reviewed 标注上生效。
+
+## 7. 当前边界
 
 - 标注仅覆盖评分因素、关键事实与必须覆盖点；章节 1–5 分人工样本仍可单独保存。
 - 没有 Web UI；流程以 CLI + CSV 为主。
-- L1 与回归脚本尚未自动消费 reviewed points 计算需求召回；当前回归仍以 L0 指标为主。
+- L1 评分为确定性词面匹配，不做语义理解；需要 L2/人工校准。
