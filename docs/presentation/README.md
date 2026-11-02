@@ -2,6 +2,12 @@
 
 `much-agents-product-architecture.pptx` 是 Much Agents 的产品设计与技术架构演示文稿，18 页，16:9。
 
+## 产品介绍视频
+
+[标书哨兵产品介绍（1080p，60 秒，中文男声旁白）](biaoshu-shaobing-product-intro-1080p.mp4)
+
+视频使用浅色前端界面与合成演示数据录制，展示登录、文档库、编写大纲、企业资质、文档检索、任务历史、门禁合规与审计日志。
+
 ## 结构
 
 | 页码 | 主题 |
