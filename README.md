@@ -10,7 +10,7 @@
 
 - **文档解析**：MinerU 云端解析（PyMuPDF 兜底）、目录/页码对齐、表格与页脚清理、DeepSeek 结构化抽取、向量入库。
 - **检索**：Chroma 语义检索，Chroma/智谱不可用时自动回退关键词检索。
-- **多 Agent 写作**：确定性大纲 → 逐节检索 → Writer/Reviewer/Reviser → 组装；支持可编辑大纲、章节续跑、单节编辑与重写。
+- **多 Agent 写作**：3 个核心 Agent（Writer/Reviewer/Reviser，见下文「Agent 工作流」）；确定性大纲 → 逐节检索 → 并行写作 → 审查 → 条件修订 → 组装；支持可编辑大纲、章节续跑、单节编辑与重写。
 - **质量与门禁**：21 项合规检查、跨章节一致性台账、确定性/LLM 修复方案、导出前门禁与严格 DOCX 导出。
 - **AI 配图**：组织架构、工艺流程、进度横道、施工总平面；只使用招标事实与已脱敏正文，不文生图、不编造事实。
 - **认证与隔离**：本地账号、可撤销会话、5 角色 RBAC、项目级 ACL、append-only 审计哈希链。
@@ -42,6 +42,53 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `docs/` | 认证、项目 ACL、审计、对象存储、部署、AI 配图/MCP、E2E/压测 |
 | `tests/` | 后端单元/接口测试（全部 mock 网络） |
 | `frontend/e2e/` | Playwright 浏览器 E2E（真实隔离 API + PostgreSQL） |
+
+## Agent 工作流
+
+写作链路固定使用 **3 个核心 LLM Agent**，均定义在 `src/bidding/agents.py`；只有施工组织设计的叙事章节（最多 11 个）经过它们。表单、附件、检索、组装、合规与门禁均为确定性代码或模板。
+
+| Agent | 职责 | 输入 | 输出 | 失败/降级 |
+|---|---|---|---|---|
+| `WriterAgent` | 逐节起草施工方案正文 | 章节、项目事实、编写简报、检索证据、内容计划、编写重点、资料摘要 | `SectionDraft`（Markdown） | 返回占位稿并标记 `written=False`，不重试；该节 failed，Reviewer 跳过 |
+| `ReviewerAgent` | 先做确定性检查，再用 LLM 做 JSON 审查 | 草稿、项目事实、前 3 条证据、简报、资料摘要 | `SectionReview`（问题、缺失点、覆盖点、是否修订） | LLM 最多尝试 2 次；失败保留确定性检查结果并告警，不阻断 run |
+| `ReviserAgent` | 按审查意见改写需要修订的章节 | 原稿、审查问题、资料摘要（不含检索证据） | `SectionRevision`（接受则新稿，否则原稿） | 异常或未通过验收时保留原稿；默认每节只修订 1 轮 |
+
+```text
+选中的叙事章节（最多 11 个）
+        │
+        ▼
+确定性检索（Chroma/关键词 + 附件 + 可选 MCP 证据）
+        │
+        ▼
+Writer（每节 1 次 LLM）──失败──► 占位稿 + 该节 failed
+        │
+        ▼
+Reviewer（确定性检查 + 最多 2 次 LLM JSON）
+        │
+        ├── 不需要修订 ──► 确定性脱敏/定稿
+        │
+        └── 需要修订 ──► Reviser（1 次 LLM）
+                              │
+                    接受 ─────┴───── 拒绝/异常
+                      │               │
+                 采用修订稿        保留原稿
+                      └───────┬───────┘
+                              ▼
+                     确定性脱敏/定稿
+```
+
+普通章节典型消耗 2 次 LLM 调用（Writer + Reviewer），触发修订时 3 次；默认 `BID_LLM_CONCURRENCY=2`、`BID_MAX_REVIEW_REVISIONS=1`。Writer 不重试；Reviewer 失败会降级为确定性告警；Reviser 失败保留原稿。
+
+**两条执行链路：**
+
+| 链路 | 入口 | 特点 |
+|---|---|---|
+| LangGraph | CLI `python -m src.cli write`、`POST /api/bids` | `plan → research → 并行 write → 并行 review → 条件 revise → 确定性 assemble`；进程内状态，无逐节 DB 检查点，不执行配图/合规/一致性/门禁 |
+| 持久化 run | `POST /api/bid-runs` + `generate/resume` | 逐节检索 → Writer → Reviewer → 条件 Reviser → 确定性定稿；`bid_section_states` 逐节检查点、心跳、取消、预算与用量账本；`resume` 跳过已完成章节；组装后执行配图、需求/引用、21 项合规、一致性、门禁、审批与严格导出 |
+
+**不属于 Agent 的部分：** `FigurePlanner` 是确定性配图数据规划器，仅工艺流程步骤可选 LLM 兜底并做逐字校验；合规修复方案（`fix_plan.py`）的 LLM 只产生候选，最终仍由确定性流程校验/应用；解析与抽取阶段的 DeepSeek 不在写作 Agent 图内。
+
+**已知边界：** Reviewer 只看到前 3 条检索证据；Reviser 不接收检索证据；Writer 失败不自动重试；默认每节 1 轮修订。源码：`src/bidding/agents.py`、`src/bidding/graph.py`、`src/bidding/staged.py`；实现细节见 `CLAUDE.md` 的「多 Agent 投标文件编写」与「持久化投标 run」章节。
 
 ## 快速开始
 
