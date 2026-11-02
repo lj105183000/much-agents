@@ -91,7 +91,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8001
 - AI 配图在组装时自动生成并插入 Markdown/DOCX；编辑章节、单节重写、修改大纲或应用合规修复会删除旧配图，下一次组装重新生成。配图失败或跳过只产生门禁警告，不阻断组装。字体、外部绘图等配置见根目录 `docs/ai-figures-and-mcp.md`。
 - MCP 服务端与客户端是后端可选能力，前端不提供 MCP 配置界面；默认关闭，配置后由 API/Celery worker 使用。
 - 服务端投标 run 历史来自 `/api/bid-runs`；解析/旧版任务记录仍保存在当前浏览器/Electron profile。文档库仍来自后端磁盘扫描。
-- 前端没有 preload/IPC；本地文件只通过后端 artifact 接口访问。
+- Electron 通过受限 preload/IPC 仅暴露 `openDirectory(path)`（校验本机绝对目录后由主进程 `shell.openPath` 打开）；浏览器模式不显示该入口，产物仍通过后端 artifact 接口访问。
 
 ## License
 
