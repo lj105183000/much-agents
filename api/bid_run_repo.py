@@ -24,6 +24,7 @@ from .database import (
     ExternalUsageRow,
     FeedbackEventRow,
     LlmCallLogRow,
+    NotificationPreferenceRow,
     NotificationRow,
     ProjectMemberRow,
     ProjectRow,
@@ -422,6 +423,22 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _notification_preferences(
+    row: NotificationPreferenceRow | None,
+) -> dict[str, bool]:
+    if row is None:
+        return {
+            "comment_enabled": True,
+            "run_enabled": True,
+            "budget_enabled": True,
+        }
+    return {
+        "comment_enabled": bool(row.comment_enabled),
+        "run_enabled": bool(row.run_enabled),
+        "budget_enabled": bool(row.budget_enabled),
+    }
 
 
 def _notification_record(row: NotificationRow) -> NotificationRecord:
@@ -1635,6 +1652,66 @@ class BidRunRepository:
                 record = _comment_record(row) if row is not None else None
         return record
 
+
+    async def get_notification_preferences(
+        self, user_id: str
+    ) -> dict[str, bool]:
+        async with self._session_factory() as session:
+            row = await session.get(NotificationPreferenceRow, user_id)
+        return _notification_preferences(row)
+
+    async def notification_preferences_map(
+        self, user_ids: list[str]
+    ) -> dict[str, dict[str, bool]]:
+        unique = list(dict.fromkeys(user_id for user_id in user_ids if user_id))
+        if not unique:
+            return {}
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(NotificationPreferenceRow).where(
+                        NotificationPreferenceRow.user_id.in_(unique)
+                    )
+                )
+            ).scalars().all()
+        found = {
+            row.user_id: _notification_preferences(row) for row in rows
+        }
+        return {
+            user_id: found.get(user_id, _notification_preferences(None))
+            for user_id in unique
+        }
+
+    async def upsert_notification_preferences(
+        self, user_id: str, **fields: Any
+    ) -> dict[str, bool]:
+        allowed = {"comment_enabled", "run_enabled", "budget_enabled"}
+        provided = {
+            key: bool(value)
+            for key, value in fields.items()
+            if key in allowed and value is not None
+        }
+        if not provided:
+            return await self.get_notification_preferences(user_id)
+        defaults = _notification_preferences(None)
+        statement = (
+            pg_insert(NotificationPreferenceRow)
+            .values(
+                user_id=user_id,
+                **{**defaults, **provided},
+                updated_at=_now(),
+            )
+            .on_conflict_do_update(
+                index_elements=[NotificationPreferenceRow.user_id],
+                set_={**provided, "updated_at": _now()},
+            )
+            .returning(NotificationPreferenceRow)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(statement)).scalar_one()
+                result = _notification_preferences(row)
+        return result
 
     async def add_notifications(
         self, rows: list[dict[str, Any]]

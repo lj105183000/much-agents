@@ -349,6 +349,36 @@ class NotificationService:
         unread = await repo.unread_notification_count(user_id, project_id)
         return records, unread
 
+    async def get_preferences(self, user_id: str) -> dict[str, bool]:
+        return await self._repo().get_notification_preferences(user_id)
+
+    async def update_preferences(
+        self, user_id: str, **fields: Any
+    ) -> dict[str, bool]:
+        return await self._repo().upsert_notification_preferences(
+            user_id, **fields
+        )
+
+    async def _allowed_recipients(
+        self, user_ids: list[str], category: str
+    ) -> list[str]:
+        unique = list(dict.fromkeys(user_id for user_id in user_ids if user_id))
+        if not unique:
+            return []
+        try:
+            mapping = await self._repo().notification_preferences_map(unique)
+        except Exception:  # noqa: BLE001 - fail open for best-effort alerts
+            logger.warning(
+                "could not read notification preferences", exc_info=True
+            )
+            return unique
+        key = f"{category}_enabled"
+        return [
+            user_id
+            for user_id in unique
+            if mapping.get(user_id, {}).get(key, True)
+        ]
+
     async def unread_count(self, user_id: str, project_id: str) -> int:
         return await self._repo().unread_notification_count(
             user_id, project_id
@@ -390,6 +420,11 @@ class NotificationService:
             return []
         if run is None:
             return []
+        allowed = set(
+            await self._allowed_recipients(
+                [target.user_id for target in targets], "comment"
+            )
+        )
         seen: set[tuple[str, str]] = set()
         rows: list[dict[str, Any]] = []
         event_by_target: dict[tuple[str, str], NotificationEvent] = {}
@@ -398,7 +433,11 @@ class NotificationService:
         if len(excerpt) > 200:
             excerpt = excerpt[:200] + "…"
         for target in targets:
-            if not target.user_id or target.user_id == actor_id:
+            if (
+                not target.user_id
+                or target.user_id == actor_id
+                or target.user_id not in allowed
+            ):
                 continue
             if target.kind not in {COMMENT_MENTION, COMMENT_ASSIGNED}:
                 continue
@@ -475,6 +514,16 @@ class NotificationService:
         recipients = await repo.list_project_recipients(
             run.project_id, ("manager", "reviewer")
         )
+        allowed = set(
+            await self._allowed_recipients(
+                [recipient.user_id for recipient in recipients], "run"
+            )
+        )
+        recipients = [
+            recipient
+            for recipient in recipients
+            if recipient.user_id in allowed
+        ]
         if not recipients:
             return []
         if gate_status == "block":
@@ -566,6 +615,16 @@ class NotificationService:
         recipients = await repo.list_project_recipients(
             project_id, ("manager",)
         )
+        allowed = set(
+            await self._allowed_recipients(
+                [recipient.user_id for recipient in recipients], "budget"
+            )
+        )
+        recipients = [
+            recipient
+            for recipient in recipients
+            if recipient.user_id in allowed
+        ]
         if not recipients:
             return []
         now = datetime.now(timezone.utc)

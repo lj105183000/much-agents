@@ -140,6 +140,21 @@ test('admin opens the analytics dashboard', async ({ page }) => {
   await logout(page)
 })
 
+test('admin can update notification preferences', async ({ page }) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await page.getByTestId('notification-bell').click()
+  await page.getByTestId('notification-settings').click()
+  await expect(
+    page.getByRole('dialog', { name: '通知设置' }),
+  ).toBeVisible()
+  const budgetToggle = page.getByRole('switch', { name: /预算通知/ })
+  await expect(budgetToggle).toHaveAttribute('aria-checked', 'true')
+  await budgetToggle.click()
+  await expect(budgetToggle).toHaveAttribute('aria-checked', 'false')
+  await page.keyboard.press('Escape')
+  await logout(page)
+})
+
 test('uploads and parses a PDF with PyMuPDF', async ({ page }) => {
   test.skip(!SAMPLE_PDF, 'E2E_SAMPLE_PDF is not configured')
   await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)

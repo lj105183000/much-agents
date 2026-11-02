@@ -92,7 +92,7 @@ BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 - `warn`：达到预算后继续生成，在 run warnings 中追加提示。
 - `stop`：达到预算后停止继续调度新章节（已并发中的章节可完成），run 变为 `paused`，message/warnings 记录预算超限；`generate/resume/regenerate` 在预算仍超限时返回 409，需管理员调整预算或新建 run。
 - 单节重写/续跑同样受预算约束；预算检查为 best-effort，账本写入失败只 warning。
-- **预算告警**：run 与项目月度预算达到 80% 发 warning、100% 发 exceeded；收件人为项目 manager，走站内通知与可选 Webhook/SMTP。按 `(scope, run/项目+月份, level, budget)` 去重，调整预算后会重新触发；告警失败不影响生成。
+- **预算告警**：run 与项目月度预算达到 80% 发 warning、100% 发 exceeded；收件人为项目 manager，走站内通知与可选 Webhook/SMTP。按 `(scope, run/项目+月份, level, budget)` 去重，调整预算后会重新触发；告警失败不影响生成。项目 manager 可在通知铃铛「通知设置」关闭预算类通知。
 
 **项目月度配额**：`projects.monthly_budget_cents`（迁移 `0019`，`NULL`/0 不限制），在「项目管理 → 编辑」中按元设置。`generate/resume/regenerate` 会累计当前自然月 `run_usage` + `external_usage` 成本，达到配额后拒绝新的生成/续跑（409）；已运行任务不受影响。运营看板项目表显示「本月成本 / 预算」。
 
