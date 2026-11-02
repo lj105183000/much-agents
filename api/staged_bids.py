@@ -295,35 +295,88 @@ async def execute_staged_bid_job(
             generation_token=generation_token,
             version_keep=bid_settings.section_version_keep,
         )
+        notification_service = NotificationService(
+            repo,
+            NotificationSettings.from_env(),
+            dispatch_inline=True,
+        )
         budget_stop_message: str | None = None
         budget_warned = False
 
         async def check_budget() -> None:
             nonlocal budget_stop_message, budget_warned
-            if bid_settings.run_budget_cents <= 0:
-                return
+            if bid_settings.run_budget_cents > 0:
+                try:
+                    usage = await repo.get_run_usage(run_id)
+                except Exception:  # noqa: BLE001 - budget is best-effort
+                    logger.warning(
+                        "could not read run usage for budget check",
+                        exc_info=True,
+                    )
+                    usage = None
+                decision = evaluate_budget(
+                    budget_cents=bid_settings.run_budget_cents,
+                    enforcement=bid_settings.budget_enforcement,
+                    cost_cny=usage.cost_cny if usage is not None else 0.0,
+                )
+                if decision.exceeded or decision.warning:
+                    level = (
+                        "exceeded" if decision.exceeded else "warning"
+                    )
+                    try:
+                        await notification_service.notify_budget(
+                            project_id=run.project_id,
+                            scope="run",
+                            level=level,
+                            spent_cny=decision.cost_cents / 100,
+                            budget_cents=decision.budget_cents,
+                            run=run,
+                        )
+                    except Exception:  # noqa: BLE001 - alerts are best-effort
+                        logger.warning(
+                            "could not send run budget alert", exc_info=True
+                        )
+                if decision.exceeded:
+                    if decision.stop:
+                        hooks.budget_stopped = True
+                        if budget_stop_message is None:
+                            budget_stop_message = decision.message
+                            warnings.append(decision.message)
+                    elif not budget_warned:
+                        budget_warned = True
+                        warnings.append(decision.message)
             try:
-                usage = await repo.get_run_usage(run_id)
+                project_budget = await repo.get_project_monthly_budget(
+                    run.project_id
+                )
+                if project_budget is not None and project_budget > 0:
+                    spent = await repo.project_month_cost(run.project_id)
+                    project_decision = evaluate_budget(
+                        budget_cents=project_budget,
+                        enforcement="warn",
+                        cost_cny=spent,
+                    )
+                    if (
+                        project_decision.exceeded
+                        or project_decision.warning
+                    ):
+                        level = (
+                            "exceeded"
+                            if project_decision.exceeded
+                            else "warning"
+                        )
+                        await notification_service.notify_budget(
+                            project_id=run.project_id,
+                            scope="project",
+                            level=level,
+                            spent_cny=project_decision.cost_cents / 100,
+                            budget_cents=project_decision.budget_cents,
+                            project_name=run.project_name,
+                        )
             except Exception:  # noqa: BLE001 - budget is best-effort
                 logger.warning(
-                    "could not read run usage for budget check", exc_info=True
+                    "could not check project monthly budget", exc_info=True
                 )
-                return
-            decision = evaluate_budget(
-                budget_cents=bid_settings.run_budget_cents,
-                enforcement=bid_settings.budget_enforcement,
-                cost_cny=usage.cost_cny if usage is not None else 0.0,
-            )
-            if not decision.exceeded:
-                return
-            if decision.stop:
-                hooks.budget_stopped = True
-                if budget_stop_message is None:
-                    budget_stop_message = decision.message
-                    warnings.append(decision.message)
-            elif not budget_warned:
-                budget_warned = True
-                warnings.append(decision.message)
 
         await check_budget()
         await repo.update_run(
@@ -494,11 +547,7 @@ async def execute_staged_bid_job(
                 bid_settings=bid_settings,
                 repo=repo,
                 storage=storage,
-                notifier=NotificationService(
-                    repo,
-                    NotificationSettings.from_env(),
-                    dispatch_inline=True,
-                ),
+                notifier=notification_service,
             )
             external_renderer = None
             if (

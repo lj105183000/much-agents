@@ -37,6 +37,40 @@ def sample_profile() -> dict:
     return {"company": {"name": "通知测试有限公司"}}
 
 
+def _paused_run() -> BidRunRecord:
+    now = datetime.now(timezone.utc)
+    return BidRunRecord(
+        run_id="run-1",
+        project_id=DEFAULT_PROJECT_ID,
+        doc_id="doc-1",
+        company_id=None,
+        status="paused",
+        stage="paused",
+        percent=50,
+        message="paused",
+        revision=0,
+        project_name="测试项目",
+        profile_source="empty",
+        profile_sha256=None,
+        profile_relpath=None,
+        missing_profile_fields=[],
+        settings={},
+        job_id=None,
+        generation_token=None,
+        heartbeat_at=None,
+        cancel_requested=False,
+        attempt=0,
+        gate_status=None,
+        gate=None,
+        warnings=[],
+        error=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        finished_at=None,
+    )
+
+
 def make_app(tmp_path: Path):
     write_parsed_fixture(tmp_path)
     repo = FakeBidRunRepository()
@@ -319,6 +353,64 @@ def test_assemble_creates_run_notifications_for_managers_and_reviewers(
     }
     assert {record.kind for record in run_notifications} == {expected_kind}
     assert all(record.read_at is None for record in run_notifications)
+
+
+def test_budget_alerts_notify_managers_and_dedupe(tmp_path: Path) -> None:
+    _app, repo, notifier = make_app(tmp_path)
+    repo.notification_recipients[DEFAULT_PROJECT_ID] = [
+        NotificationRecipient("u-alice", "alice", "Alice", "manager"),
+        NotificationRecipient("u-bob", "bob", "Bob", "reviewer"),
+        NotificationRecipient("u-viewer", "viewer", "Viewer", "viewer"),
+    ]
+    run = _paused_run()
+    repo.runs[run.run_id] = run
+
+    async def exercise() -> None:
+        first = await notifier.notify_budget(
+            project_id=DEFAULT_PROJECT_ID,
+            scope="run",
+            level="warning",
+            spent_cny=0.85,
+            budget_cents=100,
+            run=run,
+        )
+        second = await notifier.notify_budget(
+            project_id=DEFAULT_PROJECT_ID,
+            scope="run",
+            level="warning",
+            spent_cny=0.85,
+            budget_cents=100,
+            run=run,
+        )
+        project_first = await notifier.notify_budget(
+            project_id=DEFAULT_PROJECT_ID,
+            scope="project",
+            level="exceeded",
+            spent_cny=5.2,
+            budget_cents=500,
+            project_name="测试项目",
+        )
+        project_second = await notifier.notify_budget(
+            project_id=DEFAULT_PROJECT_ID,
+            scope="project",
+            level="exceeded",
+            spent_cny=5.2,
+            budget_cents=500,
+            project_name="测试项目",
+        )
+        assert len(first) == 1
+        assert second == []
+        assert len(project_first) == 1
+        assert project_second == []
+
+    asyncio.run(exercise())
+    records = list(repo.notifications.values())
+    assert {record.user_id for record in records} == {"u-alice"}
+    assert {record.kind for record in records} == {
+        "run_budget_warning",
+        "project_budget_exceeded",
+    }
+    assert all("¥" in record.body for record in records)
 
 
 def test_webhook_dispatcher_signs_payload_without_comment_body() -> None:

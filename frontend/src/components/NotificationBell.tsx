@@ -21,6 +21,10 @@ const KIND_META: Record<
   run_assembled: { label: '组装完成', tone: 'green' },
   gate_blocked: { label: '门禁阻断', tone: 'red' },
   approval_pending: { label: '待审批', tone: 'amber' },
+  run_budget_warning: { label: 'Run 预算预警', tone: 'amber' },
+  run_budget_exceeded: { label: 'Run 预算超限', tone: 'red' },
+  project_budget_warning: { label: '月度预算预警', tone: 'amber' },
+  project_budget_exceeded: { label: '月度预算超限', tone: 'red' },
 }
 
 function notificationMeta(notification: NotificationView) {

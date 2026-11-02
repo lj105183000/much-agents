@@ -19,7 +19,11 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
-from src.bidding.budget import BudgetDecision, evaluate_budget
+from src.bidding.budget import (
+    BUDGET_WARNING_RATIO,
+    BudgetDecision,
+    evaluate_budget,
+)
 from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.citations import build_citations, strip_citation_markers
 from src.bidding.compliance import evaluate_compliance
@@ -1356,21 +1360,76 @@ class BidRunService:
         except Exception:  # noqa: BLE001
             logger.exception("could not revert bid run %s after enqueue failure", run_id)
 
-    async def _project_budget_message(
+    async def _project_budget_decision(
         self, run: BidRunRecord
-    ) -> str | None:
+    ) -> BudgetDecision:
         repo = self._repo()
         budget = await repo.get_project_monthly_budget(run.project_id)
         if budget is None or budget <= 0:
-            return None
+            return BudgetDecision(False, False, 0, 0, "")
         spent = await repo.project_month_cost(run.project_id)
         spent_cents = int(round(spent * 100))
-        if spent_cents < budget:
-            return None
-        return (
-            "project monthly budget exceeded: "
-            f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} this month"
+        ratio = spent_cents / budget
+        exceeded = spent_cents >= budget
+        warning = not exceeded and ratio >= BUDGET_WARNING_RATIO
+        message = ""
+        if exceeded:
+            message = (
+                "project monthly budget exceeded: "
+                f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} "
+                "this month"
+            )
+        elif warning:
+            message = (
+                "project monthly budget warning: "
+                f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} "
+                "this month"
+            )
+        return BudgetDecision(
+            exceeded,
+            exceeded,
+            spent_cents,
+            budget,
+            message,
+            warning=warning,
+            ratio=ratio,
         )
+
+    async def _notify_budget_alert(
+        self,
+        decision: BudgetDecision,
+        *,
+        scope: str,
+        run: BidRunRecord,
+    ) -> None:
+        if self.notifier is None:
+            return
+        level = (
+            "exceeded"
+            if decision.exceeded
+            else "warning"
+            if decision.warning
+            else None
+        )
+        if level is None:
+            return
+        try:
+            await self.notifier.notify_budget(
+                project_id=run.project_id,
+                scope=scope,
+                level=level,
+                spent_cny=decision.cost_cents / 100,
+                budget_cents=decision.budget_cents,
+                run=run if scope == "run" else None,
+                project_name=run.project_name,
+            )
+        except Exception:  # noqa: BLE001 - alerts are best-effort
+            logger.warning(
+                "could not send %s budget alert for %s",
+                scope,
+                run.run_id,
+                exc_info=True,
+            )
 
     async def _budget_decision(self, run_id: str) -> BudgetDecision:
         if self.bid_settings.run_budget_cents <= 0:
@@ -1399,11 +1458,17 @@ class BidRunService:
         if run.attempt >= self.max_attempts:
             raise BidRunError(409, "bid run has reached the maximum attempts")
         budget = await self._budget_decision(run_id)
+        if budget.warning or budget.exceeded:
+            await self._notify_budget_alert(budget, scope="run", run=run)
         if budget.stop:
             raise BidRunError(409, budget.message)
-        project_budget = await self._project_budget_message(run)
-        if project_budget is not None:
-            raise BidRunError(409, project_budget)
+        project_budget = await self._project_budget_decision(run)
+        if project_budget.warning or project_budget.exceeded:
+            await self._notify_budget_alert(
+                project_budget, scope="project", run=run
+            )
+        if project_budget.exceeded:
+            raise BidRunError(409, project_budget.message)
 
         if run.status in {"paused", "failed"}:
             await repo.reset_for_resume(run_id)
@@ -1536,11 +1601,17 @@ class BidRunService:
         if run.status not in {"outline_ready", "paused", "failed"}:
             raise BidRunError(409, f"bid run cannot resume from status {run.status}")
         budget = await self._budget_decision(run_id)
+        if budget.warning or budget.exceeded:
+            await self._notify_budget_alert(budget, scope="run", run=run)
         if budget.stop:
             raise BidRunError(409, budget.message)
-        project_budget = await self._project_budget_message(run)
-        if project_budget is not None:
-            raise BidRunError(409, project_budget)
+        project_budget = await self._project_budget_decision(run)
+        if project_budget.warning or project_budget.exceeded:
+            await self._notify_budget_alert(
+                project_budget, scope="project", run=run
+            )
+        if project_budget.exceeded:
+            raise BidRunError(409, project_budget.message)
         await repo.reset_for_resume(run_id)
         return await self.generate(run_id, BidGenerateRequest())
 
