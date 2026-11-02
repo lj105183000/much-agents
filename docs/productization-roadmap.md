@@ -233,8 +233,8 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 溯源：prompt 版本/哈希、模型/provider/base_url host（不含 key）、temperature、top_k、evidence cap、应用版本/git sha、时间戳。
 - 前端运行详情展示成本与参数；项目维度月度用量（P2 配额基础）。
 
-**已实现**：LLM usage/成本账本（`llm_call_log`/`run_usage`）、provenance、运营看板成本/用量聚合、`BID_RUN_BUDGET_CENTS` + `BID_BUDGET_ENFORCEMENT=warn|stop` 预算控制、MinerU/Embedding 外部用量账本。
-**尚未实现**：项目月度配额与预算管理 UI。
+**已实现**：LLM usage/成本账本（`llm_call_log`/`run_usage`）、provenance、运营看板成本/用量聚合与 CSV 导出、`BID_RUN_BUDGET_CENTS` + `BID_BUDGET_ENFORCEMENT=warn|stop` 预算控制、MinerU/Embedding（含附件）外部用量账本、项目月度配额与项目编辑 UI。
+**尚未实现**：预算告警通知、配额历史与物化视图预聚合。
 
 **验收**：每次 LLM 调用都有 usage；预算超限按配置 warn/stop；报告可复现"用什么模型/提示词/参数生成"。
 

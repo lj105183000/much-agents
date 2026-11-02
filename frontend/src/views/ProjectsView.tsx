@@ -65,7 +65,11 @@ export function ProjectsView() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState<CreateForm>(EMPTY_CREATE)
   const [editTarget, setEditTarget] = useState<ProjectSummary | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', description: '' })
+  const [editForm, setEditForm] = useState({
+    name: '',
+    description: '',
+    budget: '',
+  })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -118,7 +122,14 @@ export function ProjectsView() {
 
   const openEdit = (project: ProjectSummary) => {
     setEditTarget(project)
-    setEditForm({ name: project.name, description: project.description })
+    setEditForm({
+      name: project.name,
+      description: project.description,
+      budget:
+        project.monthly_budget_cents === null
+          ? ''
+          : (project.monthly_budget_cents / 100).toString(),
+    })
     setFormError(null)
   }
 
@@ -129,12 +140,23 @@ export function ProjectsView() {
       setFormError('项目名称不能为空')
       return
     }
+    const budgetText = editForm.budget.trim()
+    const budgetYuan = budgetText === '' ? null : Number(budgetText)
+    if (
+      budgetYuan !== null &&
+      (!Number.isFinite(budgetYuan) || budgetYuan < 0)
+    ) {
+      setFormError('月度预算必须为空或非负数字（元）')
+      return
+    }
     setSaving(true)
     setFormError(null)
     try {
       await projectApi.update(editTarget.id, {
         name,
         description: editForm.description.trim(),
+        monthly_budget_cents:
+          budgetYuan === null ? null : Math.round(budgetYuan * 100),
       })
       setEditTarget(null)
       setPageError(null)
@@ -360,8 +382,13 @@ export function ProjectsView() {
                   {project.description || '暂无项目描述'}
                 </p>
                 <p className="mt-2 text-[10px] text-slate-600">
-                  {project.member_count} 位成员 · 更新于{' '}
-                  {formatDate(project.updated_at)}
+                  {project.member_count} 位成员
+                  {project.monthly_budget_cents !== null
+                    ? ` · 月度预算 ¥${(
+                        project.monthly_budget_cents / 100
+                      ).toFixed(2)}`
+                    : ' · 未设置月度预算'}{' '}
+                  · 更新于 {formatDate(project.updated_at)}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-1 border-t border-slate-800 pt-3">
                   <Button
@@ -541,6 +568,27 @@ export function ProjectsView() {
                   description: event.target.value,
                 }))
               }
+            />
+          </Field>
+          <Field
+            label="月度预算（元）"
+            htmlFor="edit-project-budget"
+            hint="留空表示不限制；达到预算后拒绝新的生成/续跑，已运行任务不受影响"
+          >
+            <input
+              id="edit-project-budget"
+              type="number"
+              min="0"
+              step="0.01"
+              className={inputClass}
+              value={editForm.budget}
+              onChange={(event) =>
+                setEditForm((currentForm) => ({
+                  ...currentForm,
+                  budget: event.target.value,
+                }))
+              }
+              placeholder="例如 500"
             />
           </Field>
           <p className="text-[11px] text-slate-500">

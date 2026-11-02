@@ -254,6 +254,9 @@ def execute_attach_job(
     parse_settings: Settings,
     storage: Storage | None = None,
     attach_func: Callable[..., dict[str, Any]] | None = None,
+    external_usage_recorder: (
+        Callable[[Job, dict[str, Any]], None] | None
+    ) = None,
 ) -> None:
     """Run one attachment job. Shared by the local dispatcher and Celery."""
 
@@ -335,6 +338,16 @@ def execute_attach_job(
         )
         return
 
+    if external_usage_recorder is not None:
+        try:
+            external_usage_recorder(job, result)
+        except Exception:  # noqa: BLE001 - usage must not fail an attachment
+            logger.warning(
+                "could not record external usage for attachment %s",
+                job.job_id,
+                exc_info=True,
+            )
+
     summary = dict(result)
     summary.pop("attachments_path", None)
     summary["file"] = job.filename
@@ -364,7 +377,7 @@ def execute_parse_job(
     parse_settings: Settings,
     parse_func: ParseFunc,
     storage: Storage | None = None,
-    external_usage_recorder: Callable[[Job, ParseResult], None] | None = None,
+    external_usage_recorder: Callable[[Job, Any], None] | None = None,
 ) -> None:
     """Run one parse job. Shared by the local dispatcher and the Celery task."""
     job = store.mark_running(job_id)
@@ -377,6 +390,7 @@ def execute_parse_job(
             store=store,
             parse_settings=parse_settings,
             storage=storage,
+            external_usage_recorder=external_usage_recorder,
         )
         return
 

@@ -491,6 +491,8 @@ class AnalyticsProject(BaseModel):
     llm_calls: int = 0
     cost_cny: float = 0.0
     gate_blocked: int = 0
+    monthly_budget_cents: int | None = None
+    month_cost_cny: float = 0.0
 
 
 class AnalyticsDaily(BaseModel):
@@ -967,6 +969,7 @@ class ProjectSummary(BaseModel):
     description: str = ""
     role: str | None = None
     member_count: int = 0
+    monthly_budget_cents: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -984,6 +987,7 @@ class ProjectCreateRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
+    monthly_budget_cents: int | None = Field(default=None, ge=0)
 
 
 class ProjectMemberSummary(BaseModel):

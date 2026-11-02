@@ -1880,6 +1880,49 @@ class BidRunRepository:
                 record = _quality_record(row) if row is not None else None
         return record
 
+    async def get_project_monthly_budget(
+        self, project_id: str
+    ) -> int | None:
+        async with self._session_factory() as session:
+            value = (
+                await session.execute(
+                    select(ProjectRow.monthly_budget_cents).where(
+                        ProjectRow.id == project_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return int(value) if value is not None else None
+
+    async def project_month_cost(self, project_id: str) -> float:
+        now = _now()
+        month_start = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        async with self._session_factory() as session:
+            run_cost = (
+                await session.execute(
+                    select(
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0)
+                    ).where(
+                        RunUsageRow.project_id == project_id,
+                        RunUsageRow.updated_at >= month_start,
+                    )
+                )
+            ).scalar_one()
+            external_cost = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(ExternalUsageRow.cost_cny), 0.0
+                        )
+                    ).where(
+                        ExternalUsageRow.project_id == project_id,
+                        ExternalUsageRow.created_at >= month_start,
+                    )
+                )
+            ).scalar_one()
+        return float(run_cost or 0.0) + float(external_cost or 0.0)
+
     async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
         async with self._session_factory() as session:
             row = await session.get(RunUsageRow, run_id)
@@ -1924,7 +1967,11 @@ class BidRunRepository:
 
     async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
         window = max(1, min(int(days), 365))
-        start = _now() - timedelta(days=window)
+        now = _now()
+        start = now - timedelta(days=window)
+        month_start = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
         async with self._session_factory() as session:
             status_rows = (
                 await session.execute(
@@ -2050,6 +2097,7 @@ class BidRunRepository:
                     select(
                         BidRunRow.project_id,
                         ProjectRow.name,
+                        ProjectRow.monthly_budget_cents,
                         func.count(BidRunRow.id),
                         func.coalesce(
                             func.sum(
@@ -2063,7 +2111,36 @@ class BidRunRepository:
                     )
                     .join(ProjectRow, ProjectRow.id == BidRunRow.project_id)
                     .where(BidRunRow.created_at >= start)
-                    .group_by(BidRunRow.project_id, ProjectRow.name)
+                    .group_by(
+                        BidRunRow.project_id,
+                        ProjectRow.name,
+                        ProjectRow.monthly_budget_cents,
+                    )
+                )
+            ).all()
+            month_run_cost_rows = (
+                await session.execute(
+                    select(
+                        RunUsageRow.project_id,
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                    )
+                    .where(RunUsageRow.updated_at >= month_start)
+                    .group_by(RunUsageRow.project_id)
+                )
+            ).all()
+            month_external_cost_rows = (
+                await session.execute(
+                    select(
+                        ExternalUsageRow.project_id,
+                        func.coalesce(
+                            func.sum(ExternalUsageRow.cost_cny), 0.0
+                        ),
+                    )
+                    .where(
+                        ExternalUsageRow.created_at >= month_start,
+                        ExternalUsageRow.project_id.is_not(None),
+                    )
+                    .group_by(ExternalUsageRow.project_id)
                 )
             ).all()
             project_usage_rows = (
@@ -2121,8 +2198,19 @@ class BidRunRepository:
             str(project_id): (int(calls), float(cost))
             for project_id, calls, cost in project_usage_rows
         }
+        month_cost_by_project: dict[str, float] = {}
+        for project_id, cost in month_run_cost_rows:
+            key = str(project_id)
+            month_cost_by_project[key] = month_cost_by_project.get(
+                key, 0.0
+            ) + float(cost or 0)
+        for project_id, cost in month_external_cost_rows:
+            key = str(project_id)
+            month_cost_by_project[key] = month_cost_by_project.get(
+                key, 0.0
+            ) + float(cost or 0)
         projects = []
-        for project_id, name, runs, blocked in project_run_rows:
+        for project_id, name, budget, runs, blocked in project_run_rows:
             calls, cost = usage_by_project.get(str(project_id), (0, 0.0))
             projects.append(
                 {
@@ -2132,6 +2220,12 @@ class BidRunRepository:
                     "llm_calls": calls,
                     "cost_cny": round(cost, 4),
                     "gate_blocked": int(blocked or 0),
+                    "monthly_budget_cents": (
+                        int(budget) if budget is not None else None
+                    ),
+                    "month_cost_cny": round(
+                        month_cost_by_project.get(str(project_id), 0.0), 4
+                    ),
                 }
             )
         projects.sort(key=lambda item: (-item["runs"], -item["cost_cny"]))

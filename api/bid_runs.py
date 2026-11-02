@@ -1356,6 +1356,22 @@ class BidRunService:
         except Exception:  # noqa: BLE001
             logger.exception("could not revert bid run %s after enqueue failure", run_id)
 
+    async def _project_budget_message(
+        self, run: BidRunRecord
+    ) -> str | None:
+        repo = self._repo()
+        budget = await repo.get_project_monthly_budget(run.project_id)
+        if budget is None or budget <= 0:
+            return None
+        spent = await repo.project_month_cost(run.project_id)
+        spent_cents = int(round(spent * 100))
+        if spent_cents < budget:
+            return None
+        return (
+            "project monthly budget exceeded: "
+            f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} this month"
+        )
+
     async def _budget_decision(self, run_id: str) -> BudgetDecision:
         if self.bid_settings.run_budget_cents <= 0:
             return BudgetDecision(False, False, 0, 0, "")
@@ -1385,6 +1401,9 @@ class BidRunService:
         budget = await self._budget_decision(run_id)
         if budget.stop:
             raise BidRunError(409, budget.message)
+        project_budget = await self._project_budget_message(run)
+        if project_budget is not None:
+            raise BidRunError(409, project_budget)
 
         if run.status in {"paused", "failed"}:
             await repo.reset_for_resume(run_id)
@@ -1519,6 +1538,9 @@ class BidRunService:
         budget = await self._budget_decision(run_id)
         if budget.stop:
             raise BidRunError(409, budget.message)
+        project_budget = await self._project_budget_message(run)
+        if project_budget is not None:
+            raise BidRunError(409, project_budget)
         await repo.reset_for_resume(run_id)
         return await self.generate(run_id, BidGenerateRequest())
 

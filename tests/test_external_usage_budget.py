@@ -26,6 +26,40 @@ from tests.fakes import (
 )
 
 
+def _paused_run() -> BidRunRecord:
+    now = datetime.now(timezone.utc)
+    return BidRunRecord(
+        run_id="run-1",
+        project_id="project-1",
+        doc_id="doc-1",
+        company_id=None,
+        status="paused",
+        stage="paused",
+        percent=50,
+        message="paused",
+        revision=0,
+        project_name="项目",
+        profile_source="empty",
+        profile_sha256=None,
+        profile_relpath=None,
+        missing_profile_fields=[],
+        settings={},
+        job_id=None,
+        generation_token=None,
+        heartbeat_at=None,
+        cancel_requested=False,
+        attempt=0,
+        gate_status=None,
+        gate=None,
+        warnings=[],
+        error=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        finished_at=None,
+    )
+
+
 class FakeEmbeddingClient:
     def __init__(self) -> None:
         self.embeddings = self
@@ -137,36 +171,7 @@ def test_generate_is_blocked_when_budget_already_exceeded(
 ) -> None:
     repo = FakeBidRunRepository()
     now = datetime.now(timezone.utc)
-    run = BidRunRecord(
-        run_id="run-1",
-        project_id="project-1",
-        doc_id="doc-1",
-        company_id=None,
-        status="paused",
-        stage="paused",
-        percent=50,
-        message="paused",
-        revision=0,
-        project_name="项目",
-        profile_source="empty",
-        profile_sha256=None,
-        profile_relpath=None,
-        missing_profile_fields=[],
-        settings={},
-        job_id=None,
-        generation_token=None,
-        heartbeat_at=None,
-        cancel_requested=False,
-        attempt=0,
-        gate_status=None,
-        gate=None,
-        warnings=[],
-        error=None,
-        created_at=now,
-        updated_at=now,
-        started_at=None,
-        finished_at=None,
-    )
+    run = _paused_run()
     repo.runs[run.run_id] = run
     repo.run_usage[run.run_id] = RunUsageRecord(
         run_id=run.run_id,
@@ -196,3 +201,24 @@ def test_generate_is_blocked_when_budget_already_exceeded(
         asyncio.run(service.generate(run.run_id))
     assert exc.value.status_code == 409
     assert "budget exceeded" in exc.value.detail
+
+
+def test_generate_is_blocked_when_project_month_budget_exceeded(
+    tmp_path: Path,
+) -> None:
+    repo = FakeBidRunRepository()
+    run = _paused_run()
+    repo.runs[run.run_id] = run
+    repo.project_monthly_budgets[run.project_id] = 100
+    repo.project_month_costs[run.project_id] = 1.25
+    service = BidRunService(
+        bid_settings=make_bid_settings(tmp_path),
+        repo=repo,  # type: ignore[arg-type]
+        company_service=FakeCompanyService(),  # type: ignore[arg-type]
+        store=JobStore(),
+        dispatch=FakeDispatcher().dispatch,
+    )
+    with pytest.raises(BidRunError) as exc:
+        asyncio.run(service.generate(run.run_id))
+    assert exc.value.status_code == 409
+    assert "project monthly budget exceeded" in exc.value.detail

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 import time
 from datetime import datetime, timezone
@@ -314,6 +316,7 @@ def _project_summary(record: ProjectRecord) -> ProjectSummary:
         description=record.description,
         role=record.role,
         member_count=record.member_count,
+        monthly_budget_cents=record.monthly_budget_cents,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -804,6 +807,9 @@ def build_router() -> APIRouter:
             project_id,
             name=payload.name,
             description=payload.description,
+            monthly_budget_cents=payload.monthly_budget_cents,
+            set_monthly_budget="monthly_budget_cents"
+            in payload.model_fields_set,
         )
         changed = sorted(payload.model_dump(exclude_none=True))
         await _audit(
@@ -2403,6 +2409,115 @@ def build_router() -> APIRouter:
         service: BidRunService = Depends(get_bid_run_service),
     ) -> AnalyticsOverview:
         return await service.analytics_overview(days=days)
+
+    @router.get(
+        "/analytics/export.csv",
+        dependencies=[Depends(require_admin)],
+    )
+    async def export_analytics_csv(
+        days: int = Query(30, ge=1, le=365),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        payload = await service.analytics_overview(days=days)
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\n")
+
+        def safe(value: Any) -> str:
+            text = "" if value is None else str(value)
+            if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+                return "'" + text
+            return text
+
+        def row(*values: Any) -> None:
+            writer.writerow([safe(value) for value in values])
+
+        row("Summary")
+        row("metric", "value")
+        row("days", payload.days)
+        row("runs_total", payload.runs.total)
+        row("runs_failed", payload.runs.failed)
+        for status, count in sorted(payload.runs.by_status.items()):
+            row(f"runs_status_{status}", count)
+        for status, count in sorted(payload.runs.by_gate.items()):
+            row(f"gate_{status}", count)
+        row("avg_duration_seconds", payload.runs.avg_duration_seconds)
+        row("llm_calls", payload.usage.llm_calls)
+        row("prompt_tokens", payload.usage.prompt_tokens)
+        row("completion_tokens", payload.usage.completion_tokens)
+        row("total_tokens", payload.usage.total_tokens)
+        row("llm_cost_cny", payload.usage.cost_cny)
+        row("llm_retries", payload.usage.retries)
+        row("llm_fallback_calls", payload.usage.fallback_calls)
+        row("external_records", payload.external.records)
+        row("external_units", payload.external.units)
+        row("external_cost_cny", payload.external.cost_cny)
+        row("feedback_total", payload.feedback.total)
+        row("feedback_avg_rating", payload.feedback.avg_rating)
+        row("quality_snapshots", payload.quality.snapshots)
+        row(
+            "requirements_coverage",
+            payload.quality.avg_requirements_coverage,
+        )
+        row("citation_coverage", payload.quality.avg_citation_coverage)
+
+        writer.writerow([])
+        row("Daily")
+        row("date", "runs", "gate_blocked", "cost_cny")
+        for item in payload.daily:
+            row(item.date, item.runs, item.gate_blocked, item.cost_cny)
+
+        writer.writerow([])
+        row("Projects")
+        row(
+            "project_id",
+            "project_name",
+            "runs",
+            "llm_calls",
+            "cost_cny",
+            "gate_blocked",
+            "month_cost_cny",
+            "monthly_budget_yuan",
+        )
+        for project in payload.projects:
+            row(
+                project.project_id,
+                project.project_name,
+                project.runs,
+                project.llm_calls,
+                project.cost_cny,
+                project.gate_blocked,
+                project.month_cost_cny,
+                (
+                    project.monthly_budget_cents / 100
+                    if project.monthly_budget_cents is not None
+                    else ""
+                ),
+            )
+
+        writer.writerow([])
+        row("Feedback")
+        row("event_type", "count")
+        for event_type, count in sorted(payload.feedback.by_type.items()):
+            row(event_type, count)
+        row("reason", "count")
+        for item in payload.feedback.top_reasons:
+            row(item.reason, item.count)
+
+        writer.writerow([])
+        row("External")
+        row("provider", "records", "units", "cost_cny")
+        for provider, item in sorted(payload.external.by_provider.items()):
+            row(provider, item.records, item.units, item.cost_cny)
+
+        filename = f"much-agents-analytics-{payload.days}d.csv"
+        return Response(
+            content="﻿" + output.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     @router.get("/companies", response_model=CompanyListResponse)
     async def list_companies(
