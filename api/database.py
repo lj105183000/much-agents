@@ -633,6 +633,98 @@ class BidCommentRow(Base):
     )
 
 
+class FeedbackEventRow(Base):
+    __tablename__ = "feedback_events"
+    __table_args__ = (
+        Index("ix_feedback_run_section_created", "run_id", "section_id", "created_at"),
+        Index("ix_feedback_project_created", "project_id", "created_at"),
+        Index("ix_feedback_type_created", "event_type", "created_at"),
+        Index("ix_feedback_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id: Mapped[str | None] = mapped_column(String(64))
+    user_id: Mapped[str | None] = mapped_column(String(36))
+    user_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("''")
+    )
+    event_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    score: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class BidQualitySnapshotRow(Base):
+    __tablename__ = "bid_quality_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "content_sha256",
+            name="uq_quality_snapshots_run_content",
+        ),
+        Index("ix_quality_snapshots_project_created", "project_id", "created_at"),
+        Index("ix_quality_snapshots_gate_created", "gate_status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_status: Mapped[str | None] = mapped_column(String(8))
+    compliance_status: Mapped[str | None] = mapped_column(String(8))
+    consistency_status: Mapped[str | None] = mapped_column(String(16))
+    requirements_coverage: Mapped[float | None] = mapped_column(Float)
+    citation_coverage: Mapped[float | None] = mapped_column(Float)
+    model: Mapped[str | None] = mapped_column(String(64))
+    summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class NotificationRow(Base):
     __tablename__ = "notifications"
     __table_args__ = (

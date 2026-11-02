@@ -18,6 +18,7 @@ import { degradedHealthDetail } from './lib/health'
 import { VIEW_META } from './lib/navigation'
 import { ProjectProvider } from './project/ProjectProvider'
 import { useProject } from './project/useProject'
+import { AnalyticsView } from './views/AnalyticsView'
 import { AuditView } from './views/AuditView'
 import { BidView } from './views/BidView'
 import { CompaniesView } from './views/CompaniesView'
@@ -73,6 +74,7 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
   const meta = VIEW_META[view]
   const needsProject =
     view !== 'projects' &&
+    view !== 'analytics' &&
     view !== 'audit' &&
     view !== 'users' &&
     view !== 'companies'
@@ -280,6 +282,15 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                   />
                 ) : null}
                 {view === 'projects' ? <ProjectsView /> : null}
+                {view === 'analytics' ? (
+                  user.role === 'admin' ? (
+                    <AnalyticsView apiBase={apiBase} />
+                  ) : (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-4 py-6 text-xs text-slate-400">
+                      运营看板仅对管理员开放。
+                    </div>
+                  )
+                ) : null}
                 {view === 'audit' ? (
                   user.role === 'admin' ? (
                     <AuditView />

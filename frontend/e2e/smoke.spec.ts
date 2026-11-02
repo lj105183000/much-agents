@@ -124,6 +124,22 @@ test('company qualification registry shows the seeded certificate', async ({
   await logout(page)
 })
 
+test('admin opens the analytics dashboard', async ({ page }) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await navigate(page, /运营看板/)
+  await expect(
+    page.getByRole('heading', {
+      name: '运营看板',
+      exact: true,
+      level: 1,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(/运行数（30 天）|暂无运营数据/),
+  ).toBeVisible()
+  await logout(page)
+})
+
 test('uploads and parses a PDF with PyMuPDF', async ({ page }) => {
   test.skip(!SAMPLE_PDF, 'E2E_SAMPLE_PDF is not configured')
   await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)

@@ -31,6 +31,7 @@ export type IconName =
   | 'layers'
   | 'shield'
   | 'key'
+  | 'chart'
 
 interface IconProps {
   name: IconName
@@ -230,6 +231,12 @@ function iconPath(name: IconName): ReactNode {
         <>
           <path d="M12 3 5 6v5c0 4.4 2.9 8.2 7 10 4.1-1.8 7-5.6 7-10V6l-7-3Z" />
           <path d="m9 12 2 2 4-4" />
+        </>
+      )
+    case 'chart':
+      return (
+        <>
+          <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
         </>
       )
     case 'key':

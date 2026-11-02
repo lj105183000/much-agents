@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版、反馈事件/质量快照与轻量运营看板，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -233,6 +233,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 溯源：prompt 版本/哈希、模型/provider/base_url host（不含 key）、temperature、top_k、evidence cap、应用版本/git sha、时间戳。
 - 前端运行详情展示成本与参数；项目维度月度用量（P2 配额基础）。
 
+**已实现**：LLM usage/成本账本（`llm_call_log`/`run_usage`）、provenance、运营看板成本/用量聚合。
+**尚未实现**：`BID_RUN_BUDGET_CENTS` + `BID_BUDGET_ENFORCEMENT` 预算阻断、项目月度配额。
+
 **验收**：每次 LLM 调用都有 usage；预算超限按配置 warn/stop；报告可复现"用什么模型/提示词/参数生成"。
 
 ### 4.4 审查与检索质量
@@ -255,7 +258,15 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - prompt 变更必须附评测对比；阈值回归阻断合并。
 - 提示词外置为版本化文件/常量，`PROMPT_VERSION` 写入报告。
 
+**已实现**：评测建议脚本、夜间 workflow、prompt registry、L0 基线；评测集仍需 5–10 份脱敏真实标书的人工标注（L1）与 judge 校准（L2）。
+
 **P1 关键文件**：`src/bidding/{prompts,checks,retrieval,staged,assemble,gate,compliance,staged_output}.py`、`src/bidding/llm.py`、`src/parsing/extraction/schemas.py`、`api/bid_runs.py`、`frontend/src/components/{BidSectionModal,BidRunWorkspace,BidGatePanel}.tsx`、新增 `citations.json` / `requirements.json` 产物。
+
+### 4.7 反馈闭环与轻量数据底座（已实现）
+
+- `feedback_events`（评分/采纳/拒绝/编辑/重写/恢复）与 `bid_quality_snapshots`（每次组装的质量摘要与覆盖率），迁移 `0017`。
+- 管理员「运营看板」聚合运行/门禁/成本/token/反馈/质量/项目 Top 10/14 天趋势；不引入重型数据中台。
+- 尚未实现：`external_usage`（MinerU/Embedding 成本）、物化视图/报表导出、预算阻断。
 
 ## 5. P2 — 团队协作与审批（20–25 人日）
 

@@ -16,9 +16,11 @@ from api.bid_run_repo import (
     BidApprovalRecord,
     BidCommentRecord,
     BidRunRecord,
+    FeedbackRecord,
     NotificationRecord,
     NotificationRecipient,
     OutlineSectionRecord,
+    QualitySnapshotRecord,
     SectionStateRecord,
     SectionVersionRecord,
 )
@@ -724,6 +726,10 @@ class FakeBidRunRepository:
         self.notification_recipients: dict[
             str, list[NotificationRecipient]
         ] = {}
+        self.feedback_events: list[FeedbackRecord] = []
+        self.quality_snapshots: list[QualitySnapshotRecord] = []
+        self._feedback_id = 0
+        self._quality_id = 0
         self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
@@ -1044,6 +1050,148 @@ class FakeBidRunRepository:
             for recipient in self.notification_recipients.get(project_id, [])
             if recipient.role in roles
         ]
+
+    async def add_feedback(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        user_id: str | None,
+        user_name: str,
+        event_type: str,
+        score: int | None,
+        reason: str,
+        content_sha256: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> FeedbackRecord:
+        self._feedback_id += 1
+        record = FeedbackRecord(
+            id=self._feedback_id,
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            user_id=user_id,
+            user_name=user_name,
+            event_type=event_type,
+            score=score,
+            reason=reason,
+            content_sha256=content_sha256,
+            metadata=dict(metadata or {}),
+            created_at=datetime.now(timezone.utc),
+        )
+        self.feedback_events.append(record)
+        return record
+
+    async def list_feedback(
+        self,
+        run_id: str,
+        *,
+        section_id: str | None = None,
+        limit: int = 100,
+    ) -> list[FeedbackRecord]:
+        rows = [
+            record
+            for record in self.feedback_events
+            if record.run_id == run_id
+            and (section_id is None or record.section_id == section_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 500))]
+
+    async def add_quality_snapshot(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        revision: int,
+        content_sha256: str,
+        gate_status: str | None,
+        compliance_status: str | None,
+        consistency_status: str | None,
+        requirements_coverage: float | None,
+        citation_coverage: float | None,
+        model: str | None,
+        summary: dict[str, Any],
+    ) -> QualitySnapshotRecord | None:
+        if any(
+            record.run_id == run_id
+            and record.content_sha256 == content_sha256
+            for record in self.quality_snapshots
+        ):
+            return None
+        self._quality_id += 1
+        record = QualitySnapshotRecord(
+            id=self._quality_id,
+            project_id=project_id,
+            run_id=run_id,
+            revision=revision,
+            content_sha256=content_sha256,
+            gate_status=gate_status,
+            compliance_status=compliance_status,
+            consistency_status=consistency_status,
+            requirements_coverage=requirements_coverage,
+            citation_coverage=citation_coverage,
+            model=model,
+            summary=dict(summary),
+            created_at=datetime.now(timezone.utc),
+        )
+        self.quality_snapshots.append(record)
+        return record
+
+    async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
+        runs = list(self.runs.values())
+        by_status: dict[str, int] = {}
+        by_gate: dict[str, int] = {}
+        for run in runs:
+            by_status[run.status] = by_status.get(run.status, 0) + 1
+            if run.gate_status:
+                by_gate[run.gate_status] = by_gate.get(run.gate_status, 0) + 1
+        feedback_by_type: dict[str, int] = {}
+        ratings = [
+            record.score
+            for record in self.feedback_events
+            if record.score is not None
+        ]
+        for record in self.feedback_events:
+            feedback_by_type[record.event_type] = (
+                feedback_by_type.get(record.event_type, 0) + 1
+            )
+        quality_by_gate: dict[str, int] = {}
+        for snapshot in self.quality_snapshots:
+            if snapshot.gate_status:
+                quality_by_gate[snapshot.gate_status] = (
+                    quality_by_gate.get(snapshot.gate_status, 0) + 1
+                )
+        return {
+            "days": days,
+            "runs": {
+                "total": len(runs),
+                "by_status": by_status,
+                "by_gate": by_gate,
+                "failed": by_status.get("failed", 0),
+                "avg_duration_seconds": None,
+            },
+            "usage": {},
+            "feedback": {
+                "total": len(self.feedback_events),
+                "by_type": feedback_by_type,
+                "avg_rating": (
+                    round(sum(ratings) / len(ratings), 2)
+                    if ratings
+                    else None
+                ),
+                "top_reasons": [],
+            },
+            "quality": {
+                "snapshots": len(self.quality_snapshots),
+                "by_gate": quality_by_gate,
+                "avg_requirements_coverage": None,
+                "avg_citation_coverage": None,
+            },
+            "projects": [],
+            "daily": [],
+        }
 
     def _section_versions(
         self, run_id: str, section_id: str

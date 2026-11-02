@@ -117,6 +117,11 @@ export function BidSectionModal({
   const [versionsError, setVersionsError] = useState<string | null>(null)
   const [diff, setDiff] = useState<BidSectionVersionDiffResponse | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const [rating, setRating] = useState(0)
+  const [feedbackReason, setFeedbackReason] = useState('')
+  const [feedbackBusy, setFeedbackBusy] = useState(false)
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null)
+  const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [restoringVersionId, setRestoringVersionId] = useState<number | null>(
     null,
   )
@@ -223,6 +228,41 @@ export function BidSectionModal({
       }
     } finally {
       setRestoringVersionId(null)
+    }
+  }
+
+  const submitFeedback = async (eventType: 'rating' | 'adopt' | 'reject') => {
+    if (!section) return
+    if (eventType === 'rating' && rating === 0) {
+      setFeedbackError('请先选择 1–5 分')
+      return
+    }
+    setFeedbackBusy(true)
+    setFeedbackError(null)
+    setFeedbackMessage(null)
+    try {
+      await api.createBidFeedback(section.run_id, {
+        section_id: section.section_id,
+        event_type: eventType,
+        score: eventType === 'rating' ? rating : null,
+        reason: feedbackReason.trim(),
+        content_sha256: section.content_sha256 || null,
+      })
+      setFeedbackMessage(
+        eventType === 'rating'
+          ? '评分已记录，感谢反馈'
+          : eventType === 'adopt'
+            ? '已标记采纳'
+            : '已标记需修改',
+      )
+      setFeedbackReason('')
+      setRating(0)
+    } catch (caught) {
+      setFeedbackError(
+        caught instanceof ApiError ? caught.message : '反馈提交失败',
+      )
+    } finally {
+      setFeedbackBusy(false)
     }
   }
 
@@ -358,6 +398,74 @@ export function BidSectionModal({
               ))}
             </ul>
           ) : null}
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-300">
+                本节质量反馈
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={feedbackBusy}
+                  onClick={() => void submitFeedback('adopt')}
+                >
+                  采纳
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={feedbackBusy}
+                  onClick={() => void submitFeedback('reject')}
+                >
+                  需修改
+                </Button>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-500">评分</span>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setRating(value)}
+                  className={
+                    rating === value
+                      ? 'h-7 w-7 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-[11px] text-cyan-200'
+                      : 'h-7 w-7 rounded-lg border border-slate-800 text-[11px] text-slate-400 hover:border-slate-700'
+                  }
+                  aria-label={`${value} 分`}
+                >
+                  {value}
+                </button>
+              ))}
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={feedbackBusy}
+                disabled={rating === 0}
+                onClick={() => void submitFeedback('rating')}
+              >
+                提交评分
+              </Button>
+            </div>
+            <textarea
+              className={`${textareaClass} mt-2 min-h-12`}
+              value={feedbackReason}
+              maxLength={1000}
+              placeholder="可选：说明评分或修改原因，例如“进度计划缺少雨季措施”"
+              onChange={(event) => setFeedbackReason(event.target.value)}
+            />
+            {feedbackMessage ? (
+              <p className="mt-1 text-[11px] text-emerald-300">
+                {feedbackMessage}
+              </p>
+            ) : null}
+            {feedbackError ? (
+              <p className="mt-1 text-[11px] text-red-300">{feedbackError}</p>
+            ) : null}
+          </div>
 
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

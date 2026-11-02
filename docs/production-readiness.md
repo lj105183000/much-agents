@@ -216,6 +216,8 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 | `retrieval_snapshots` | 检索可追溯 | `run_id/section_id/query_text/query_sha256/mode/top_k/hits JSONB/evidence_chars/trace_key/created_at` | P1 |
 | `external_usage` | MinerU/Embedding 用量 | `provider/operation/project_id/doc_id/job_id/units/unit_type/cost_cny/status/latency_ms/created_at` | P1 |
 
+> 2026-11-02 进展：`bid_quality_snapshots`、`feedback_events` 已由迁移 `0017` 落地，并新增管理员「运营看板」；`external_usage` 与预算阻断仍未实现。
+
 ### 3.3 迁移建议
 
 现有迁移到 `0005`。建议新增：
