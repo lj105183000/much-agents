@@ -59,11 +59,11 @@ export function Sidebar({
     <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950/70 px-4 py-5 lg:flex">
       <div className="flex items-center gap-3 px-2">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-lg font-bold text-cyan-300">
-          M
+          哨
         </div>
         <div>
           <p className="text-sm font-semibold tracking-wide text-slate-100">
-            Much Agents
+            标书哨兵
           </p>
           <p className="text-[11px] text-slate-500">多 Agent 标书工作台</p>
         </div>

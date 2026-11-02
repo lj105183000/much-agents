@@ -1,4 +1,4 @@
-# Much Agents 前端工作台
+# 标书哨兵 前端工作台
 
 基于 React 19、TypeScript、Vite 8、TailwindCSS 4 与 Electron 45 的本地桌面界面，连接项目根目录的 FastAPI 后端。
 
@@ -11,7 +11,7 @@
 - **文档库**：扫描后端 `upload/parsed`，查看解析产物、历史投标文件和 bid run 产物。
 - **任务历史**：顶部展示服务端持久化投标 run，可直接打开继续编辑/重写/组装；下方保留 localStorage 的本机解析/旧版任务记录，支持筛选、轮询、查看详情和删除。
 - **产物预览/下载**：通过后端 allowlist artifact 接口访问；Markdown 与 JSON 可文本预览，PNG/JPEG 配图直接显示；`profile.json` 不会暴露。
-- **深色/浅色主题**：右上角按钮切换，偏好保存在 localStorage，首屏自动恢复。
+- **浅色/深色主题**：默认白底黑字、蓝色强调色；右上角按钮可切换深色，偏好保存在 localStorage，首屏自动恢复。
 
 ## 启动
 

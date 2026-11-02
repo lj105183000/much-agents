@@ -70,7 +70,7 @@ export function Header({
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-300/80">
-              Much Agents
+              标书哨兵
             </span>
             <span className="h-1 w-1 rounded-full bg-slate-600" />
             <span className="text-[11px] text-slate-500">工作台</span>
