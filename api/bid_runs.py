@@ -105,6 +105,7 @@ from .jobs import Job, JobStoreProtocol
 from .notifications import NotificationService
 from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
+    AnalyticsBudgetTrend,
     AnalyticsOverview,
     BidCommentCreateRequest,
     BidCommentListResponse,
@@ -1209,6 +1210,16 @@ class BidRunService:
     async def analytics_overview(self, days: int = 30) -> AnalyticsOverview:
         payload = await self._repo().analytics_overview(days=days)
         return AnalyticsOverview(**payload)
+
+    async def budget_trend(
+        self, days: int = 30, project_id: str | None = None
+    ) -> AnalyticsBudgetTrend:
+        payload = await self._repo().budget_trend(
+            days=days, project_id=project_id
+        )
+        if payload is None:
+            raise BidRunError(404, f"unknown project: {project_id}")
+        return AnalyticsBudgetTrend(**payload)
 
     async def get_usage(self, run_id: str) -> BidUsageResponse:
         repo = self._repo()

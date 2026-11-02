@@ -215,7 +215,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 评论与实时进度：`GET /api/project-members` 返回当前项目成员摘要；`GET/POST /api/bid-runs/{run_id}/comments`、`PATCH /api/bid-runs/{run_id}/comments/{comment_id}` 管理评论/@提及/指派/解决；`GET /api/bid-runs/{run_id}/events` 返回 `text/event-stream` 实时快照（需 Bearer 头，token 不进 URL）。
 - 通知：`GET /api/notifications`（当前用户、当前项目，`unread_only/limit/offset` 与未读数）、`GET /api/notifications/unread`、`POST /api/notifications/{id}/read`、`POST /api/notifications/read-all`；全部挂 `require_project_read`，只能读写当前用户自己的通知。
 - 交付物与资质：`POST /api/bid-runs/{run_id}/export/doc` 经 LibreOffice 严格门禁导出 Word 97-2003；`GET/POST /api/companies/{company_id}/qualifications`、`PATCH/DELETE .../qualifications/{qualification_id}` 维护企业资质（读需登录，写需 `require_manage`，公司库全局共享）。
-- 反馈与运营：`GET/POST /api/bid-runs/{run_id}/feedback` 记录评分/采纳/拒绝（编辑、重写、恢复自动记录）；`GET /api/bid-runs/{run_id}/usage` 返回 run 成本/预算/外部用量；`GET /api/analytics/overview?days=7|30|90` 仅 admin，聚合运行、门禁、LLM/外部成本、反馈、质量快照、项目月度预算/成本与预算告警历史；`GET /api/analytics/export.csv` 导出同一窗口报表（含 BudgetAlerts）；`PATCH /api/projects/{id}` 可设置 `monthly_budget_cents`（仅 admin）。
+- 反馈与运营：`GET/POST /api/bid-runs/{run_id}/feedback` 记录评分/采纳/拒绝（编辑、重写、恢复自动记录）；`GET /api/bid-runs/{run_id}/usage` 返回 run 成本/预算/外部用量；`GET /api/analytics/overview?days=7|30|90` 仅 admin，聚合运行、门禁、LLM/外部成本、反馈、质量快照、项目月度预算/成本与预算告警历史；`GET /api/analytics/budget-trend` 返回预算趋势图数据（每日/累计/预算线/状态）；`GET /api/analytics/export.csv` 导出同一窗口报表（含 BudgetAlerts）；`PATCH /api/projects/{id}` 可设置 `monthly_budget_cents`（仅 admin）。
 
   ```bash
   curl -X POST http://127.0.0.1:8001/api/search \
@@ -306,7 +306,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `external_usage`（迁移 `0018`）：解析/附件任务结束后由 `api/external_usage.py` 写入 MinerU 页数（parse/OCR）与 Zhipu Embedding 调用/文本/token；`ZhipuEmbedder` 从响应 usage 累计，缓存命中不重复计入；附件 OCR 与附件 embedding 同样入账；可选价格 `MINERU_PRICE_PER_PAGE_CNY`、`EMBEDDING_PRICE_PER_1K_TOKENS_CNY`。Celery 与本地 runner 都通过 `external_usage_recorder` 记录，失败不影响主流程。
 - Run 预算：`BID_RUN_BUDGET_CENTS`（分，0 关闭）+ `BID_BUDGET_ENFORCEMENT=warn|stop`。基于 `run_usage` 累计成本；warn 追加 run warning 继续生成，stop 在章节边界停止调度、run 置 paused 并记录 message/warnings，`generate/resume/regenerate` 在仍超预算时返回 409。`src/bidding/budget.py` 是纯决策函数；worker 在每节 usage 落库后检查，API 入口预检。
 - 项目月度配额：迁移 `0019` 给 `projects` 增加 `monthly_budget_cents`（NULL/0 不限制），项目编辑 UI 按元设置；`generate/resume/regenerate` 累计当前自然月 `run_usage`+`external_usage`，达到配额拒绝新生成/续跑（409），已运行任务不打断。运营看板项目表显示本月成本/预算。run 与项目月度预算达到 80% 发 warning、100% 发 exceeded 通知（站内 + 可选 Webhook/SMTP），按 scope/run 或项目月份/level/预算值去重。
-- 运营看板新增外部记录/单位/成本、provider 拆分与最近预算告警历史；`GET /api/bid-runs/{id}/usage` 提供单 run 成本/预算/外部用量；`GET /api/analytics/export.csv?days=7|30|90`（admin）导出 UTF-8 BOM CSV（Summary/Daily/Projects/Feedback/External/BudgetAlerts），单元格做公式注入转义。这是**轻量数据底座**，不引入 ClickHouse/Kafka/dbt/Airflow；重型中台触发条件见 `docs/production-readiness.md` 0.2。当前未做物化视图预聚合、自由 SQL、预算告警通知。详见 `docs/feedback-and-analytics.md`。
+- 运营看板新增外部记录/单位/成本、provider 拆分、最近预算告警历史与预算趋势图（`GET /api/analytics/budget-trend?days=&project_id=`：每日 LLM/外部成本、累计月成本、月度预算线与状态，手写 SVG，含悬停/键盘/数据表）；`GET /api/bid-runs/{id}/usage` 提供单 run 成本/预算/外部用量；`GET /api/analytics/export.csv?days=7|30|90`（admin）导出 UTF-8 BOM CSV（Summary/Daily/Projects/Feedback/External/BudgetAlerts），单元格做公式注入转义。这是**轻量数据底座**，不引入 ClickHouse/Kafka/dbt/Airflow；重型中台触发条件见 `docs/production-readiness.md` 0.2。当前未做物化视图预聚合、自由 SQL、预算告警通知。详见 `docs/feedback-and-analytics.md`。
 
 ### DOC 导出、DOCX 模板与企业资质库（P3，`src/bidding/doc_export.py`、`api/companies.py`、迁移 `0016`）
 

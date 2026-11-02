@@ -266,8 +266,8 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 - `feedback_events`（评分/采纳/拒绝/编辑/重写/恢复）与 `bid_quality_snapshots`（每次组装的质量摘要与覆盖率），迁移 `0017`。
 - 管理员「运营看板」聚合运行/门禁/成本/token/反馈/质量/项目 Top 10/14 天趋势；不引入重型数据中台。
-- 已实现：`external_usage`（MinerU/Embedding 用量与可选成本）与 run 预算 warn/stop。
-- 尚未实现：物化视图/报表导出、项目月度配额与预算管理 UI。
+- 已实现：`external_usage`（MinerU/Embedding 用量与可选成本）、run 预算 warn/stop、项目月度配额/编辑 UI、80%/100% 告警、预算趋势图与 CSV 导出。
+- 尚未实现：物化视图预聚合、按客户计费、预算告警通知偏好之外的配额历史。
 
 ## 5. P2 — 团队协作与审批（20–25 人日）
 

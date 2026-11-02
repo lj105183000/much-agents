@@ -737,6 +737,16 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert refreshed["feedback"]["total"] == 2
         assert refreshed["feedback"]["avg_rating"] == 5.0
 
+        trend = client.get("/api/analytics/budget-trend?days=30")
+        assert trend.status_code == 200, trend.text
+        assert trend.json()["days"] == 30
+        assert trend.json()["budget_cents"] is None
+        assert trend.json()["daily"][0]["cumulative_cost_cny"] == 0.0
+        unknown_project = client.get(
+            "/api/analytics/budget-trend?project_id=missing"
+        )
+        assert unknown_project.status_code == 404
+
         exported = client.get("/api/analytics/export.csv?days=30")
         assert exported.status_code == 200, exported.text
         assert exported.headers["content-type"].startswith("text/csv")

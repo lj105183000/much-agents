@@ -137,6 +137,9 @@ test('admin opens the analytics dashboard', async ({ page }) => {
   await expect(
     page.getByText(/运行数（30 天）|暂无运营数据/),
   ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: '预算趋势', exact: true }),
+  ).toBeVisible()
   await logout(page)
 })
 
