@@ -348,6 +348,7 @@ docker compose -f docker-compose.prod.yml config
 - 没有正式的前端 E2E 与压力测试；上线前建议按验收清单手工验证。
 - `MCP_API_TOKEN` 是静态服务 token，轮换需同时重启 API 与 MCP。
 - 会话 token 仍存 localStorage；依赖 CSP、Electron 守卫与 HTTPS 缓解 XSS 风险。
+- Electron preload 仅通过 `contextBridge` 暴露「打开本地目录」：主进程校验 IPC sender URL、本地绝对路径（拒绝 UNC/网络路径）且目标必须是目录，不暴露 shell/fs/任意文件打开。
 - Electron 生产建议直接加载 HTTPS 页面；`file://` 仅作离线开发模式。
 
 ## 13. 许可证与源码提供（AGPL-3.0）
