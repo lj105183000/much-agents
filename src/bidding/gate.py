@@ -38,6 +38,8 @@ def evaluate_gate(
     forced: bool = False,
     compliance: dict[str, Any] | None = None,
     consistency: dict[str, Any] | None = None,
+    requirements_block: bool = False,
+    citation_min_coverage: float = 0.8,
 ) -> dict[str, Any]:
     selected = [
         section
@@ -83,6 +85,11 @@ def evaluate_gate(
     figure_failed = int(figure_stats.get("failed") or 0)
     figure_skipped = int(figure_stats.get("skipped") or 0)
     figure_issues = figure_failed + figure_skipped
+    docx_quality = (
+        report.get("docx_quality")
+        if isinstance(report.get("docx_quality"), dict)
+        else None
+    )
 
     checks = [
         _check(
@@ -156,6 +163,86 @@ def evaluate_gate(
                     "were skipped"
                 ),
                 hint="Check the figure panel or complete the missing source facts.",
+            )
+        )
+
+    if docx_quality is not None:
+        docx_failed = [
+            item
+            for item in docx_quality.get("checks") or []
+            if isinstance(item, dict) and item.get("status") == "fail"
+        ]
+        has_block = any(item.get("level") == "block" for item in docx_failed)
+        checks.append(
+            _check(
+                "docx_quality",
+                "block" if has_block else "warn",
+                bool(docx_failed),
+                f"{len(docx_failed)} DOCX quality check(s) failed",
+                hint="Regenerate the DOCX or fix the missing TOC/page/font/image settings.",
+            )
+        )
+
+    requirements = (
+        report.get("requirements")
+        if isinstance(report.get("requirements"), dict)
+        else None
+    )
+    if requirements:
+        summary = (
+            requirements.get("summary")
+            if isinstance(requirements.get("summary"), dict)
+            else requirements
+        )
+        missing = int(summary.get("missing") or 0)
+        mandatory_missing = int(summary.get("mandatory_missing") or 0)
+        weighted = float(summary.get("weighted_coverage") or 0.0)
+        failed = missing > 0 or mandatory_missing > 0
+        checks.append(
+            _check(
+                "requirements",
+                (
+                    "block"
+                    if requirements_block and mandatory_missing > 0
+                    else "warn"
+                ),
+                failed,
+                (
+                    f"{missing} requirement(s) are not covered "
+                    f"({mandatory_missing} mandatory); "
+                    f"weighted coverage {weighted:.0%}"
+                ),
+                hint="Open the coverage panel and fill the missing requirements.",
+            )
+        )
+
+    citations = (
+        report.get("citations")
+        if isinstance(report.get("citations"), dict)
+        else None
+    )
+    if citations:
+        summary = (
+            citations.get("summary")
+            if isinstance(citations.get("summary"), dict)
+            else citations
+        )
+        coverage = float(summary.get("coverage") or 0.0)
+        claims = int(summary.get("key_claims") or 0)
+        invalid = int(summary.get("invalid_markers") or 0)
+        failed = invalid > 0 or (
+            claims > 0 and coverage < max(0.0, float(citation_min_coverage))
+        )
+        checks.append(
+            _check(
+                "citations",
+                "warn",
+                failed,
+                (
+                    f"citation coverage {coverage:.0%} over {claims} key "
+                    f"claim(s); {invalid} invalid marker(s)"
+                ),
+                hint="Regenerate sections with evidence markers or add sources.",
             )
         )
 

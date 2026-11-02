@@ -13,11 +13,25 @@ import redis
 from api.audit import AuditEvent, AuditRecord, event_hash
 from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
+    BidApprovalRecord,
+    BidCommentRecord,
     BidRunRecord,
+    BidTemplateRecord,
+    ExternalUsageRecord,
+    FeedbackRecord,
+    NotificationRecord,
+    NotificationRecipient,
     OutlineSectionRecord,
+    QualitySnapshotRecord,
+    RunUsageRecord,
     SectionStateRecord,
+    SectionVersionRecord,
 )
-from api.companies import CompanyError, CompanyRecord
+from api.companies import (
+    CompanyError,
+    CompanyQualificationRecord,
+    CompanyRecord,
+)
 from api.config import ApiSettings
 from api.jobs import Job, JobStore, JobStoreError
 from api.projects import (
@@ -371,6 +385,7 @@ class FakeCeleryApp:
         task_id: str | None = None,
         queue: str | None = None,
         ignore_result: bool | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         if self.error is not None:
             raise self.error
@@ -381,6 +396,7 @@ class FakeCeleryApp:
                 "task_id": task_id,
                 "queue": queue,
                 "ignore_result": ignore_result,
+                "headers": headers,
             }
         )
 
@@ -706,6 +722,25 @@ class FakeBidRunRepository:
         self.runs: dict[str, BidRunRecord] = {}
         self.sections: dict[str, list[OutlineSectionRecord]] = {}
         self.states: dict[str, list[SectionStateRecord]] = {}
+        self.approvals: dict[str, list[BidApprovalRecord]] = {}
+        self.versions: dict[str, list[SectionVersionRecord]] = {}
+        self.comments: dict[str, BidCommentRecord] = {}
+        self.notifications: dict[str, NotificationRecord] = {}
+        self.notification_recipients: dict[
+            str, list[NotificationRecipient]
+        ] = {}
+        self.notification_preferences: dict[str, dict[str, bool]] = {}
+        self.feedback_events: list[FeedbackRecord] = []
+        self.quality_snapshots: list[QualitySnapshotRecord] = []
+        self.run_usage: dict[str, RunUsageRecord] = {}
+        self.external_usage: list[ExternalUsageRecord] = []
+        self.project_monthly_budgets: dict[str, int | None] = {}
+        self.project_month_costs: dict[str, float] = {}
+        self.templates: dict[str, BidTemplateRecord] = {}
+        self._feedback_id = 0
+        self._quality_id = 0
+        self._external_id = 0
+        self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
         self,
@@ -748,6 +783,68 @@ class FakeBidRunRepository:
             return None
         return run
 
+    async def add_retrieval_snapshots(
+        self, run_id: str, records: list[dict[str, Any]], *, project_id: str
+    ) -> int:
+        for record in records:
+            self.retrieval_snapshots.append(
+                {"run_id": run_id, "project_id": project_id, **record}
+            )
+        return len(records)
+
+    async def latest_retrieval_snapshots(
+        self, run_id: str
+    ) -> dict[str, dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for record in reversed(self.retrieval_snapshots):
+            if record.get("run_id") != run_id:
+                continue
+            section_id = str(record.get("section_id") or "")
+            if section_id and section_id not in latest:
+                latest[section_id] = dict(record)
+        return latest
+
+    async def add_approval(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        content_sha256: str,
+        gate_status: str | None,
+        approved_by: str,
+        approved_by_name: str,
+        reason: str = "",
+        override: bool = False,
+        expires_at=None,
+    ) -> BidApprovalRecord:
+        record = BidApprovalRecord(
+            run_id=run_id,
+            status=status,
+            content_sha256=content_sha256,
+            gate_status=gate_status,
+            approved_by=approved_by,
+            approved_by_name=approved_by_name,
+            reason=reason,
+            override=override,
+            expires_at=expires_at,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.approvals.setdefault(run_id, []).append(record)
+        return record
+
+    async def latest_approval(self, run_id: str) -> BidApprovalRecord | None:
+        records = self.approvals.get(run_id) or []
+        return records[-1] if records else None
+
+    async def list_approvals(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[BidApprovalRecord]:
+        records = self.approvals.get(run_id) or []
+        return list(reversed(records))[: max(1, min(int(limit), 50))]
+
     async def get_outline(self, run_id: str) -> list[OutlineSectionRecord]:
         return sorted(
             self.sections.get(run_id, []),
@@ -765,6 +862,684 @@ class FakeBidRunRepository:
                 state
                 for state in self.states.get(run_id, [])
                 if state.section_id == section_id
+            ),
+            None,
+        )
+
+    async def add_comment(
+        self,
+        *,
+        comment_id: str,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        author_id: str | None,
+        author_name: str,
+        body: str,
+        mentions: list[dict[str, Any]],
+        assignee_id: str | None,
+        assignee_name: str | None,
+    ) -> BidCommentRecord:
+        now = datetime.now(timezone.utc)
+        record = BidCommentRecord(
+            comment_id=comment_id,
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            author_id=author_id,
+            author_name=author_name,
+            body=body,
+            mentions=list(mentions),
+            assignee_id=assignee_id,
+            assignee_name=assignee_name,
+            status="open",
+            resolved_by=None,
+            resolved_by_name=None,
+            resolved_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.comments[comment_id] = record
+        return record
+
+    async def get_comment(
+        self, run_id: str, comment_id: str
+    ) -> BidCommentRecord | None:
+        record = self.comments.get(comment_id)
+        if record is None or record.run_id != run_id:
+            return None
+        return record
+
+    async def list_comments(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> list[BidCommentRecord]:
+        rows = [
+            record
+            for record in self.comments.values()
+            if record.run_id == run_id
+            and (status is None or record.status == status)
+            and (section_id is None or record.section_id == section_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 500))]
+
+    async def update_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        **fields: Any,
+    ) -> BidCommentRecord | None:
+        record = await self.get_comment(run_id, comment_id)
+        if record is None:
+            return None
+        allowed = {
+            "body",
+            "assignee_id",
+            "assignee_name",
+            "status",
+            "resolved_by",
+            "resolved_by_name",
+            "resolved_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        values["updated_at"] = datetime.now(timezone.utc)
+        updated = replace(record, **values)
+        self.comments[comment_id] = updated
+        return updated
+
+    async def get_notification_preferences(
+        self, user_id: str
+    ) -> dict[str, bool]:
+        return dict(
+            self.notification_preferences.get(
+                user_id,
+                {
+                    "comment_enabled": True,
+                    "run_enabled": True,
+                    "budget_enabled": True,
+                },
+            )
+        )
+
+    async def notification_preferences_map(
+        self, user_ids: list[str]
+    ) -> dict[str, dict[str, bool]]:
+        return {
+            user_id: await self.get_notification_preferences(user_id)
+            for user_id in dict.fromkeys(user_ids)
+        }
+
+    async def upsert_notification_preferences(
+        self, user_id: str, **fields: Any
+    ) -> dict[str, bool]:
+        current = await self.get_notification_preferences(user_id)
+        for key in ("comment_enabled", "run_enabled", "budget_enabled"):
+            if fields.get(key) is not None:
+                current[key] = bool(fields[key])
+        self.notification_preferences[user_id] = current
+        return current
+
+    async def add_notifications(
+        self, rows: list[dict[str, Any]]
+    ) -> list[NotificationRecord]:
+        inserted: list[NotificationRecord] = []
+        seen = {
+            (record.user_id, record.dedupe_key)
+            for record in self.notifications.values()
+        }
+        for row in rows:
+            key = (row["user_id"], row["dedupe_key"])
+            if key in seen:
+                continue
+            seen.add(key)
+            record = NotificationRecord(
+                id=row["id"],
+                project_id=row["project_id"],
+                user_id=row["user_id"],
+                kind=row["kind"],
+                title=row["title"],
+                body=row.get("body") or "",
+                resource_type=row.get("resource_type") or "",
+                resource_id=row.get("resource_id") or "",
+                run_id=row.get("run_id"),
+                doc_id=row.get("doc_id"),
+                comment_id=row.get("comment_id"),
+                section_id=row.get("section_id"),
+                actor_id=row.get("actor_id"),
+                actor_name=row.get("actor_name"),
+                dedupe_key=row["dedupe_key"],
+                read_at=None,
+                created_at=datetime.now(timezone.utc),
+            )
+            self.notifications[record.id] = record
+            inserted.append(record)
+        return inserted
+
+    async def list_notifications(
+        self,
+        user_id: str,
+        project_id: str,
+        *,
+        unread_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[NotificationRecord]:
+        rows = [
+            record
+            for record in self.notifications.values()
+            if record.user_id == user_id
+            and record.project_id == project_id
+            and (not unread_only or record.read_at is None)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[offset : offset + max(1, min(int(limit), 200))]
+
+    async def unread_notification_count(
+        self, user_id: str, project_id: str
+    ) -> int:
+        return sum(
+            1
+            for record in self.notifications.values()
+            if record.user_id == user_id
+            and record.project_id == project_id
+            and record.read_at is None
+        )
+
+    async def mark_notification_read(
+        self, user_id: str, project_id: str, notification_id: str
+    ) -> bool:
+        record = self.notifications.get(notification_id)
+        if (
+            record is None
+            or record.user_id != user_id
+            or record.project_id != project_id
+            or record.read_at is not None
+        ):
+            return False
+        self.notifications[notification_id] = replace(
+            record, read_at=datetime.now(timezone.utc)
+        )
+        return True
+
+    async def mark_all_notifications_read(
+        self, user_id: str, project_id: str
+    ) -> int:
+        updated = 0
+        for key, record in list(self.notifications.items()):
+            if (
+                record.user_id == user_id
+                and record.project_id == project_id
+                and record.read_at is None
+            ):
+                self.notifications[key] = replace(
+                    record, read_at=datetime.now(timezone.utc)
+                )
+                updated += 1
+        return updated
+
+    async def list_project_recipients(
+        self,
+        project_id: str,
+        roles: tuple[str, ...] = ("manager", "reviewer"),
+    ) -> list[NotificationRecipient]:
+        return [
+            recipient
+            for recipient in self.notification_recipients.get(project_id, [])
+            if recipient.role in roles
+        ]
+
+    async def add_feedback(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        user_id: str | None,
+        user_name: str,
+        event_type: str,
+        score: int | None,
+        reason: str,
+        content_sha256: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> FeedbackRecord:
+        self._feedback_id += 1
+        record = FeedbackRecord(
+            id=self._feedback_id,
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            user_id=user_id,
+            user_name=user_name,
+            event_type=event_type,
+            score=score,
+            reason=reason,
+            content_sha256=content_sha256,
+            metadata=dict(metadata or {}),
+            created_at=datetime.now(timezone.utc),
+        )
+        self.feedback_events.append(record)
+        return record
+
+    async def list_feedback(
+        self,
+        run_id: str,
+        *,
+        section_id: str | None = None,
+        limit: int = 100,
+    ) -> list[FeedbackRecord]:
+        rows = [
+            record
+            for record in self.feedback_events
+            if record.run_id == run_id
+            and (section_id is None or record.section_id == section_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 500))]
+
+    async def add_quality_snapshot(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        revision: int,
+        content_sha256: str,
+        gate_status: str | None,
+        compliance_status: str | None,
+        consistency_status: str | None,
+        requirements_coverage: float | None,
+        citation_coverage: float | None,
+        model: str | None,
+        summary: dict[str, Any],
+    ) -> QualitySnapshotRecord | None:
+        if any(
+            record.run_id == run_id
+            and record.content_sha256 == content_sha256
+            for record in self.quality_snapshots
+        ):
+            return None
+        self._quality_id += 1
+        record = QualitySnapshotRecord(
+            id=self._quality_id,
+            project_id=project_id,
+            run_id=run_id,
+            revision=revision,
+            content_sha256=content_sha256,
+            gate_status=gate_status,
+            compliance_status=compliance_status,
+            consistency_status=consistency_status,
+            requirements_coverage=requirements_coverage,
+            citation_coverage=citation_coverage,
+            model=model,
+            summary=dict(summary),
+            created_at=datetime.now(timezone.utc),
+        )
+        self.quality_snapshots.append(record)
+        return record
+
+    async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
+        return self.run_usage.get(run_id)
+
+    async def list_templates(self, project_id: str) -> list[BidTemplateRecord]:
+        rows = [
+            record
+            for record in self.templates.values()
+            if record.project_id == project_id
+        ]
+        rows.sort(
+            key=lambda record: (record.is_active, record.created_at),
+            reverse=True,
+        )
+        return rows
+
+    async def get_template(
+        self, project_id: str, template_id: str
+    ) -> BidTemplateRecord | None:
+        record = self.templates.get(template_id)
+        if record is None or record.project_id != project_id:
+            return None
+        return record
+
+    async def get_active_template(
+        self, project_id: str
+    ) -> BidTemplateRecord | None:
+        return next(
+            (
+                record
+                for record in self.templates.values()
+                if record.project_id == project_id and record.is_active
+            ),
+            None,
+        )
+
+    async def create_template(self, **fields: Any) -> BidTemplateRecord:
+        now = datetime.now(timezone.utc)
+        record = BidTemplateRecord(
+            id=fields["template_id"],
+            project_id=fields["project_id"],
+            name=fields["name"],
+            description=fields.get("description") or "",
+            filename=fields["filename"],
+            object_key=fields["object_key"],
+            sha256=fields["sha256"],
+            size_bytes=int(fields.get("size_bytes") or 0),
+            is_active=bool(fields.get("is_active")),
+            version=1,
+            created_by=fields.get("created_by"),
+            created_by_name=fields.get("created_by_name"),
+            created_at=now,
+            updated_at=now,
+        )
+        if record.is_active:
+            for key, existing in list(self.templates.items()):
+                if existing.project_id == record.project_id:
+                    self.templates[key] = replace(
+                        existing, is_active=False
+                    )
+        self.templates[record.id] = record
+        return record
+
+    async def update_template(
+        self,
+        project_id: str,
+        template_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+    ) -> BidTemplateRecord | None:
+        record = await self.get_template(project_id, template_id)
+        if record is None:
+            return None
+        if is_active:
+            for key, existing in list(self.templates.items()):
+                if existing.project_id == project_id:
+                    self.templates[key] = replace(
+                        existing, is_active=False
+                    )
+        updated = replace(
+            record,
+            name=name if name is not None else record.name,
+            description=(
+                description
+                if description is not None
+                else record.description
+            ),
+            is_active=(
+                is_active if is_active is not None else record.is_active
+            ),
+            updated_at=datetime.now(timezone.utc),
+        )
+        self.templates[template_id] = updated
+        return updated
+
+    async def delete_template(
+        self, project_id: str, template_id: str
+    ) -> bool:
+        record = await self.get_template(project_id, template_id)
+        if record is None:
+            return False
+        del self.templates[template_id]
+        return True
+
+    async def get_project_monthly_budget(
+        self, project_id: str
+    ) -> int | None:
+        return self.project_monthly_budgets.get(project_id)
+
+    async def project_month_cost(self, project_id: str) -> float:
+        return float(self.project_month_costs.get(project_id, 0.0))
+
+    async def budget_trend(
+        self, *, days: int = 30, project_id: str | None = None
+    ) -> dict[str, Any] | None:
+        if project_id and project_id not in self.project_monthly_budgets:
+            return None
+        if project_id:
+            budget = self.project_monthly_budgets.get(project_id)
+            cost = float(self.project_month_costs.get(project_id, 0.0))
+        else:
+            budgets = [
+                value
+                for value in self.project_monthly_budgets.values()
+                if value is not None
+            ]
+            budget = sum(budgets) if budgets else None
+            cost = sum(self.project_month_costs.values())
+        today = datetime.now(timezone.utc).date().isoformat()
+        return {
+            "days": days,
+            "project_id": project_id,
+            "project_name": None,
+            "month_start": f"{today[:8]}01",
+            "range_start": today,
+            "budget_cents": budget,
+            "month_cost_cny": round(cost, 4),
+            "budget_status": "none"
+            if not budget
+            else "exceeded"
+            if cost * 100 >= budget
+            else "ok",
+            "daily": [
+                {
+                    "date": today,
+                    "llm_cost_cny": round(cost, 4),
+                    "external_cost_cny": 0.0,
+                    "total_cost_cny": round(cost, 4),
+                    "cumulative_cost_cny": round(cost, 4),
+                }
+            ],
+        }
+
+    async def list_external_usage(
+        self,
+        *,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ExternalUsageRecord]:
+        rows = [
+            record
+            for record in self.external_usage
+            if (project_id is None or record.project_id == project_id)
+            and (doc_id is None or record.doc_id == doc_id)
+        ]
+        rows.sort(key=lambda record: record.created_at, reverse=True)
+        return rows[: max(1, min(int(limit), 200))]
+
+    async def add_external_usage(
+        self, rows: list[dict[str, Any]]
+    ) -> list[ExternalUsageRecord]:
+        records: list[ExternalUsageRecord] = []
+        for row in rows:
+            self._external_id += 1
+            record = ExternalUsageRecord(
+                id=self._external_id,
+                project_id=row.get("project_id"),
+                doc_id=row.get("doc_id"),
+                job_id=row.get("job_id"),
+                provider=str(row.get("provider") or ""),
+                operation=str(row.get("operation") or ""),
+                units=int(row.get("units") or 0),
+                unit_type=str(row.get("unit_type") or "unit"),
+                cost_cny=row.get("cost_cny"),
+                status=str(row.get("status") or "ok"),
+                latency_ms=row.get("latency_ms"),
+                metadata=dict(row.get("metadata") or {}),
+                created_at=datetime.now(timezone.utc),
+            )
+            self.external_usage.append(record)
+            records.append(record)
+        return records
+
+    async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
+        runs = list(self.runs.values())
+        by_status: dict[str, int] = {}
+        by_gate: dict[str, int] = {}
+        for run in runs:
+            by_status[run.status] = by_status.get(run.status, 0) + 1
+            if run.gate_status:
+                by_gate[run.gate_status] = by_gate.get(run.gate_status, 0) + 1
+        feedback_by_type: dict[str, int] = {}
+        ratings = [
+            record.score
+            for record in self.feedback_events
+            if record.score is not None
+        ]
+        for record in self.feedback_events:
+            feedback_by_type[record.event_type] = (
+                feedback_by_type.get(record.event_type, 0) + 1
+            )
+        quality_by_gate: dict[str, int] = {}
+        for snapshot in self.quality_snapshots:
+            if snapshot.gate_status:
+                quality_by_gate[snapshot.gate_status] = (
+                    quality_by_gate.get(snapshot.gate_status, 0) + 1
+                )
+        return {
+            "days": days,
+            "runs": {
+                "total": len(runs),
+                "by_status": by_status,
+                "by_gate": by_gate,
+                "failed": by_status.get("failed", 0),
+                "avg_duration_seconds": None,
+            },
+            "usage": {},
+            "external": {
+                "records": len(self.external_usage),
+                "units": sum(item.units for item in self.external_usage),
+                "cost_cny": round(
+                    sum(item.cost_cny or 0 for item in self.external_usage), 4
+                ),
+                "by_provider": {
+                    provider: {
+                        "records": len(rows),
+                        "units": sum(item.units for item in rows),
+                        "cost_cny": round(
+                            sum(item.cost_cny or 0 for item in rows), 4
+                        ),
+                    }
+                    for provider in {
+                        item.provider for item in self.external_usage
+                    }
+                    for rows in [
+                        [
+                            item
+                            for item in self.external_usage
+                            if item.provider == provider
+                        ]
+                    ]
+                },
+            },
+            "feedback": {
+                "total": len(self.feedback_events),
+                "by_type": feedback_by_type,
+                "avg_rating": (
+                    round(sum(ratings) / len(ratings), 2)
+                    if ratings
+                    else None
+                ),
+                "top_reasons": [],
+            },
+            "quality": {
+                "snapshots": len(self.quality_snapshots),
+                "by_gate": quality_by_gate,
+                "avg_requirements_coverage": None,
+                "avg_citation_coverage": None,
+            },
+            "projects": [],
+            "daily": [],
+            "budget_alerts": [
+                {
+                    "kind": record.kind,
+                    "title": record.title,
+                    "body": record.body,
+                    "run_id": record.run_id,
+                    "doc_id": record.doc_id,
+                    "user_id": record.user_id,
+                    "read": record.read_at is not None,
+                    "created_at": record.created_at,
+                }
+                for record in sorted(
+                    self.notifications.values(),
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
+                if record.kind.startswith(("run_budget_", "project_budget_"))
+            ],
+        }
+
+    def _section_versions(
+        self, run_id: str, section_id: str
+    ) -> list[SectionVersionRecord]:
+        return self.versions.setdefault(f"{run_id}:{section_id}", [])
+
+    async def add_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        markdown: str,
+        *,
+        source: str = "generated",
+        outline_revision: int | None = None,
+        review_summary: str | None = None,
+        created_by: str | None = None,
+        created_by_name: str | None = None,
+        version_keep: int = 50,
+    ) -> SectionVersionRecord:
+        text = (markdown or "").strip()
+        if not text:
+            raise ValueError("section version markdown must not be empty")
+        records = self._section_versions(run_id, section_id)
+        if records and (records[-1].markdown or "").strip() == text:
+            return records[-1]
+        version = records[-1].version + 1 if records else 1
+        record = SectionVersionRecord(
+            id=version,
+            run_id=run_id,
+            section_id=section_id,
+            version=version,
+            source=(source or "generated")[:16],
+            markdown=text,
+            content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            outline_revision=outline_revision,
+            review_summary=review_summary,
+            created_by=created_by,
+            created_by_name=created_by_name,
+            created_at=datetime.now(timezone.utc),
+        )
+        records.append(record)
+        keep = max(1, int(version_keep))
+        if len(records) > keep:
+            del records[: len(records) - keep]
+        return record
+
+    async def list_section_versions(
+        self,
+        run_id: str,
+        section_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[SectionVersionRecord]:
+        records = self._section_versions(run_id, section_id)
+        return list(reversed(records))[: max(1, min(int(limit), 100))]
+
+    async def get_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+    ) -> SectionVersionRecord | None:
+        return next(
+            (
+                record
+                for record in self._section_versions(run_id, section_id)
+                if record.id == version_id
             ),
             None,
         )
@@ -868,6 +1643,14 @@ class FakeBidRunRepository:
             started_at=run.started_at or now,
         )
         self.runs[run_id] = updated
+        self.states[run_id] = [
+            replace(
+                state,
+                generation_token=generation_token,
+                last_heartbeat_at=now,
+            )
+            for state in self.states.get(run_id, [])
+        ]
         return updated
 
     async def heartbeat(
@@ -910,6 +1693,11 @@ class FakeBidRunRepository:
         section_id: str,
         *,
         expected_status: str | None = None,
+        expected_token: str | None = None,
+        expected_final_sha256: str | None = None,
+        version_actor_id: str | None = None,
+        version_actor_name: str | None = None,
+        version_keep: int = 50,
         **fields: Any,
     ) -> bool:
         states = self.states.get(run_id, [])
@@ -919,8 +1707,50 @@ class FakeBidRunRepository:
             if state.section_id == section_id:
                 if expected_status is not None and state.status != expected_status:
                     return False
+                if (
+                    expected_token is not None
+                    and getattr(state, "generation_token", None) != expected_token
+                ):
+                    return False
+                if expected_final_sha256 is not None:
+                    current_sha = hashlib.sha256(
+                        (state.final_markdown or "").strip().encode("utf-8")
+                    ).hexdigest()
+                    if current_sha != expected_final_sha256:
+                        return False
                 found = True
                 updated.append(replace(state, **fields))
+                markdown = (fields.get("final_markdown") or "").strip()
+                if markdown and markdown != (state.final_markdown or "").strip():
+                    review_value = fields.get("review", state.review)
+                    issue_value = fields.get("issues", state.issues)
+                    summary = None
+                    if isinstance(review_value, dict):
+                        summary = (
+                            f"verdict={review_value.get('verdict') or 'unknown'}; "
+                            f"issues={len(review_value.get('issues') or [])}; "
+                            f"warnings={len(review_value.get('warnings') or [])}"
+                        )
+                    elif issue_value:
+                        summary = f"manual; issues={len(issue_value)}"
+                    run = self.runs.get(run_id)
+                    await self.add_section_version(
+                        run_id,
+                        section_id,
+                        markdown,
+                        source=(
+                            fields.get("final_source")
+                            or state.final_source
+                            or "generated"
+                        ),
+                        outline_revision=(
+                            run.revision if run is not None else None
+                        ),
+                        review_summary=summary,
+                        created_by=version_actor_id,
+                        created_by_name=version_actor_name,
+                        version_keep=version_keep,
+                    )
             else:
                 updated.append(state)
         if not found:
@@ -1122,6 +1952,8 @@ class FakeProjectRepository:
         *,
         name: str | None = None,
         description: str | None = None,
+        monthly_budget_cents: int | None = None,
+        set_monthly_budget: bool = False,
     ) -> ProjectRecord | None:
         project = self.projects.get(project_id)
         if project is None:
@@ -1133,6 +1965,11 @@ class FakeProjectRepository:
                 description
                 if description is not None
                 else project.description
+            ),
+            monthly_budget_cents=(
+                monthly_budget_cents
+                if set_monthly_budget
+                else project.monthly_budget_cents
             ),
             updated_at=self._now(),
         )
@@ -1443,6 +2280,7 @@ class FakeAuditRepository:
 class FakeCompanyService:
     def __init__(self) -> None:
         self.records: dict[str, CompanyRecord] = {}
+        self.qualifications: dict[str, CompanyQualificationRecord] = {}
 
     async def init(self) -> None:
         return None
@@ -1520,6 +2358,118 @@ class FakeCompanyService:
 
     async def delete(self, company_id: str) -> bool:
         return self.records.pop(company_id, None) is not None
+
+    def _validate_qualification(
+        self, name: str, issued_at, expires_at
+    ) -> str:
+        clean = (name or "").strip()
+        if not clean:
+            raise CompanyError(400, "资质名称不能为空")
+        if issued_at and expires_at and expires_at < issued_at:
+            raise CompanyError(422, "到期日期不能早于发证日期")
+        return clean
+
+    async def list_qualifications(
+        self, company_id: str
+    ) -> list[CompanyQualificationRecord]:
+        if company_id not in self.records:
+            raise CompanyError(404, "公司不存在")
+        rows = [
+            record
+            for record in self.qualifications.values()
+            if record.company_id == company_id
+        ]
+        rows.sort(key=lambda record: record.expires_at or datetime.max.date())
+        return rows
+
+    async def create_qualification(
+        self,
+        company_id: str,
+        *,
+        name: str,
+        qualification_type: str,
+        certificate_no: str | None,
+        issuer: str | None,
+        issued_at,
+        expires_at,
+        notes: str,
+        created_by: str | None,
+    ) -> CompanyQualificationRecord:
+        if company_id not in self.records:
+            raise CompanyError(404, "公司不存在")
+        clean = self._validate_qualification(name, issued_at, expires_at)
+        now = datetime.now(timezone.utc)
+        record = CompanyQualificationRecord(
+            id=uuid4().hex,
+            company_id=company_id,
+            name=clean,
+            qualification_type=(qualification_type or "").strip(),
+            certificate_no=(certificate_no or "").strip() or None,
+            issuer=(issuer or "").strip() or None,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            notes=(notes or "").strip(),
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+        )
+        self.qualifications[record.id] = record
+        return record
+
+    async def update_qualification(
+        self,
+        company_id: str,
+        qualification_id: str,
+        *,
+        fields: dict[str, Any],
+    ) -> CompanyQualificationRecord | None:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            return None
+        values = {
+            key: value
+            for key, value in fields.items()
+            if key
+            in {
+                "name",
+                "qualification_type",
+                "certificate_no",
+                "issuer",
+                "issued_at",
+                "expires_at",
+                "notes",
+            }
+        }
+        if "name" in values and values["name"] is None:
+            raise CompanyError(422, "资质名称不能为空")
+        if "name" in values:
+            values["name"] = self._validate_qualification(
+                str(values["name"]),
+                values.get("issued_at", existing.issued_at),
+                values.get("expires_at", existing.expires_at),
+            )
+        elif "issued_at" in values or "expires_at" in values:
+            self._validate_qualification(
+                existing.name,
+                values.get("issued_at", existing.issued_at),
+                values.get("expires_at", existing.expires_at),
+            )
+        updated = replace(
+            existing,
+            updated_at=datetime.now(timezone.utc),
+            **values,
+        )
+        self.qualifications[qualification_id] = updated
+        return updated
+
+    async def delete_qualification(
+        self, company_id: str, qualification_id: str
+    ) -> bool:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            return False
+        del self.qualifications[qualification_id]
+        return True
 
 
 class FakeAuthRepository:

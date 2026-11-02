@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from src.parsing.extraction.json_parse import loads_tolerant
 
 from .checks import AllowedFacts, redact_unsupported
+from .content_hash import compute_section_content_sha256
 from .models import BidOutline
 
 _FACT_CHECK = {
@@ -443,6 +444,11 @@ def generate_fix_plan(
     merged = merged[:max_items]
     for index, item in enumerate(merged, start=1):
         item["id"] = f"fix-{index:03d}"
+        section_id = str(item.get("section_id") or "")
+        if section_id and section_id in section_markdowns:
+            item["section_sha256"] = compute_section_content_sha256(
+                section_markdowns[section_id]
+            )
 
     return {
         "schema_version": "1.0",

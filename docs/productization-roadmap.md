@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版、反馈事件/质量快照、外部用量账本、run 预算控制与轻量运营看板，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -16,9 +16,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **项目隔离与审计（P0-B/C 已补）**：`projects`/`project_members`/`documents` + `bid_runs.project_id`（`0004`）、`X-Project-Id` 与角色求交、append-only `audit_events` 哈希链（`0005`）。
 - **生产部署（P0-D 已补）**：多阶段 `Dockerfile`、`docker-compose.prod.yml`、Nginx TLS/安全头、`/api/live` 与 `/api/ready`、拆分 parse/bid 队列、备份/恢复脚本、GitHub Actions CI。
 - **开发默认仍不等于生产**：`.env.example` 保留 `0.0.0.0` 与 `CORS_ORIGINS=*` 以兼容本机启动；`ENVIRONMENT=production` 会拒绝这些值并 fail-fast。
-- **前端测试仍薄**：已有 Vitest 覆盖 URL 信任边界与 API 客户端，但没有组件/E2E 测试；token 仍存 localStorage。
+- **前端测试（已补 E2E）**：Vitest 覆盖 URL 信任边界与 API 客户端；Playwright 覆盖登录、建 run、评论解决、只读权限与上传解析；组件级测试、多项目切换与浏览器 SSE 重连仍未覆盖；token 仍存 localStorage。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
-- **无审批/版本**：`src/bidding/gate.py:214-220` 的强制导出只记录不拦截；没有审批人、审批状态、版本 diff 或恢复。
+- **协作与实时进度（已补，通知/看板未做）**：审批绑定内容哈希、章节版本 diff/恢复、评论/@提及/指派与 SSE 实时进度已落地；站内通知、SMTP/Webhook、截止时间与项目看板仍未实现。
 - **交付物有限**：`src/bidding/docx_export.py:286-370` 仅基础标题/段落/表格/图片；无 PDF；无模板管理。
 - **输入格式单一**：`src/parsing/pipeline.py:212-213` 只接受 PDF；无 DOCX/XLSX/HTML、无本地 OCR。
 
@@ -233,6 +233,9 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - 溯源：prompt 版本/哈希、模型/provider/base_url host（不含 key）、temperature、top_k、evidence cap、应用版本/git sha、时间戳。
 - 前端运行详情展示成本与参数；项目维度月度用量（P2 配额基础）。
 
+**已实现**：LLM usage/成本账本（`llm_call_log`/`run_usage`）、provenance、运营看板成本/用量聚合与 CSV 导出、`BID_RUN_BUDGET_CENTS` + `BID_BUDGET_ENFORCEMENT=warn|stop` 预算控制、MinerU/Embedding（含附件）外部用量账本、项目月度配额与项目编辑 UI。
+**尚未实现**：预算告警通知、配额历史与物化视图预聚合。
+
 **验收**：每次 LLM 调用都有 usage；预算超限按配置 warn/stop；报告可复现"用什么模型/提示词/参数生成"。
 
 ### 4.4 审查与检索质量
@@ -255,7 +258,16 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - prompt 变更必须附评测对比；阈值回归阻断合并。
 - 提示词外置为版本化文件/常量，`PROMPT_VERSION` 写入报告。
 
+**已实现**：评测建议脚本、夜间 workflow、prompt registry、L0 基线；L1 CSV 标注流程（`eval_annotate`）与 reviewed points 词面回归评分（`eval_regression --max-l1-drop`、`baseline_metrics`）；L2 盲评工作簿（`eval_l2 export|judge|import`）与一致率/kappa/维度校准门禁。仍需 5–10 份脱敏真实标书的人工标注数据与真实 LLM judge 校准结果。
+
 **P1 关键文件**：`src/bidding/{prompts,checks,retrieval,staged,assemble,gate,compliance,staged_output}.py`、`src/bidding/llm.py`、`src/parsing/extraction/schemas.py`、`api/bid_runs.py`、`frontend/src/components/{BidSectionModal,BidRunWorkspace,BidGatePanel}.tsx`、新增 `citations.json` / `requirements.json` 产物。
+
+### 4.7 反馈闭环与轻量数据底座（已实现）
+
+- `feedback_events`（评分/采纳/拒绝/编辑/重写/恢复）与 `bid_quality_snapshots`（每次组装的质量摘要与覆盖率），迁移 `0017`。
+- 管理员「运营看板」聚合运行/门禁/成本/token/反馈/质量/项目 Top 10/14 天趋势；不引入重型数据中台。
+- 已实现：`external_usage`（MinerU/Embedding 用量与可选成本）、run 预算 warn/stop、项目月度配额/编辑 UI、80%/100% 告警、预算趋势图与 CSV 导出。
+- 尚未实现：物化视图预聚合、按客户计费、预算告警通知偏好之外的配额历史。
 
 ## 5. P2 — 团队协作与审批（20–25 人日）
 
@@ -272,40 +284,41 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - `GET .../sections/{id}/versions`、`GET .../diff?from=&to=`（统一 diff）、`POST .../restore`（走人工编辑语义，清 gate，留审计）。
 - 前端并排 diff / 渲染 diff；大纲 revision 历史可选。
 
-### 5.3 评论、指派与通知
+### 5.3 评论、指派与通知（已实现）
 
-- `section_comments`（作者、正文、resolved、@提及）；`section_assignments`（负责人、截止时间）。
-- 通知：站内 + SMTP/Webhook（run 完成、门禁阻断、待审批、@提及、资质到期）。
-- 项目看板：节状态、负责人、截止时间、阻塞原因。
+- 已落地 `bid_comments`（run 级评论、可选章节定位、作者快照、正文、`open/resolved`、@提及与处理人快照）；`GET /api/project-members` 提供项目成员选择；`GET/POST/PATCH /api/bid-runs/{id}/comments*` 承载查看、发表、解决/重开、指派。详见 `docs/collaboration.md`。
+- 已落地 `notifications`（迁移 `0015`）：@提及/指派、run 组装/门禁阻断/待审批的站内通知；可选 Webhook（HMAC-SHA256 签名）与 SMTP（全局收件人）；前端铃铛与已读管理。详见 `docs/notifications.md`。
+- 尚未实现：资质到期提醒（资质库本身未建）、用户级邮箱与通知偏好、截止时间、项目看板、评论删除/线程回复、通知重试/DLQ。
 
-### 5.4 并发保护与实时进度
+### 5.4 并发保护与实时进度（已实现）
 
-- 章节/大纲 PATCH 增加 `expected_revision`；冲突返回 409 + 最新版本，前端提示 diff/重载。
-- 可选 Redis 编辑租约（120s 心跳）显示"某人正在编辑"；不强行锁死。
-- SSE：`run_events` 追加表 + `GET /api/bid-runs/{id}/events?after=`；worker 写事件，API 流式推送；前端用 fetch-SSE（带 Authorization），断线用 Last-Event-ID 续传；local 模式回退轮询。
-- Nginx 关闭 SSE buffering，读超时覆盖长任务。
+- 章节编辑使用 `expected_sha256` 内容哈希，冲突返回 409；大纲使用 revision 乐观锁。
+- SSE：`GET /api/bid-runs/{id}/events` 推送 run/章节/Redis job 快照；前端以 fetch-SSE（Authorization 头）消费，3 秒重连，轮询兜底。当前是快照流，不是 `run_events` 追加表，也没有 `Last-Event-ID` 续传；local 模式回退轮询。
+- Nginx 通过 `X-Accel-Buffering: no` 关闭该响应缓冲，读超时覆盖长任务。
+- 尚未实现：Redis 编辑租约/“某人正在编辑”提示。
 
 **验收**：未审批导出被拒；两人同时编辑同节，后提交者 409；版本可恢复且审计完整；SSE 在 2s 内反映状态变化。
 
 ## 6. P3 — 交付物与复用（25–30 人日）
 
-### 6.1 高保真 DOCX/PDF
+### 6.1 高保真 DOCX/PDF（PDF/DOC 已实现，复杂排版待补）
 
-- DOCX：页眉页脚、页码域、目录域、分节、样式、图表题注与交叉引用、编号；`python-docx` 扩展 + `docxtpl` 模板注入。
-- PDF：LibreOffice headless（独立容器/队列）转换，内置 Noto CJK 字体；失败回退并提示。
+- DOCX：页眉页脚、页码域、目录域、分节、样式、图表题注与交叉引用、编号；`python-docx` 扩展 + 全局默认模板（`BID_DOCX_TEMPLATE`）与项目级模板库，保留模板页边距/页眉页脚/样式。
+- PDF/DOC：LibreOffice headless 转换（PDF 与 Word 97-2003），内置 Noto CJK 字体；DOC 校验 OLE magic 与缓存失效；失败提示。
 - 交付检查：目录可更新、页码存在、图片嵌入且 DPI 达标、字体不缺失、图表编号连续、页数上限；进入 gate（先 warn 后 block）。
 - TOC 域需在 Word/LibreOffice 更新；导出时尝试自动更新，失败则明确提示。
 
-### 6.2 模板管理
+### 6.2 模板管理（项目级最小版已实现）
 
-- `templates` 表 + MinIO（项目级/组织级）；DOCX 封面/页眉页脚/样式模板，变量 JSON Schema 校验；未知/缺失变量阻断导出。
-- 模板版本化、预览、启用/停用；后续再支持整本文档模板。
+- 已实现可选的全局 DOCX 样式模板：保留页边距/页眉页脚/样式，清空示例正文后写入生成内容。
+- 已实现项目级模板库（Alembic `0021` `bid_templates` + 私有 MinIO/本地对象）：项目内多模板、上传校验、启用/停用、下载/删除、SHA-256 与项目隔离；启用模板优先于全局模板，组装时生效。
+- 已实现分页预览：LibreOffice 转 PDF 并缓存到私有对象，PyMuPDF 渲染单页 PNG；前端支持翻页预览。
+- 尚未实现：组织级/公司级模板、模板变量 JSON Schema、未知/缺失变量阻断、模板版本化、整本文档模板。
 
-### 6.3 企业资质与资料库
+### 6.3 企业资质与资料库（资质 CRUD 已实现）
 
-- `company_assets`：资质证书、人员证书、业绩、财务；字段含证书号、有效期、扫描件私有对象、核验状态。
-- 到期提醒（P2 通知 + beat 任务）；投标时从资产库生成 profile 片段，保留出处。
-- 敏感字段继续按角色掩码；资产文件不进公开 artifact allowlist。
+- 已实现 `company_qualifications`：资质名称/类型/证书号/发证机关/发证与到期日/备注；API CRUD、到期 30 天状态徽章、审计与前端弹窗。
+- 尚未实现：扫描件私有对象、人员证书/业绩/财务统一资产库、核验状态、到期提醒（P2 通知 + beat 任务）、从资产库生成 profile 片段并保留出处。
 
 ### 6.4 跨标书内容复用
 
@@ -332,7 +345,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **Celery 可靠性**：`acks_late=True` + `task_reject_on_worker_lost=True`（先完成幂等验证）、瞬时错误重试退避、任务时间上限、`prefetch_multiplier=1`；parse/bid 独立队列与 worker；beat 负责清理、到期提醒、备份触发（或主机 cron）。
 - **性能**：文档注册表分页、搜索分页、关键索引（`bid_runs(project_id, created_at)`、`audit_events(project_id, ts)`、`section_versions(section_id, version)`）；Chroma 元数据过滤与重建策略；健康检查缓存。
 - **容灾与配额**：Postgres PITR/每日备份、MinIO 版本化 + 异地镜像、Chroma 可重建；RPO/RTO 目标与季度演练；项目级存储/运行/Token 配额。
-- **测试**：Playwright e2e（登录→上传→run→审批→导出）、Vitest 前端单测、k6/Locust 压测（10/50 并发）、契约测试；上线前安全测评。
+- **测试**：Playwright E2E（登录→上传→run→评论；审批/导出仍待补）、Vitest 前端单测、`scripts/load_test.py` HTTP/SSE 压测（10/50 并发仍需在真实环境达标）、契约测试；上线前安全测评。
 - **离线版（如需要）**：vLLM/SGLang + bge-m3 + PaddleOCR + 自建 MinerU，全部走内网网关；作为独立交付变体。
 
 ## 8. 技术选型清单
@@ -435,3 +448,5 @@ P0 全部四个切片（认证/RBAC、项目隔离、审计、部署/CI/备份�
 1. 按 `docs/deployment.md` 在干净 Linux 主机完成一次部署、备份恢复与跨项目隔离验收。
 2. 用现有系统跑 2–3 份真实标书建立质量/成本基线，作为 P1 评测集的种子。
 3. P1 从引用契约与需求覆盖矩阵开始；每个阶段结束按第 13 节做用户验收，不通过不进入下一阶段。
+
+> **与生产就绪路线图的关系**：本文 P1 4.3（成本/用量/溯源）与 4.6（黄金评测集/CI 回归）已由 [生产就绪与评测路线图](production-readiness.md) 细化为 P0/P1 工作项；本文 P4（可观测性/容灾/配额）由新文档细化为可执行的指标、告警与备份要求。新文档额外补充了 LLM 调用账本、章节版本/反馈、审批内容哈希，以及“现在是否建数据中台”的决策标准（结论：暂不建重型中台，先建轻量数据底座）。两份文档并行使用，不互相替代。

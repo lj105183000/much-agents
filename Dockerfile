@@ -60,6 +60,15 @@ USER app
 # ---------------------------------------------------------------------------
 FROM api-base AS api
 
+# PDF export runs in the API process through headless LibreOffice.  Install it
+# only in this stage so the Celery workers and migration job stay slim.
+USER root
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends libreoffice-writer-nogui \
+        || apt-get install -y --no-install-recommends libreoffice-writer) \
+    && rm -rf /var/lib/apt/lists/*
+USER app
+
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8001/api/live || exit 1

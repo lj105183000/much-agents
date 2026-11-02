@@ -187,6 +187,32 @@ def test_project_crud_and_default_project_guard() -> None:
     assert updated.name == "项目A（改）"
     assert updated.description == "第一个项目"
 
+    budgeted = asyncio.run(
+        service.update_project(
+            project.id,
+            monthly_budget_cents=1234,
+            set_monthly_budget=True,
+        )
+    )
+    assert budgeted.monthly_budget_cents == 1234
+    cleared = asyncio.run(
+        service.update_project(
+            project.id,
+            monthly_budget_cents=None,
+            set_monthly_budget=True,
+        )
+    )
+    assert cleared.monthly_budget_cents is None
+    with pytest.raises(ProjectError) as negative:
+        asyncio.run(
+            service.update_project(
+                project.id,
+                monthly_budget_cents=-1,
+                set_monthly_budget=True,
+            )
+        )
+    assert negative.value.status_code == 400
+
     with pytest.raises(ProjectError) as unknown:
         asyncio.run(service.update_project(str(uuid4()), name="不存在"))
     assert unknown.value.status_code == 404

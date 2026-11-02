@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
 import shutil
+import tempfile
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
@@ -17,9 +20,23 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from src.bidding.budget import (
+    BUDGET_WARNING_RATIO,
+    BudgetDecision,
+    evaluate_budget,
+)
 from src.bidding.checks import build_allowed, deterministic_review
+from src.bidding.citations import build_citations, strip_citation_markers
 from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
+from src.bidding.doc_export import (
+    DocExportError,
+    convert_docx_to_doc,
+)
+from src.bidding.content_hash import (
+    compute_run_content_sha256,
+    compute_section_content_sha256,
+)
 from src.bidding.context import TenderContext
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
@@ -34,12 +51,28 @@ from src.bidding.fix_plan import generate_fix_plan
 from src.bidding.gate import evaluate_gate
 from src.bidding.llm import DeepSeekChatClient
 from src.bidding.models import BidOutline
+from src.bidding.pdf_export import PdfExportError, convert_docx_to_pdf
+from src.bidding.template_preview import (
+    MAX_PREVIEW_PDF_BYTES,
+    TemplatePreviewError,
+    render_pdf_page_png,
+)
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
+from src.bidding.provenance import build_provenance
+from src.bidding.requirements import build_requirements
 from src.bidding.staged_output import (
     SectionOutput,
     assemble_staged_bid,
     write_staged_outputs,
+)
+from src.observability.logging import get_request_id
+from src.observability.metrics import (
+    DOC_EXPORTS,
+    DOC_EXPORT_DURATION,
+    GATE_STATUS,
+    PDF_EXPORTS,
+    PDF_EXPORT_DURATION,
 )
 from src.mcp_client.config import McpClientConfig
 from src.mcp_client.manager import (
@@ -48,7 +81,11 @@ from src.mcp_client.manager import (
 )
 from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
 from src.storage.base import Storage
-from src.storage.errors import StorageError, StorageObjectNotFound
+from src.storage.errors import (
+    StorageError,
+    StorageObjectNotFound,
+    StoragePathError,
+)
 from src.storage.hydration import (
     delete_run_derived,
     ensure_document_cached,
@@ -66,16 +103,32 @@ from .bid_run_mapping import (
     outputs_from_states,
 )
 from .bid_run_repo import (
+    BidCommentRecord,
     BidRunRecord,
     BidRunRepository,
+    BidTemplateRecord,
+    FeedbackRecord,
     OutlineSectionRecord,
     SectionStateRecord,
 )
 from .companies import CompanyError, CompanyService
 from .jobs import Job, JobStoreProtocol
+from .notifications import NotificationService
 from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
+    AnalyticsBudgetTrend,
+    AnalyticsOverview,
+    BidCommentCreateRequest,
+    BidCommentListResponse,
+    BidCommentMention,
+    BidCommentUpdateRequest,
+    BidCommentView,
     BidComplianceResponse,
+    BidExternalUsageView,
+    BidFeedbackCreate,
+    BidFeedbackListResponse,
+    BidFeedbackView,
+    BidUsageResponse,
     BidConsistencyResponse,
     BidFixApplyRequest,
     BidFixPlanRequest,
@@ -94,10 +147,16 @@ from .schemas import (
     BidRunCounts,
     BidRunCreatedResponse,
     BidRunDetail,
+    BidRunEventJob,
+    BidRunEventSection,
+    BidRunEventSnapshot,
     BidRunListResponse,
     BidRunSummary,
     BidSectionDetail,
     BidSectionUpdateRequest,
+    BidTemplateListResponse,
+    BidTemplateUpdateRequest,
+    BidTemplateView,
 )
 
 logger = logging.getLogger(__name__)
@@ -242,6 +301,7 @@ def _summary(
         revision=run.revision,
         job_id=run.job_id,
         gate_status=run.gate_status,
+        content_sha256=run.content_sha256,
         warnings=list(run.warnings),
         error=run.error,
         created_at=run.created_at,
@@ -341,9 +401,12 @@ class BidRunService:
         store: JobStoreProtocol | None = None,
         dispatch: Callable[[Job], None] | None = None,
         max_attempts: int = 2,
+        section_max_attempts: int = 2,
+        require_approval: bool = False,
         stale_seconds: int = 900,
         llm_factory: Callable[[], Any] | None = None,
         storage: Storage | None = None,
+        notifier: NotificationService | None = None,
     ) -> None:
         self.bid_settings = bid_settings
         self.repo = repo
@@ -351,9 +414,15 @@ class BidRunService:
         self.store = store
         self.dispatch = dispatch
         self.max_attempts = max(1, int(max_attempts))
+        self.section_max_attempts = max(1, int(section_max_attempts))
+        self.require_approval = bool(require_approval)
         self.stale_seconds = max(1, int(stale_seconds))
         self.llm_factory = llm_factory
         self.storage = storage
+        self.notifier = notifier
+        # LibreOffice is CPU and memory hungry; serialize conversions per
+        # process so concurrent exports cannot exhaust the API host.
+        self._pdf_semaphore = asyncio.Semaphore(1)
 
     def _repo(self) -> BidRunRepository:
         if self.repo is None:
@@ -488,7 +557,16 @@ class BidRunService:
     ) -> None:
         """Remove derived reports/figures that no longer match the run."""
         run_dir = self._run_dir(run)
-        for name in ("compliance.json", "consistency.json", "gate.json", "report.json"):
+        for name in (
+            "compliance.json",
+            "consistency.json",
+            "gate.json",
+            "report.json",
+            "requirements.json",
+            "citations.json",
+            "bid.pdf",
+            "bid.doc",
+        ):
             try:
                 (run_dir / name).unlink()
             except FileNotFoundError:
@@ -783,6 +861,428 @@ class BidRunService:
         states = await repo.get_states(run_id)
         return _outline_response(run, sections, states)
 
+    # ---- review comments, mentions, and assignments -------------------
+
+    @staticmethod
+    def _comment_payload(
+        record: BidCommentRecord,
+        section_title: str | None,
+    ) -> BidCommentView:
+        mentions: list[BidCommentMention] = []
+        for item in record.mentions:
+            if not isinstance(item, dict):
+                continue
+            user_id = str(item.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            mentions.append(
+                BidCommentMention(
+                    user_id=user_id,
+                    display_name=str(item.get("display_name") or ""),
+                )
+            )
+        return BidCommentView(
+            comment_id=record.comment_id,
+            run_id=record.run_id,
+            section_id=record.section_id,
+            section_title=section_title,
+            author_id=record.author_id,
+            author_name=record.author_name,
+            body=record.body,
+            mentions=mentions,
+            assignee_id=record.assignee_id,
+            assignee_name=record.assignee_name,
+            status="resolved" if record.status == "resolved" else "open",
+            resolved_by=record.resolved_by,
+            resolved_by_name=record.resolved_by_name,
+            resolved_at=record.resolved_at,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    async def list_comments(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> BidCommentListResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if status is not None and status not in {"open", "resolved"}:
+            raise BidRunError(422, f"unknown comment status: {status}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        records = await repo.list_comments(
+            run_id,
+            status=status,
+            section_id=section_id,
+            limit=limit,
+        )
+        return BidCommentListResponse(
+            run_id=run_id,
+            comments=[
+                self._comment_payload(record, titles.get(record.section_id or ""))
+                for record in records
+            ],
+        )
+
+    async def get_comment(
+        self, run_id: str, comment_id: str
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        return self._comment_payload(
+            record, titles.get(record.section_id or "")
+        )
+
+    async def create_comment(
+        self,
+        run_id: str,
+        payload: BidCommentCreateRequest,
+        *,
+        author_id: str | None,
+        author_name: str,
+        mentions: list[BidCommentMention],
+        assignee_name: str | None,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        body = payload.body.strip()
+        if not body:
+            raise BidRunError(422, "comment body must not be blank")
+        if len(body) > 4000:
+            raise BidRunError(422, "comment body is too long")
+
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        section_id = (payload.section_id or "").strip() or None
+        if section_id is not None and section_id not in titles:
+            raise BidRunError(422, f"unknown outline section: {section_id}")
+
+        deduped: list[BidCommentMention] = []
+        seen: set[str] = set()
+        for mention in mentions:
+            if mention.user_id in seen:
+                continue
+            seen.add(mention.user_id)
+            deduped.append(mention)
+
+        record = await repo.add_comment(
+            comment_id=str(uuid4()),
+            project_id=run.project_id,
+            run_id=run_id,
+            section_id=section_id,
+            author_id=author_id,
+            author_name=author_name,
+            body=body,
+            mentions=[mention.model_dump() for mention in deduped],
+            assignee_id=payload.assignee_id,
+            assignee_name=assignee_name,
+        )
+        return self._comment_payload(record, titles.get(section_id or ""))
+
+    async def update_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        payload: BidCommentUpdateRequest,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+        is_admin: bool,
+        assignee_name: str | None = None,
+        set_assignee: bool = False,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+
+        fields = payload.model_fields_set
+        if not fields:
+            raise BidRunError(422, "no comment fields to update")
+        values: dict[str, Any] = {}
+
+        if "body" in fields:
+            if not is_admin and actor_id != record.author_id:
+                raise BidRunError(403, "only the author can edit a comment")
+            body = (payload.body or "").strip()
+            if not body:
+                raise BidRunError(422, "comment body must not be blank")
+            values["body"] = body
+
+        if "assignee_id" in fields:
+            values["assignee_id"] = payload.assignee_id
+            if set_assignee:
+                values["assignee_name"] = assignee_name
+
+        if "status" in fields:
+            if payload.status is None:
+                raise BidRunError(422, "comment status cannot be null")
+            if payload.status == "resolved":
+                values["status"] = "resolved"
+                values["resolved_by"] = actor_id
+                values["resolved_by_name"] = actor_name
+                values["resolved_at"] = datetime.now(timezone.utc)
+            else:
+                values["status"] = "open"
+                values["resolved_by"] = None
+                values["resolved_by_name"] = None
+                values["resolved_at"] = None
+
+        updated = await repo.update_comment(run_id, comment_id, **values)
+        if updated is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        return self._comment_payload(
+            updated, titles.get(updated.section_id or "")
+        )
+
+    async def event_snapshot(self, run_id: str) -> BidRunEventSnapshot:
+        """Compact live snapshot used by the SSE progress stream."""
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        sections = await repo.get_outline(run_id)
+        states = await repo.get_states(run_id)
+        state_by_id = _state_map(states)
+
+        job: BidRunEventJob | None = None
+        if run.job_id and self.store is not None:
+            try:
+                view = self.store.get_view(run.job_id)
+            except Exception:  # noqa: BLE001 - progress is best-effort
+                view = None
+            if view:
+                job = BidRunEventJob(
+                    job_id=str(view.get("job_id") or run.job_id),
+                    status=str(view.get("status") or ""),
+                    stage=view.get("stage"),
+                    percent=int(view.get("percent") or 0),
+                    message=view.get("message"),
+                    exit_code=view.get("exit_code"),
+                    error=view.get("error"),
+                    started_at=view.get("started_at"),
+                    finished_at=view.get("finished_at"),
+                )
+
+        return BidRunEventSnapshot(
+            run_id=run_id,
+            status=run.status,
+            stage=run.stage,
+            percent=int(run.percent or 0),
+            message=run.message,
+            gate_status=run.gate_status,
+            content_sha256=run.content_sha256,
+            revision=int(run.revision or 0),
+            updated_at=run.updated_at,
+            counts=_counts(sections, states),
+            sections=[
+                BidRunEventSection(
+                    section_id=section.section_id,
+                    title=section.title,
+                    status=(
+                        state_by_id[section.section_id].status
+                        if section.section_id in state_by_id
+                        else "pending"
+                    ),
+                )
+                for section in sections
+            ],
+            job=job,
+            server_time=datetime.now(timezone.utc),
+            terminal=run.status not in ACTIVE_RUN_STATUSES,
+        )
+
+    # ---- quality feedback and analytics -------------------------------
+
+    @staticmethod
+    def _feedback_payload(record: FeedbackRecord) -> BidFeedbackView:
+        return BidFeedbackView(
+            id=record.id,
+            run_id=record.run_id,
+            section_id=record.section_id,
+            user_id=record.user_id,
+            user_name=record.user_name,
+            event_type=record.event_type,
+            score=record.score,
+            reason=record.reason,
+            content_sha256=record.content_sha256,
+            metadata=dict(record.metadata),
+            created_at=record.created_at,
+        )
+
+    async def record_feedback(
+        self,
+        run_id: str,
+        payload: BidFeedbackCreate,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+    ) -> BidFeedbackView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        section_id = (payload.section_id or "").strip() or None
+        content_sha256 = payload.content_sha256
+        if section_id is not None:
+            sections = await repo.get_outline(run_id)
+            if section_id not in {section.section_id for section in sections}:
+                raise BidRunError(422, f"unknown outline section: {section_id}")
+            if content_sha256 is None:
+                state = await repo.get_state(run_id, section_id)
+                if state is not None and state.final_markdown:
+                    content_sha256 = compute_section_content_sha256(
+                        state.final_markdown
+                    )
+        if payload.event_type == "rating" and payload.score is None:
+            raise BidRunError(422, "rating feedback requires a score")
+        record = await repo.add_feedback(
+            project_id=run.project_id,
+            run_id=run_id,
+            section_id=section_id,
+            user_id=actor_id,
+            user_name=actor_name,
+            event_type=payload.event_type,
+            score=payload.score,
+            reason=payload.reason,
+            content_sha256=content_sha256,
+            metadata={"source": "api"},
+        )
+        return self._feedback_payload(record)
+
+    async def list_feedback(
+        self,
+        run_id: str,
+        *,
+        section_id: str | None = None,
+        limit: int = 100,
+    ) -> BidFeedbackListResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        records = await repo.list_feedback(
+            run_id, section_id=section_id, limit=limit
+        )
+        return BidFeedbackListResponse(
+            run_id=run_id,
+            feedback=[self._feedback_payload(record) for record in records],
+        )
+
+    async def _record_feedback_event(
+        self,
+        *,
+        run: BidRunRecord,
+        section_id: str,
+        event_type: str,
+        actor_id: str | None,
+        actor_name: str | None,
+        content_sha256: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            await self._repo().add_feedback(
+                project_id=run.project_id,
+                run_id=run.run_id,
+                section_id=section_id,
+                user_id=actor_id,
+                user_name=actor_name or "",
+                event_type=event_type,
+                score=None,
+                reason="",
+                content_sha256=content_sha256,
+                metadata=metadata or {},
+            )
+        except Exception:  # noqa: BLE001 - feedback is best-effort
+            logger.warning(
+                "could not record %s feedback for %s",
+                event_type,
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def analytics_overview(self, days: int = 30) -> AnalyticsOverview:
+        payload = await self._repo().analytics_overview(days=days)
+        return AnalyticsOverview(**payload)
+
+    async def budget_trend(
+        self, days: int = 30, project_id: str | None = None
+    ) -> AnalyticsBudgetTrend:
+        payload = await self._repo().budget_trend(
+            days=days, project_id=project_id
+        )
+        if payload is None:
+            raise BidRunError(404, f"unknown project: {project_id}")
+        return AnalyticsBudgetTrend(**payload)
+
+    async def get_usage(self, run_id: str) -> BidUsageResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        usage = await repo.get_run_usage(run_id)
+        external = await repo.list_external_usage(
+            project_id=run.project_id, doc_id=run.doc_id, limit=50
+        )
+        project_budget = await repo.get_project_monthly_budget(
+            run.project_id
+        )
+        project_cost = await repo.project_month_cost(run.project_id)
+        return BidUsageResponse(
+            run_id=run_id,
+            doc_id=run.doc_id,
+            project_id=run.project_id,
+            llm_calls=usage.llm_calls if usage else 0,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            cost_cny=round(usage.cost_cny, 4) if usage else 0.0,
+            retries=usage.retries if usage else 0,
+            fallback_calls=usage.fallback_calls if usage else 0,
+            duration_ms=usage.duration_ms if usage else 0,
+            run_budget_cents=(
+                self.bid_settings.run_budget_cents
+                if self.bid_settings.run_budget_cents > 0
+                else None
+            ),
+            budget_enforcement=self.bid_settings.budget_enforcement,
+            project_monthly_budget_cents=project_budget,
+            project_month_cost_cny=round(project_cost, 4),
+            external=[
+                BidExternalUsageView(
+                    id=record.id,
+                    provider=record.provider,
+                    operation=record.operation,
+                    units=record.units,
+                    unit_type=record.unit_type,
+                    cost_cny=record.cost_cny,
+                    status=record.status,
+                    created_at=record.created_at,
+                )
+                for record in external
+            ],
+        )
+
     async def patch_outline(
         self,
         run_id: str,
@@ -935,6 +1435,87 @@ class BidRunService:
         except Exception:  # noqa: BLE001
             logger.exception("could not revert bid run %s after enqueue failure", run_id)
 
+    async def _project_budget_decision(
+        self, run: BidRunRecord
+    ) -> BudgetDecision:
+        repo = self._repo()
+        budget = await repo.get_project_monthly_budget(run.project_id)
+        if budget is None or budget <= 0:
+            return BudgetDecision(False, False, 0, 0, "")
+        spent = await repo.project_month_cost(run.project_id)
+        spent_cents = int(round(spent * 100))
+        ratio = spent_cents / budget
+        exceeded = spent_cents >= budget
+        warning = not exceeded and ratio >= BUDGET_WARNING_RATIO
+        message = ""
+        if exceeded:
+            message = (
+                "project monthly budget exceeded: "
+                f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} "
+                "this month"
+            )
+        elif warning:
+            message = (
+                "project monthly budget warning: "
+                f"spent ¥{spent_cents / 100:.2f} of ¥{budget / 100:.2f} "
+                "this month"
+            )
+        return BudgetDecision(
+            exceeded,
+            exceeded,
+            spent_cents,
+            budget,
+            message,
+            warning=warning,
+            ratio=ratio,
+        )
+
+    async def _notify_budget_alert(
+        self,
+        decision: BudgetDecision,
+        *,
+        scope: str,
+        run: BidRunRecord,
+    ) -> None:
+        if self.notifier is None:
+            return
+        level = (
+            "exceeded"
+            if decision.exceeded
+            else "warning"
+            if decision.warning
+            else None
+        )
+        if level is None:
+            return
+        try:
+            await self.notifier.notify_budget(
+                project_id=run.project_id,
+                scope=scope,
+                level=level,
+                spent_cny=decision.cost_cents / 100,
+                budget_cents=decision.budget_cents,
+                run=run if scope == "run" else None,
+                project_name=run.project_name,
+            )
+        except Exception:  # noqa: BLE001 - alerts are best-effort
+            logger.warning(
+                "could not send %s budget alert for %s",
+                scope,
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def _budget_decision(self, run_id: str) -> BudgetDecision:
+        if self.bid_settings.run_budget_cents <= 0:
+            return BudgetDecision(False, False, 0, 0, "")
+        usage = await self._repo().get_run_usage(run_id)
+        return evaluate_budget(
+            budget_cents=self.bid_settings.run_budget_cents,
+            enforcement=self.bid_settings.budget_enforcement,
+            cost_cny=usage.cost_cny if usage is not None else 0.0,
+        )
+
     async def generate(
         self,
         run_id: str,
@@ -951,6 +1532,18 @@ class BidRunService:
             raise BidRunError(409, f"bid run cannot generate from status {run.status}")
         if run.attempt >= self.max_attempts:
             raise BidRunError(409, "bid run has reached the maximum attempts")
+        budget = await self._budget_decision(run_id)
+        if budget.warning or budget.exceeded:
+            await self._notify_budget_alert(budget, scope="run", run=run)
+        if budget.stop:
+            raise BidRunError(409, budget.message)
+        project_budget = await self._project_budget_decision(run)
+        if project_budget.warning or project_budget.exceeded:
+            await self._notify_budget_alert(
+                project_budget, scope="project", run=run
+            )
+        if project_budget.exceeded:
+            raise BidRunError(409, project_budget.message)
 
         if run.status in {"paused", "failed"}:
             await repo.reset_for_resume(run_id)
@@ -995,6 +1588,17 @@ class BidRunService:
         ]
         if not generated_ids:
             raise BidRunError(422, "all selected narrative sections are already final")
+        exhausted_sections = [
+            section_id
+            for section_id in generated_ids
+            if states.get(section_id) is not None
+            and states[section_id].attempt >= self.section_max_attempts
+        ]
+        if exhausted_sections:
+            raise BidRunError(
+                409,
+                f"section has reached the maximum attempts: {exhausted_sections[0]}",
+            )
 
         await self._ensure_run_profile(run)
         await self._ensure_document(run.doc_id)
@@ -1024,6 +1628,7 @@ class BidRunService:
                     "mode": "staged",
                     "run_id": run_id,
                     "project_id": run.project_id,
+                    "request_id": get_request_id(),
                     "generation_token": generation_token,
                     "section_ids": generated_ids,
                     "assemble": bool(payload.assemble),
@@ -1070,6 +1675,18 @@ class BidRunService:
             raise BidRunError(409, "bid run is already queued")
         if run.status not in {"outline_ready", "paused", "failed"}:
             raise BidRunError(409, f"bid run cannot resume from status {run.status}")
+        budget = await self._budget_decision(run_id)
+        if budget.warning or budget.exceeded:
+            await self._notify_budget_alert(budget, scope="run", run=run)
+        if budget.stop:
+            raise BidRunError(409, budget.message)
+        project_budget = await self._project_budget_decision(run)
+        if project_budget.warning or project_budget.exceeded:
+            await self._notify_budget_alert(
+                project_budget, scope="project", run=run
+            )
+        if project_budget.exceeded:
+            raise BidRunError(409, project_budget.message)
         await repo.reset_for_resume(run_id)
         return await self.generate(run_id, BidGenerateRequest())
 
@@ -1130,10 +1747,177 @@ class BidRunService:
             status=state.status,
             attempt=state.attempt,
             final_markdown=state.final_markdown or "",
+            content_sha256=compute_section_content_sha256(state.final_markdown),
             final_source=state.final_source,
             issues=list(state.issues),
             warnings=list(state.warnings),
             error=state.error,
+        )
+
+    @staticmethod
+    def _version_payload(record: Any) -> dict[str, Any]:
+        return {
+            "id": int(record.id),
+            "version": int(record.version),
+            "source": record.source,
+            "content_sha256": record.content_sha256,
+            "char_count": len(record.markdown or ""),
+            "outline_revision": record.outline_revision,
+            "review_summary": record.review_summary,
+            "created_by": record.created_by,
+            "created_by_name": record.created_by_name,
+            "created_at": record.created_at.isoformat(),
+        }
+
+    async def list_section_versions(
+        self,
+        run_id: str,
+        section_id: str,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        state = await repo.get_state(run_id, section_id)
+        if state is None:
+            raise BidRunError(404, f"unknown bid section: {section_id}")
+        records = await repo.list_section_versions(
+            run_id, section_id, limit=limit
+        )
+        if not records and (state.final_markdown or "").strip():
+            record = await repo.add_section_version(
+                run_id,
+                section_id,
+                state.final_markdown or "",
+                source=state.final_source or "current",
+                outline_revision=run.revision,
+                version_keep=self.bid_settings.section_version_keep,
+            )
+            records = [record]
+        return {
+            "run_id": run_id,
+            "section_id": section_id,
+            "versions": [self._version_payload(record) for record in records],
+        }
+
+    async def get_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        return {
+            **self._version_payload(record),
+            "run_id": run_id,
+            "section_id": section_id,
+            "markdown": record.markdown,
+        }
+
+    async def diff_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        *,
+        against_version_id: int | None = None,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        target = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if target is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        if against_version_id is not None:
+            against = await repo.get_section_version(
+                run_id, section_id, against_version_id
+            )
+            if against is None:
+                raise BidRunError(
+                    404, f"unknown section version: {against_version_id}"
+                )
+            from_label = f"版本 {against.version}"
+            from_markdown = against.markdown
+            from_sha = against.content_sha256
+        else:
+            state = await repo.get_state(run_id, section_id)
+            if state is None or not (state.final_markdown or "").strip():
+                raise BidRunError(
+                    409, "current section has no final markdown to compare"
+                )
+            from_label = "当前正文"
+            from_markdown = (state.final_markdown or "").strip()
+            from_sha = hashlib.sha256(
+                from_markdown.encode("utf-8")
+            ).hexdigest()
+        diff = list(
+            difflib.unified_diff(
+                from_markdown.splitlines(),
+                target.markdown.splitlines(),
+                fromfile=from_label,
+                tofile=f"版本 {target.version}",
+                lineterm="",
+            )
+        )
+        return {
+            "run_id": run_id,
+            "section_id": section_id,
+            "version_id": int(target.id),
+            "against_version_id": (
+                int(against_version_id)
+                if against_version_id is not None
+                else None
+            ),
+            "from_label": from_label,
+            "to_label": f"版本 {target.version}",
+            "from_sha256": from_sha,
+            "to_sha256": target.content_sha256,
+            "changed": target.content_sha256 != from_sha,
+            "diff": "\n".join(diff),
+        }
+
+    async def restore_section_version(
+        self,
+        run_id: str,
+        section_id: str,
+        version_id: int,
+        *,
+        expected_sha256: str,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
+    ) -> Any:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_section_version(
+            run_id, section_id, version_id
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown section version: {version_id}")
+        return await self.edit_section(
+            run_id,
+            section_id,
+            BidSectionUpdateRequest(
+                markdown=record.markdown,
+                expected_sha256=expected_sha256,
+            ),
+            actor_id=actor_id,
+            actor_name=actor_name,
+            feedback_event="restore",
         )
 
     @staticmethod
@@ -1181,6 +1965,10 @@ class BidRunService:
         run_id: str,
         section_id: str,
         payload: BidSectionUpdateRequest,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
+        feedback_event: str = "edit",
     ) -> BidSectionDetail:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1214,6 +2002,7 @@ class BidRunService:
             run_id,
             section_id,
             expected_status="final",
+            expected_final_sha256=payload.expected_sha256,
             final_markdown=payload.markdown,
             final_source="manual",
             issues=issues,
@@ -1222,6 +2011,9 @@ class BidRunService:
             revision=None,
             error=None,
             finished_at=_now(),
+            version_actor_id=actor_id,
+            version_actor_name=actor_name,
+            version_keep=self.bid_settings.section_version_keep,
         )
         if not updated:
             raise BidRunError(409, "section changed; reload and try again")
@@ -1246,6 +2038,15 @@ class BidRunService:
         )
         if not run_updated:
             raise BidRunError(409, "bid run changed; reload and try again")
+        await self._record_feedback_event(
+            run=run,
+            section_id=section_id,
+            event_type=feedback_event,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            content_sha256=compute_section_content_sha256(payload.markdown),
+            metadata={"source": "manual"},
+        )
         await self._clear_reports(run)
         return await self.get_section(run_id, section_id)
 
@@ -1253,6 +2054,9 @@ class BidRunService:
         self,
         run_id: str,
         section_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> BidGenerateResponse:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1260,6 +2064,8 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid run: {run_id}")
         if run.status in ACTIVE_RUN_STATUSES:
             raise BidRunError(409, "cannot regenerate a section while the run is active")
+        if run.attempt >= self.max_attempts:
+            raise BidRunError(409, "bid run has reached the maximum attempts")
         records = await repo.get_outline(run_id)
         self._require_editable_section(records, section_id)
         state = await repo.get_state(run_id, section_id)
@@ -1267,7 +2073,12 @@ class BidRunService:
             raise BidRunError(404, f"unknown bid section: {section_id}")
         if state.status != "final":
             raise BidRunError(409, "only a final section can be regenerated")
+        if state.attempt >= self.section_max_attempts:
+            raise BidRunError(409, "section has reached the maximum attempts")
         prior = state
+        prior_sha256 = compute_section_content_sha256(
+            prior.final_markdown or ""
+        )
 
         updated = await repo.update_section(
             run_id,
@@ -1289,7 +2100,6 @@ class BidRunService:
             stage="edited",
             percent=run.percent,
             message="section regeneration requested",
-            attempt=0,
             gate_status=None,
             gate=None,
             finished_at=None,
@@ -1311,7 +2121,7 @@ class BidRunService:
             raise BidRunError(409, "bid run changed; reload and try again")
         await self._clear_reports(run)
         try:
-            return await self.generate(
+            result = await self.generate(
                 run_id,
                 BidGenerateRequest(section_ids=[section_id], assemble=True),
             )
@@ -1334,13 +2144,22 @@ class BidRunService:
                 stage="edited",
                 percent=run.percent,
                 message="section regeneration requested; retry",
-                attempt=0,
                 gate_status=None,
                 gate=None,
                 finished_at=None,
             )
             await self._clear_reports(run)
             raise
+        await self._record_feedback_event(
+            run=run,
+            section_id=section_id,
+            event_type="rewrite",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            content_sha256=prior_sha256,
+            metadata={"source": "regenerate", "previous_status": prior.status},
+        )
+        return result
 
     async def _load_validation_inputs(
         self,
@@ -1376,6 +2195,43 @@ class BidRunService:
         outputs = outputs_from_states(states)
         allowed = build_allowed(context, profile, outline)
         return run_dir, context, profile, outline, outputs, allowed
+
+    async def _build_coverage_artifacts(
+        self,
+        run: BidRunRecord,
+        context: TenderContext,
+        outline: BidOutline,
+        assembly: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build requirements/citations, then strip internal markers from text."""
+
+        snapshots = await self._repo().latest_retrieval_snapshots(run.run_id)
+        citations = build_citations(
+            run_id=run.run_id,
+            outline=outline,
+            section_markdowns=assembly.section_markdowns,
+            snapshots=snapshots,
+        )
+        requirements = build_requirements(
+            run_id=run.run_id,
+            context=context,
+            outline=outline,
+            section_markdowns=assembly.section_markdowns,
+        )
+        assembly.report["requirements"] = {
+            "summary": requirements.get("summary") or {},
+            "warnings": list(requirements.get("warnings") or []),
+        }
+        assembly.report["citations"] = {
+            "summary": citations.get("summary") or {},
+            "warnings": list(citations.get("warnings") or []),
+        }
+        assembly.markdown = strip_citation_markers(assembly.markdown)
+        assembly.section_markdowns = {
+            section_id: strip_citation_markers(markdown)
+            for section_id, markdown in assembly.section_markdowns.items()
+        }
+        return requirements, citations
 
     async def _review_run(
         self,
@@ -1416,6 +2272,7 @@ class BidRunService:
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not review bid run %s", run.run_id)
             raise BidRunError(500, "bid assembly failed") from exc
+        await self._build_coverage_artifacts(run, context, outline, assembly)
         evaluation = evaluate_compliance(
             context=context,
             profile=profile,
@@ -1505,6 +2362,32 @@ class BidRunService:
             )
         return BidConsistencyResponse(run_id=run_id, consistency=reports[1])
 
+    async def _read_coverage_file(
+        self, run_id: str, name: str
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        await self._ensure_run_files(run, (name,))
+        try:
+            payload = read_json(self._run_dir(run) / name)
+        except (OSError, ValueError, TypeError) as exc:
+            raise BidRunError(
+                404, f"{name} is not available; assemble the run first"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise BidRunError(
+                404, f"{name} is not available; assemble the run first"
+            )
+        return payload
+
+    async def get_requirements(self, run_id: str) -> dict[str, Any]:
+        return await self._read_coverage_file(run_id, "requirements.json")
+
+    async def get_citations(self, run_id: str) -> dict[str, Any]:
+        return await self._read_coverage_file(run_id, "citations.json")
+
     async def fix_plan(
         self,
         run_id: str,
@@ -1557,6 +2440,9 @@ class BidRunService:
         self,
         run_id: str,
         payload: BidFixApplyRequest,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> BidSectionDetail:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1583,8 +2469,274 @@ class BidRunService:
         return await self.edit_section(
             run_id,
             payload.section_id,
-            BidSectionUpdateRequest(markdown=updated),
+            BidSectionUpdateRequest(
+                markdown=updated,
+                expected_sha256=payload.expected_sha256,
+            ),
+            actor_id=actor_id,
+            actor_name=actor_name,
         )
+
+    # ---- project DOCX template library ---------------------------------
+
+    @staticmethod
+    def _template_payload(record: BidTemplateRecord) -> BidTemplateView:
+        return BidTemplateView(
+            id=record.id,
+            name=record.name,
+            description=record.description,
+            filename=record.filename,
+            sha256=record.sha256,
+            size_bytes=record.size_bytes,
+            is_active=record.is_active,
+            version=record.version,
+            created_by_name=record.created_by_name,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            download_url=f"/api/templates/{record.id}/download",
+        )
+
+    async def list_templates(
+        self, project_id: str
+    ) -> BidTemplateListResponse:
+        records = await self._repo().list_templates(project_id)
+        return BidTemplateListResponse(
+            templates=[self._template_payload(record) for record in records]
+        )
+
+    async def get_template(
+        self, project_id: str, template_id: str
+    ) -> BidTemplateRecord:
+        record = await self._repo().get_template(project_id, template_id)
+        if record is None:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        return record
+
+    async def create_template(
+        self,
+        project_id: str,
+        *,
+        source_path: Path,
+        filename: str,
+        name: str,
+        description: str,
+        sha256: str,
+        size_bytes: int,
+        created_by: str | None,
+        created_by_name: str | None,
+    ) -> BidTemplateView:
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        template_id = uuid4().hex
+        object_key = f"private/templates/{project_id}/{template_id}.docx"
+        try:
+            await asyncio.to_thread(
+                self.storage.put_file,
+                object_key,
+                source_path,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        try:
+            record = await self._repo().create_template(
+                template_id=template_id,
+                project_id=project_id,
+                name=name.strip()[:128],
+                description=description.strip()[:512],
+                filename=filename[:255],
+                object_key=object_key,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                is_active=False,
+                created_by=created_by,
+                created_by_name=created_by_name,
+            )
+        except Exception:
+            try:
+                await asyncio.to_thread(self.storage.delete, object_key)
+            except StorageError:
+                logger.warning(
+                    "could not roll back template object %s",
+                    object_key,
+                    exc_info=True,
+                )
+            raise
+        return self._template_payload(record)
+
+    async def update_template(
+        self,
+        project_id: str,
+        template_id: str,
+        payload: BidTemplateUpdateRequest,
+    ) -> BidTemplateView:
+        fields = payload.model_fields_set
+        if not fields:
+            raise BidRunError(422, "no template fields to update")
+        name = (payload.name or "").strip() if "name" in fields else None
+        if "name" in fields and not name:
+            raise BidRunError(422, "template name must not be blank")
+        record = await self._repo().update_template(
+            project_id,
+            template_id,
+            name=name,
+            description=(
+                payload.description.strip()
+                if "description" in fields and payload.description is not None
+                else None
+            ),
+            is_active=payload.is_active if "is_active" in fields else None,
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        return self._template_payload(record)
+
+    async def delete_template(
+        self, project_id: str, template_id: str
+    ) -> None:
+        record = await self.get_template(project_id, template_id)
+        deleted = await self._repo().delete_template(project_id, template_id)
+        if not deleted:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        if self.storage is not None:
+            try:
+                await asyncio.to_thread(self.storage.delete, record.object_key)
+                await asyncio.to_thread(
+                    self.storage.delete_prefix,
+                    f"private/template-previews/{project_id}/{template_id}",
+                )
+            except StorageError:
+                logger.warning(
+                    "could not delete template objects for %s",
+                    template_id,
+                    exc_info=True,
+                )
+
+    @staticmethod
+    def _template_preview_key(record: BidTemplateRecord) -> str:
+        return (
+            f"private/template-previews/{record.project_id}/{record.id}/"
+            f"{record.sha256[:16]}.pdf"
+        )
+
+    async def _template_preview_pdf(self, record: BidTemplateRecord) -> bytes:
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        cache_key = self._template_preview_key(record)
+        try:
+            return await asyncio.to_thread(
+                self.storage.get_bytes,
+                cache_key,
+                max_bytes=MAX_PREVIEW_PDF_BYTES,
+            )
+        except (StorageObjectNotFound, StoragePathError):
+            pass
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        async with self._pdf_semaphore:
+            try:
+                return await asyncio.to_thread(
+                    self.storage.get_bytes,
+                    cache_key,
+                    max_bytes=MAX_PREVIEW_PDF_BYTES,
+                )
+            except (StorageObjectNotFound, StoragePathError):
+                pass
+            except StorageError as exc:
+                raise BidRunError(
+                    503, "object storage is unavailable"
+                ) from exc
+            with tempfile.TemporaryDirectory(
+                prefix="much-agents-template-preview-"
+            ) as temp_name:
+                docx_path = Path(temp_name) / "template.docx"
+                pdf_path = Path(temp_name) / "template.pdf"
+                try:
+                    await asyncio.to_thread(
+                        self.storage.download_file,
+                        record.object_key,
+                        docx_path,
+                    )
+                except StorageObjectNotFound as exc:
+                    raise BidRunError(
+                        409, "the DOCX template file is missing"
+                    ) from exc
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+                try:
+                    await asyncio.to_thread(
+                        convert_docx_to_pdf, docx_path, pdf_path
+                    )
+                except PdfExportError as exc:
+                    raise BidRunError(503, str(exc)) from exc
+                data = await asyncio.to_thread(pdf_path.read_bytes)
+            if len(data) <= MAX_PREVIEW_PDF_BYTES:
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_bytes,
+                        cache_key,
+                        data,
+                        content_type="application/pdf",
+                    )
+                except StorageError:
+                    logger.warning(
+                        "could not cache template preview PDF",
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "template preview PDF is too large to cache: %s",
+                    cache_key,
+                )
+            return data
+
+    async def preview_template(
+        self,
+        project_id: str,
+        template_id: str,
+        page: int = 1,
+    ) -> tuple[BidTemplateRecord, bytes, int]:
+        record = await self.get_template(project_id, template_id)
+        pdf_bytes = await self._template_preview_pdf(record)
+        try:
+            png, pages = await asyncio.to_thread(
+                render_pdf_page_png, pdf_bytes, int(page)
+            )
+        except TemplatePreviewError as exc:
+            raise BidRunError(400, str(exc)) from exc
+        return record, png, pages
+
+    async def _resolve_docx_template(
+        self, run: BidRunRecord
+    ) -> tuple[Path | None, tempfile.TemporaryDirectory[str] | None]:
+        active = await self._repo().get_active_template(run.project_id)
+        if active is None:
+            configured = (self.bid_settings.docx_template or "").strip()
+            return (Path(configured) if configured else None), None
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        tempdir = tempfile.TemporaryDirectory(prefix="much-agents-template-")
+        target = Path(tempdir.name) / "template.docx"
+        try:
+            await asyncio.to_thread(
+                self.storage.download_file, active.object_key, target
+            )
+        except StorageObjectNotFound as exc:
+            tempdir.cleanup()
+            raise BidRunError(
+                409, "the active DOCX template file is missing"
+            ) from exc
+        except StorageError as exc:
+            tempdir.cleanup()
+            raise BidRunError(
+                503, "object storage is unavailable"
+            ) from exc
+        return target, tempdir
 
     @staticmethod
     def _gate_response(run: BidRunRecord) -> BidGateResponse:
@@ -1610,6 +2762,7 @@ class BidRunService:
         external_renderer: ExternalRenderer | None = None,
     ) -> BidGateResponse:
         repo = self._repo()
+        assembly_started = datetime.now(timezone.utc)
         run = await repo.get_run(run_id)
         if run is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
@@ -1636,6 +2789,7 @@ class BidRunService:
         )
         outputs = outputs_from_states(states)
         allowed = build_allowed(context, profile, outline)
+        template_path, template_temp = await self._resolve_docx_template(run)
         try:
             base = assemble_staged_bid(
                 context=context,
@@ -1703,6 +2857,9 @@ class BidRunService:
                 figure_warnings=figure_warnings,
                 figures_enabled=figures_enabled,
             )
+            requirements, citations = await self._build_coverage_artifacts(
+                run, context, outline, assembly
+            )
             evaluation = evaluate_compliance(
                 context=context,
                 profile=profile,
@@ -1718,8 +2875,24 @@ class BidRunService:
                 missing_profile_fields=list(run.missing_profile_fields),
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
+                requirements_block=self.bid_settings.requirements_block,
+                citation_min_coverage=(
+                    self.bid_settings.citation_min_coverage
+                ),
             )
             outline_data = outline_data_from_records(outline, records)
+            llm_calls = sum(int(state.llm_calls or 0) for state in states)
+            timings_seconds = {
+                "assemble": round(
+                    (datetime.now(timezone.utc) - assembly_started).total_seconds(),
+                    3,
+                )
+            }
+            provenance = build_provenance(
+                settings=self.bid_settings,
+                llm_calls=llm_calls,
+                timings_seconds=timings_seconds,
+            )
             result = write_staged_outputs(
                 context=context,
                 assembly=assembly,
@@ -1727,17 +2900,54 @@ class BidRunService:
                 output_dir=run_dir,
                 gate=gate,
                 outline_data=outline_data,
-                extra_report={"run_id": run_id},
+                extra_report={
+                    "run_id": run_id,
+                    "model": provenance["model"],
+                    "provenance": provenance,
+                },
                 compliance=evaluation.compliance,
                 consistency=evaluation.consistency,
+                requirements=requirements,
+                citations=citations,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
+                docx_template=(
+                    str(template_path)
+                    if template_path is not None
+                    else self.bid_settings.docx_template
+                ),
             )
+            if isinstance(result.get("report", {}).get("docx_quality"), dict):
+                gate = evaluate_gate(
+                    outline=outline,
+                    outputs=outputs,
+                    report=result["report"],
+                    missing_profile_fields=list(run.missing_profile_fields),
+                    compliance=evaluation.compliance,
+                    consistency=evaluation.consistency,
+                    requirements_block=self.bid_settings.requirements_block,
+                    citation_min_coverage=(
+                        self.bid_settings.citation_min_coverage
+                    ),
+                )
+                result["report"]["gate"] = gate
+                atomic_write_json(run_dir / "gate.json", gate)
+                atomic_write_json(run_dir / "report.json", result["report"])
+            GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)
             raise BidRunError(500, "bid assembly failed") from exc
+        finally:
+            if template_temp is not None:
+                template_temp.cleanup()
 
         await self._sync_run_derived(run)
 
+        content_sha256 = compute_run_content_sha256(
+            run_dir=run_dir,
+            profile_sha256=run.profile_sha256,
+            outline_revision=run.revision,
+            figure_manifest=run_dir / "figures" / "manifest.json",
+        )
         warnings = list(
             dict.fromkeys([*assembly.warnings, *(result.get("report", {}).get("warnings") or [])])
         )
@@ -1749,6 +2959,7 @@ class BidRunService:
             message="assembly complete",
             gate_status=str(gate.get("status") or "warn"),
             gate=gate,
+            content_sha256=content_sha256,
             warnings=warnings,
             error=None,
             finished_at=_now(),
@@ -1756,6 +2967,64 @@ class BidRunService:
         updated = await repo.get_run(run_id)
         if updated is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
+        try:
+            requirements_summary = dict(requirements.get("summary") or {})
+            citations_summary = dict(citations.get("summary") or {})
+            check_counts: dict[str, int] = {}
+            for check in gate.get("checks") or []:
+                status = str(check.get("status") or "unknown")
+                check_counts[status] = check_counts.get(status, 0) + 1
+            await repo.add_quality_snapshot(
+                project_id=updated.project_id,
+                run_id=run_id,
+                revision=updated.revision,
+                content_sha256=content_sha256,
+                gate_status=str(gate.get("status") or "warn"),
+                compliance_status=(
+                    str(evaluation.compliance.get("status") or "") or None
+                ),
+                consistency_status=(
+                    str(evaluation.consistency.get("status") or "") or None
+                ),
+                requirements_coverage=requirements_summary.get(
+                    "weighted_coverage"
+                ),
+                citation_coverage=citations_summary.get("coverage"),
+                model=str(provenance.get("model") or "") or None,
+                summary={
+                    "gate_checks": check_counts,
+                    "compliance": dict(
+                        evaluation.compliance.get("summary") or {}
+                    ),
+                    "consistency": dict(
+                        evaluation.consistency.get("summary") or {}
+                    ),
+                    "requirements": requirements_summary,
+                    "citations": citations_summary,
+                    "warning_count": len(warnings),
+                    "page_limit": gate.get("page_limit"),
+                },
+            )
+        except Exception:  # noqa: BLE001 - analytics is best-effort
+            logger.warning(
+                "could not record quality snapshot for %s",
+                run_id,
+                exc_info=True,
+            )
+        if self.notifier is not None:
+            try:
+                await self.notifier.notify_run_assembled(
+                    run=updated,
+                    gate_status=str(gate.get("status") or "warn"),
+                    content_sha256=content_sha256,
+                    approval_required=self.require_approval,
+                )
+            except Exception:  # noqa: BLE001 - notifications are best-effort
+                logger.warning(
+                    "could not record run notifications for %s",
+                    run_id,
+                    exc_info=True,
+                )
         return self._gate_response(updated)
 
     async def get_gate(self, run_id: str) -> BidGateResponse:
@@ -1904,6 +3173,166 @@ class BidRunService:
         await self._sync_run_derived(run)
         return self._figures_response(run, manifest)
 
+    async def _record_approval(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        actor_id: str,
+        actor_name: str,
+        reason: str,
+        override: bool,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        if run.status != "assembled" or not run.gate or not run.content_sha256:
+            raise BidRunError(409, "assemble the run before approval")
+        if status == "approved" and run.gate_status == "block" and not override:
+            raise BidRunError(
+                409,
+                "gate is blocked; approval requires an explicit override",
+            )
+        record = await repo.add_approval(
+            run_id,
+            status=status,
+            content_sha256=run.content_sha256,
+            gate_status=run.gate_status,
+            approved_by=actor_id,
+            approved_by_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+        return self._approval_payload(record, run_id=run_id)
+
+    @staticmethod
+    def _approval_payload(record: Any, *, run_id: str) -> dict[str, Any]:
+        if record is None:
+            return {
+                "run_id": run_id,
+                "status": "not_requested",
+                "content_sha256": None,
+                "gate_status": None,
+                "approved_by": None,
+                "approved_by_name": None,
+                "reason": "",
+                "override": False,
+                "expires_at": None,
+                "created_at": None,
+            }
+        return {
+            "run_id": run_id,
+            "status": record.status,
+            "content_sha256": record.content_sha256,
+            "gate_status": record.gate_status,
+            "approved_by": record.approved_by,
+            "approved_by_name": record.approved_by_name,
+            "reason": record.reason,
+            "override": bool(record.override),
+            "expires_at": (
+                record.expires_at.isoformat()
+                if getattr(record, "expires_at", None)
+                else None
+            ),
+            "created_at": record.created_at.isoformat(),
+        }
+
+    async def approve(
+        self,
+        run_id: str,
+        *,
+        actor_id: str,
+        actor_name: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict[str, Any]:
+        return await self._record_approval(
+            run_id,
+            status="approved",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+
+    async def reject(
+        self,
+        run_id: str,
+        *,
+        actor_id: str,
+        actor_name: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict[str, Any]:
+        return await self._record_approval(
+            run_id,
+            status="rejected",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            reason=reason,
+            override=override,
+        )
+
+    async def get_approval(self, run_id: str) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.latest_approval(run_id)
+        return self._approval_payload(record, run_id=run_id)
+
+    async def list_approvals(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        records = await repo.list_approvals(
+            run_id, limit=max(1, min(int(limit), 50))
+        )
+        return {
+            "run_id": run_id,
+            "current_content_sha256": run.content_sha256,
+            "approvals": [
+                self._approval_payload(record, run_id=run_id)
+                for record in records
+            ],
+        }
+
+    async def record_force_override(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+        actor_id: str,
+        actor_name: str,
+        hours: int = 24,
+    ) -> dict[str, Any] | None:
+        """Record a 24-hour force-export override for the current content."""
+
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None or not run.content_sha256:
+            return None
+        now = datetime.now(timezone.utc)
+        record = await repo.add_approval(
+            run_id,
+            status="approved",
+            content_sha256=run.content_sha256,
+            gate_status=run.gate_status,
+            approved_by=actor_id,
+            approved_by_name=actor_name,
+            reason=f"forced export: {reason}".strip(),
+            override=True,
+            expires_at=now + timedelta(hours=max(1, int(hours))),
+        )
+        return self._approval_payload(record, run_id=run_id)
+
     async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1912,15 +3341,56 @@ class BidRunService:
         if not run.gate:
             raise BidRunError(409, "gate is not available; assemble the run first")
         if run.gate_status == "block" and not force:
-            raise BidRunError(
-                409,
-                "export is blocked by the gate; use force=true to override",
+            approval = await repo.latest_approval(run_id)
+            now = datetime.now(timezone.utc)
+            valid_override = (
+                approval is not None
+                and approval.status == "approved"
+                and approval.override
+                and approval.content_sha256 == (run.content_sha256 or "")
+                and (approval.expires_at is None or approval.expires_at > now)
             )
+            if not valid_override:
+                raise BidRunError(
+                    409,
+                    "export is blocked by the gate; use force=true to override",
+                )
         run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        if run.content_sha256:
+            current_sha256 = compute_run_content_sha256(
+                run_dir=run_dir,
+                profile_sha256=run.profile_sha256,
+                outline_revision=run.revision,
+                figure_manifest=run_dir / "figures" / "manifest.json",
+            )
+            if current_sha256 != run.content_sha256:
+                raise BidRunError(
+                    409,
+                    "content changed since assembly; re-assemble before export",
+                )
+        if self.require_approval and not force:
+            approval = await repo.latest_approval(run_id)
+            now = datetime.now(timezone.utc)
+            expired = (
+                approval is not None
+                and approval.expires_at is not None
+                and approval.expires_at <= now
+            )
+            if (
+                approval is None
+                or approval.status != "approved"
+                or approval.content_sha256 != run.content_sha256
+                or expired
+            ):
+                raise BidRunError(
+                    409,
+                    "approval required for the current assembled content",
+                )
         prefix = run_prefix(run.doc_id, run.run_id)
         if force and run.gate_status == "block":
             gate = dict(run.gate)
             gate["forced"] = True
+            gate["forced_at"] = datetime.now(timezone.utc).isoformat()
             await repo.update_run(run_id, gate=gate)
             try:
                 atomic_write_json(run_dir / "gate.json", gate)
@@ -1952,6 +3422,164 @@ class BidRunService:
         if not target.is_file():
             raise BidRunError(409, "bid.docx is not available; assemble the run first")
         return ExportTarget(path=target, key=f"{prefix}/bid.docx")
+
+    async def export_pdf(
+        self,
+        run_id: str,
+        *,
+        force: bool = False,
+    ) -> ExportTarget:
+        """Export the assembled DOCX as PDF through headless LibreOffice."""
+
+        docx_target = await self.export(run_id, force=force)
+        run_dir = docx_target.path.parent
+        prefix = docx_target.key.rsplit("/", 1)[0]
+        pdf_path = run_dir / "bid.pdf"
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    self.storage.ensure_files,
+                    prefix,
+                    run_dir,
+                    ("bid.pdf",),
+                    required=False,
+                )
+            except StorageError as exc:
+                raise BidRunError(503, "object storage is unavailable") from exc
+        needs_conversion = True
+        if pdf_path.is_file():
+            try:
+                valid = False
+                with pdf_path.open("rb") as handle:
+                    valid = handle.read(5) == b"%PDF-"
+                needs_conversion = (
+                    not valid
+                    or pdf_path.stat().st_mtime
+                    <= docx_target.path.stat().st_mtime
+                )
+            except OSError:
+                needs_conversion = True
+        if needs_conversion:
+            started = time.perf_counter()
+            try:
+                async with self._pdf_semaphore:
+                    await asyncio.to_thread(
+                        convert_docx_to_pdf,
+                        docx_target.path,
+                        pdf_path,
+                    )
+            except PdfExportError as exc:
+                result = (
+                    "unavailable"
+                    if "LibreOffice" in str(exc)
+                    else "failed"
+                )
+                PDF_EXPORTS.inc(result=result)
+                PDF_EXPORT_DURATION.observe(
+                    time.perf_counter() - started, result=result
+                )
+                raise BidRunError(503, str(exc)) from exc
+            PDF_EXPORTS.inc(result="converted")
+            PDF_EXPORT_DURATION.observe(
+                time.perf_counter() - started, result="converted"
+            )
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/bid.pdf",
+                        pdf_path,
+                    )
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+        else:
+            PDF_EXPORTS.inc(result="cache")
+        if not pdf_path.is_file():
+            raise BidRunError(409, "bid.pdf is not available")
+        return ExportTarget(path=pdf_path, key=f"{prefix}/bid.pdf")
+
+    async def export_doc(
+        self,
+        run_id: str,
+        *,
+        force: bool = False,
+    ) -> ExportTarget:
+        """Export the assembled DOCX as legacy Word 97-2003 through LibreOffice."""
+
+        docx_target = await self.export(run_id, force=force)
+        run_dir = docx_target.path.parent
+        prefix = docx_target.key.rsplit("/", 1)[0]
+        doc_path = run_dir / "bid.doc"
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    self.storage.ensure_files,
+                    prefix,
+                    run_dir,
+                    ("bid.doc",),
+                    required=False,
+                )
+            except StorageError as exc:
+                raise BidRunError(503, "object storage is unavailable") from exc
+        needs_conversion = True
+        if doc_path.is_file():
+            try:
+                valid = False
+                with doc_path.open("rb") as handle:
+                    valid = handle.read(8) == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+                needs_conversion = (
+                    not valid
+                    or doc_path.stat().st_mtime
+                    <= docx_target.path.stat().st_mtime
+                )
+            except OSError:
+                needs_conversion = True
+        if needs_conversion:
+            started = time.perf_counter()
+            try:
+                async with self._pdf_semaphore:
+                    await asyncio.to_thread(
+                        convert_docx_to_doc,
+                        docx_target.path,
+                        doc_path,
+                    )
+            except DocExportError as exc:
+                result = (
+                    "unavailable"
+                    if "LibreOffice" in str(exc)
+                    else "failed"
+                )
+                DOC_EXPORTS.inc(result=result)
+                DOC_EXPORT_DURATION.observe(
+                    time.perf_counter() - started, result=result
+                )
+                raise BidRunError(503, str(exc)) from exc
+            DOC_EXPORTS.inc(result="converted")
+            DOC_EXPORT_DURATION.observe(
+                time.perf_counter() - started, result="converted"
+            )
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/bid.doc",
+                        doc_path,
+                    )
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+        else:
+            DOC_EXPORTS.inc(result="cache")
+        if not doc_path.is_file():
+            raise BidRunError(409, "bid.doc is not available")
+        return ExportTarget(path=doc_path, key=f"{prefix}/bid.doc")
 
 
 __all__ = [

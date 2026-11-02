@@ -1,16 +1,33 @@
 import { isTrustedApiUrl } from './trustedUrl'
 import type {
+  AnalyticsBudgetTrend,
+  AnalyticsOverview,
   ArtifactInfo,
   ArtifactListResponse,
   ArtifactSource,
+  AttachmentDeleteResponse,
+  AttachmentListResponse,
+  BidApprovalListResponse,
+  BidApprovalRequest,
+  BidApprovalResponse,
+  BidCitationsResponse,
+  BidCommentCreateInput,
+  BidCommentListResponse,
+  BidCommentUpdateInput,
+  BidCommentView,
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
+  BidFeedbackCreate,
+  BidFeedbackListResponse,
+  BidFeedbackView,
+  BidUsageResponse,
   BidFigureRegenerateRequest,
   BidFiguresResponse,
   BidFixApplyRequest,
   BidFixPlanRequest,
   BidFixPlanResponse,
+  BidRequirementsResponse,
   BidGateResponse,
   BidGenerateRequest,
   BidGenerateResponse,
@@ -20,17 +37,36 @@ import type {
   BidRequest,
   BidRunCreatedResponse,
   BidRunDetail,
+  BidRunEventSnapshot,
   BidRunListResponse,
   BidSectionDetail,
   BidSectionUpdateRequest,
+  BidSectionVersionDetail,
+  BidSectionVersionDiffResponse,
+  BidSectionVersionListResponse,
+  BidTemplateListResponse,
+  BidTemplatePreview,
+  BidTemplateUpdateInput,
+  BidTemplateView,
   CompanyDetail,
   CompanyListResponse,
+  CompanyQualification,
+  CompanyQualificationInput,
+  CompanyQualificationListResponse,
+  CompanyQualificationUpdate,
   CompanyUpsertRequest,
   DocumentListResponse,
   HealthResponse,
   JobCreatedResponse,
   JobStatusResponse,
+  NotificationListResponse,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
+  NotificationReadAllResponse,
+  NotificationReadResponse,
+  NotificationUnreadResponse,
   ParseUploadOptions,
+  ProjectMemberBriefListResponse,
   SearchRequest,
   SearchResponse,
 } from './types'
@@ -60,6 +96,7 @@ const PROJECT_EXEMPT_PREFIXES = [
   '/api/health',
   '/api/live',
   '/api/ready',
+  '/api/analytics',
 ]
 
 export function setAuthToken(token: string | null): void {
@@ -278,11 +315,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
-export async function requestBlob(
+async function requestBlobResponse(
   path: string,
   init?: RequestInit,
   timeoutMs = ARTIFACT_TIMEOUT_MS,
-): Promise<Blob> {
+): Promise<Response> {
   assertTrustedAbsoluteTarget(path)
   const generation = tokenGeneration
   const response = await fetchWithTimeout(path, init, timeoutMs)
@@ -297,6 +334,15 @@ export async function requestBlob(
     }
     throw new ApiError(response.status, formatDetail(detail) || response.statusText)
   }
+  return response
+}
+
+export async function requestBlob(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = ARTIFACT_TIMEOUT_MS,
+): Promise<Blob> {
+  const response = await requestBlobResponse(path, init, timeoutMs)
   return response.blob()
 }
 
@@ -324,6 +370,109 @@ export async function downloadArtifact(
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
+}
+
+interface ParsedSseEvent {
+  event: string
+  data: string
+}
+
+function parseSseBlock(block: string): ParsedSseEvent | null {
+  let event = 'message'
+  const data: string[] = []
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
+    if (!line || line.startsWith(':')) continue
+    const colon = line.indexOf(':')
+    const field = colon === -1 ? line : line.slice(0, colon)
+    const value =
+      colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '')
+    if (field === 'event') event = value
+    else if (field === 'data') data.push(value)
+  }
+  if (!data.length) return null
+  return { event, data: data.join('\n') }
+}
+
+export interface BidRunEventStreamOptions {
+  signal?: AbortSignal
+  onSnapshot: (snapshot: BidRunEventSnapshot) => void
+}
+
+/**
+ * Consume the bid-run SSE endpoint with a normal authenticated fetch.
+ *
+ * ``EventSource`` cannot attach an Authorization header, and putting the token
+ * in the URL is forbidden. The promise settles when the stream closes; callers
+ * abort via ``signal`` and reconnect with their own backoff.
+ */
+export async function streamBidRunEvents(
+  runId: string,
+  options: BidRunEventStreamOptions,
+): Promise<void> {
+  const path = `/api/bid-runs/${encodeURIComponent(runId)}/events`
+  assertTrustedAbsoluteTarget(path)
+  const generation = tokenGeneration
+  let response: Response
+  try {
+    response = await fetch(
+      apiUrl(path),
+      withAuth(path, {
+        signal: options.signal,
+        headers: { Accept: 'text/event-stream' },
+      }),
+    )
+  } catch (caught) {
+    if (options.signal?.aborted) throw caught
+    throw new ApiError(0, '无法连接实时进度流')
+  }
+  if (!response.ok) {
+    if (response.status === 401) notifyUnauthorized(path, generation)
+    let detail: unknown = response.statusText
+    try {
+      const body = (await response.json()) as Record<string, unknown>
+      detail = body.detail ?? body
+    } catch {
+      // Keep the HTTP status text when the body is not JSON.
+    }
+    throw new ApiError(
+      response.status,
+      formatDetail(detail) || response.statusText,
+    )
+  }
+  if (!response.body) {
+    throw new ApiError(0, '实时进度流不可用')
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let separator = buffer.indexOf('\n\n')
+      while (separator >= 0) {
+        const block = buffer.slice(0, separator)
+        buffer = buffer.slice(separator + 2)
+        const parsed = parseSseBlock(block)
+        if (parsed?.event === 'snapshot') {
+          try {
+            options.onSnapshot(
+              JSON.parse(parsed.data) as BidRunEventSnapshot,
+            )
+          } catch {
+            // Ignore a malformed frame; the next snapshot will recover.
+          }
+        } else if (parsed?.event === 'error') {
+          throw new ApiError(0, '实时进度流暂时不可用')
+        }
+        separator = buffer.indexOf('\n\n')
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function artifactPath(source: ArtifactSource): string {
@@ -376,6 +525,39 @@ export const api = {
     return request<DocumentListResponse>('/api/documents')
   },
 
+  uploadAttachment(
+    docId: string,
+    file: File,
+    options: { ingest: boolean; ocr: boolean },
+  ): Promise<JobCreatedResponse> {
+    const query = new URLSearchParams({
+      ingest: String(options.ingest),
+      ocr: String(options.ocr),
+    })
+    const body = new FormData()
+    body.append('file', file)
+    return request<JobCreatedResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments?${query.toString()}`,
+      { method: 'POST', body },
+    )
+  },
+
+  listAttachments(docId: string): Promise<AttachmentListResponse> {
+    return request<AttachmentListResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments`,
+    )
+  },
+
+  deleteAttachment(
+    docId: string,
+    attachmentId: string,
+  ): Promise<AttachmentDeleteResponse> {
+    return request<AttachmentDeleteResponse>(
+      `/api/documents/${encodeURIComponent(docId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
   listCompanies(): Promise<CompanyListResponse> {
     return request<CompanyListResponse>('/api/companies')
   },
@@ -413,6 +595,53 @@ export const api = {
   deleteCompany(companyId: string): Promise<void> {
     return request<void>(
       `/api/companies/${encodeURIComponent(companyId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  listCompanyQualifications(
+    companyId: string,
+  ): Promise<CompanyQualificationListResponse> {
+    return request<CompanyQualificationListResponse>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications`,
+    )
+  },
+
+  createCompanyQualification(
+    companyId: string,
+    input: CompanyQualificationInput,
+  ): Promise<CompanyQualification> {
+    return request<CompanyQualification>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  updateCompanyQualification(
+    companyId: string,
+    qualificationId: string,
+    input: CompanyQualificationUpdate,
+  ): Promise<CompanyQualification> {
+    return request<CompanyQualification>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  deleteCompanyQualification(
+    companyId: string,
+    qualificationId: string,
+  ): Promise<void> {
+    return request<void>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}`,
       { method: 'DELETE' },
     )
   },
@@ -505,8 +734,12 @@ export const api = {
     runId: string,
     sectionId: string,
     markdown: string,
+    expectedSha256: string,
   ): Promise<BidSectionDetail> {
-    const payload: BidSectionUpdateRequest = { markdown }
+    const payload: BidSectionUpdateRequest = {
+      markdown,
+      expected_sha256: expectedSha256,
+    }
     return request<BidSectionDetail>(
       `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}`,
       {
@@ -514,6 +747,50 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       },
+    )
+  },
+
+  listBidSectionVersions(
+    runId: string,
+    sectionId: string,
+    limit = 50,
+  ): Promise<BidSectionVersionListResponse> {
+    return request<BidSectionVersionListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions?limit=${limit}`,
+    )
+  },
+
+  getBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+  ): Promise<BidSectionVersionDetail> {
+    return request<BidSectionVersionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}`,
+    )
+  },
+
+  diffBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+    against?: number,
+  ): Promise<BidSectionVersionDiffResponse> {
+    const query = against ? `?against=${against}` : ''
+    return request<BidSectionVersionDiffResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/diff${query}`,
+    )
+  },
+
+  restoreBidSectionVersion(
+    runId: string,
+    sectionId: string,
+    versionId: number,
+    expectedSha256: string,
+  ): Promise<BidSectionDetail> {
+    return request<BidSectionDetail>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/sections/${encodeURIComponent(sectionId)}/versions/${versionId}/restore?expected_sha256=${encodeURIComponent(expectedSha256)}`,
+      { method: 'POST' },
     )
   },
 
@@ -537,6 +814,273 @@ export const api = {
   getBidGate(runId: string): Promise<BidGateResponse> {
     return request<BidGateResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  listBidTemplates(): Promise<BidTemplateListResponse> {
+    return request<BidTemplateListResponse>('/api/templates')
+  },
+
+  uploadBidTemplate(
+    file: File,
+    input: { name?: string; description?: string } = {},
+  ): Promise<BidTemplateView> {
+    const body = new FormData()
+    body.append('file', file)
+    const name = input.name?.trim()
+    const description = input.description?.trim()
+    if (name) body.append('name', name)
+    if (description) body.append('description', description)
+    return request<BidTemplateView>('/api/templates', {
+      method: 'POST',
+      body,
+    })
+  },
+
+  updateBidTemplate(
+    templateId: string,
+    input: BidTemplateUpdateInput,
+  ): Promise<BidTemplateView> {
+    return request<BidTemplateView>(
+      `/api/templates/${encodeURIComponent(templateId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  deleteBidTemplate(templateId: string): Promise<void> {
+    return request<void>(
+      `/api/templates/${encodeURIComponent(templateId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  downloadBidTemplate(templateId: string): Promise<Blob> {
+    return requestBlob(
+      `/api/templates/${encodeURIComponent(templateId)}/download`,
+    )
+  },
+
+  async previewBidTemplate(
+    templateId: string,
+    page = 1,
+  ): Promise<BidTemplatePreview> {
+    const response = await requestBlobResponse(
+      `/api/templates/${encodeURIComponent(templateId)}/preview?page=${page}`,
+    )
+    const blob = await response.blob()
+    const currentPage = Number(
+      response.headers.get('X-Template-Preview-Page') ?? page,
+    )
+    const pageCount = Number(
+      response.headers.get('X-Template-Preview-Pages') ?? currentPage,
+    )
+    return {
+      blob,
+      page:
+        Number.isFinite(currentPage) && currentPage > 0 ? currentPage : page,
+      pages:
+        Number.isFinite(pageCount) && pageCount > 0
+          ? pageCount
+          : Math.max(1, currentPage || page),
+    }
+  },
+
+  getBidApproval(runId: string): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approval`,
+    )
+  },
+
+  listBidApprovals(
+    runId: string,
+    limit = 20,
+  ): Promise<BidApprovalListResponse> {
+    return request<BidApprovalListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approvals?limit=${limit}`,
+    )
+  },
+
+  listProjectMembers(): Promise<ProjectMemberBriefListResponse> {
+    return request<ProjectMemberBriefListResponse>('/api/project-members')
+  },
+
+  listNotifications(
+    unreadOnly = false,
+    limit = 50,
+  ): Promise<NotificationListResponse> {
+    const query = new URLSearchParams({
+      unread_only: String(unreadOnly),
+      limit: String(limit),
+    })
+    return request<NotificationListResponse>(
+      `/api/notifications?${query.toString()}`,
+    )
+  },
+
+  notificationUnreadCount(): Promise<NotificationUnreadResponse> {
+    return request<NotificationUnreadResponse>('/api/notifications/unread')
+  },
+
+  getNotificationPreferences(): Promise<NotificationPreferences> {
+    return request<NotificationPreferences>(
+      '/api/notifications/preferences',
+    )
+  },
+
+  updateNotificationPreferences(
+    payload: NotificationPreferencesUpdate,
+  ): Promise<NotificationPreferences> {
+    return request<NotificationPreferences>(
+      '/api/notifications/preferences',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  markNotificationRead(
+    notificationId: string,
+  ): Promise<NotificationReadResponse> {
+    return request<NotificationReadResponse>(
+      `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'POST' },
+    )
+  },
+
+  markAllNotificationsRead(): Promise<NotificationReadAllResponse> {
+    return request<NotificationReadAllResponse>('/api/notifications/read-all', {
+      method: 'POST',
+    })
+  },
+
+  getBidUsage(runId: string): Promise<BidUsageResponse> {
+    return request<BidUsageResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/usage`,
+    )
+  },
+
+  listBidFeedback(
+    runId: string,
+    sectionId?: string,
+  ): Promise<BidFeedbackListResponse> {
+    const query = sectionId
+      ? `?section_id=${encodeURIComponent(sectionId)}`
+      : ''
+    return request<BidFeedbackListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/feedback${query}`,
+    )
+  },
+
+  createBidFeedback(
+    runId: string,
+    payload: BidFeedbackCreate,
+  ): Promise<BidFeedbackView> {
+    return request<BidFeedbackView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/feedback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
+    return request<AnalyticsOverview>(
+      `/api/analytics/overview?days=${days}`,
+    )
+  },
+
+  getBudgetTrend(
+    days = 30,
+    projectId?: string,
+  ): Promise<AnalyticsBudgetTrend> {
+    const query = new URLSearchParams({ days: String(days) })
+    if (projectId) query.set('project_id', projectId)
+    return request<AnalyticsBudgetTrend>(
+      `/api/analytics/budget-trend?${query.toString()}`,
+    )
+  },
+
+  exportAnalyticsCsv(days = 30): Promise<Blob> {
+    return requestBlob(
+      `/api/analytics/export.csv?days=${days}`,
+    )
+  },
+
+  listBidComments(
+    runId: string,
+    options: { status?: 'open' | 'resolved'; sectionId?: string } = {},
+  ): Promise<BidCommentListResponse> {
+    const query = new URLSearchParams()
+    if (options.status) query.set('status', options.status)
+    if (options.sectionId) query.set('section_id', options.sectionId)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<BidCommentListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments${suffix}`,
+    )
+  },
+
+  createBidComment(
+    runId: string,
+    payload: BidCommentCreateInput,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  updateBidComment(
+    runId: string,
+    commentId: string,
+    payload: BidCommentUpdateInput,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  approveBidRun(
+    runId: string,
+    payload: BidApprovalRequest = {},
+  ): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  rejectBidRun(
+    runId: string,
+    payload: BidApprovalRequest = {},
+  ): Promise<BidApprovalResponse> {
+    return request<BidApprovalResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/reject`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
     )
   },
 
@@ -579,6 +1123,18 @@ export const api = {
     )
   },
 
+  getBidRequirements(runId: string): Promise<BidRequirementsResponse> {
+    return request<BidRequirementsResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/requirements`,
+    )
+  },
+
+  getBidCitations(runId: string): Promise<BidCitationsResponse> {
+    return request<BidCitationsResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/citations`,
+    )
+  },
+
   generateBidFixPlan(
     runId: string,
     payload: BidFixPlanRequest = {},
@@ -611,6 +1167,22 @@ export const api = {
     const query = force ? '?force=true' : ''
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export${query}`,
+      { method: 'POST' },
+    )
+  },
+
+  exportBidRunPdf(runId: string, force = false): Promise<Blob> {
+    const query = force ? '?force=true' : ''
+    return requestBlob(
+      `/api/bid-runs/${encodeURIComponent(runId)}/export/pdf${query}`,
+      { method: 'POST' },
+    )
+  },
+
+  exportBidRunDoc(runId: string, force = false): Promise<Blob> {
+    const query = force ? '?force=true' : ''
+    return requestBlob(
+      `/api/bid-runs/${encodeURIComponent(runId)}/export/doc${query}`,
       { method: 'POST' },
     )
   },

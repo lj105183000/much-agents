@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { getApiBase } from './api/client'
 import type { AuthUser, BidRunSummary, ViewKey } from './api/types'
 import { useAuth } from './auth/useAuth'
@@ -18,6 +18,7 @@ import { degradedHealthDetail } from './lib/health'
 import { VIEW_META } from './lib/navigation'
 import { ProjectProvider } from './project/ProjectProvider'
 import { useProject } from './project/useProject'
+import { AnalyticsView } from './views/AnalyticsView'
 import { AuditView } from './views/AuditView'
 import { BidView } from './views/BidView'
 import { CompaniesView } from './views/CompaniesView'
@@ -59,17 +60,21 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
     activeJobId,
   )
 
-  useEffect(() => {
-    // Business selections never carry across projects.
+  const [selectionProjectId, setSelectionProjectId] = useState(projectId)
+  if (projectId !== selectionProjectId) {
+    // Adjust derived selection state during render; business selections never
+    // carry across projects. React re-renders before committing children.
+    setSelectionProjectId(projectId)
     setSelectedDocId(null)
     setSelectedCompanyId(null)
     setSelectedRunId(null)
     setActiveJobId(null)
-  }, [projectId])
+  }
 
   const meta = VIEW_META[view]
   const needsProject =
     view !== 'projects' &&
+    view !== 'analytics' &&
     view !== 'audit' &&
     view !== 'users' &&
     view !== 'companies'
@@ -87,6 +92,12 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
   const openRun = (run: BidRunSummary) => {
     setSelectedDocId(run.doc_id)
     setSelectedRunId(run.run_id)
+    navigate('bid')
+  }
+
+  const openNotificationRun = (runId: string, docId: string | null) => {
+    if (docId) setSelectedDocId(docId)
+    setSelectedRunId(runId)
     navigate('bid')
   }
 
@@ -124,6 +135,8 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
           user={user}
           authEnabled={authEnabled}
           onLogout={() => void logout()}
+          apiBase={apiBase}
+          onOpenRun={openNotificationRun}
         />
         <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">
           <div className="mx-auto w-full max-w-6xl space-y-5">
@@ -211,6 +224,14 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                     initialDocId={selectedDocId}
                     initialCompanyId={selectedCompanyId}
                     initialRunId={selectedRunId}
+                    pdfExportAvailable={
+                      health.health?.pdf_export_available ?? true
+                    }
+                    docExportAvailable={
+                      health.health?.doc_export_available ??
+                      health.health?.pdf_export_available ??
+                      true
+                    }
                     onRunChange={setSelectedRunId}
                     onNavigate={navigate}
                     onActiveJobChange={setActiveJobId}
@@ -261,6 +282,15 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                   />
                 ) : null}
                 {view === 'projects' ? <ProjectsView /> : null}
+                {view === 'analytics' ? (
+                  user.role === 'admin' ? (
+                    <AnalyticsView apiBase={apiBase} />
+                  ) : (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-4 py-6 text-xs text-slate-400">
+                      运营看板仅对管理员开放。
+                    </div>
+                  )
+                ) : null}
                 {view === 'audit' ? (
                   user.role === 'admin' ? (
                     <AuditView />

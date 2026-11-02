@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,6 +20,8 @@ class HealthResponse(BaseModel):
     database_ok: bool | None = None
     storage_backend: Literal["local", "minio"] = "local"
     storage_ok: bool = True
+    pdf_export_available: bool = False
+    doc_export_available: bool = False
 
 
 class JobCreatedResponse(BaseModel):
@@ -28,6 +30,32 @@ class JobCreatedResponse(BaseModel):
     poll_url: str
     doc_id: str
     kind: JobKind = "parse"
+
+
+class AttachmentSummary(BaseModel):
+    attachment_id: str
+    file_name: str
+    sha256: str
+    chunk_count: int = 0
+    pages: int = 0
+    parser: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    attached_at: str | None = None
+
+
+class AttachmentListResponse(BaseModel):
+    doc_id: str
+    attachments: list[AttachmentSummary] = Field(default_factory=list)
+
+
+class AttachmentDeleteResponse(BaseModel):
+    doc_id: str
+    attachment_id: str
+    removed_chunks: int = 0
+    remaining_attachments: int = 0
+    chroma_deleted: int = 0
+    storage_synced: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
 
 class BidRequest(BaseModel):
@@ -71,6 +99,7 @@ class BidRunSummary(BaseModel):
     revision: int = 0
     job_id: str | None = None
     gate_status: str | None = None
+    content_sha256: str | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
     created_at: datetime
@@ -170,6 +199,9 @@ class BidSectionUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     markdown: str = Field(min_length=1, max_length=200_000)
+    expected_sha256: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
 
     @field_validator("markdown")
     @classmethod
@@ -188,10 +220,49 @@ class BidSectionDetail(BaseModel):
     status: str
     attempt: int = 0
     final_markdown: str = ""
+    content_sha256: str
     final_source: str | None = None
     issues: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
+
+
+class BidSectionVersionView(BaseModel):
+    id: int
+    version: int
+    source: str
+    content_sha256: str
+    char_count: int = 0
+    outline_revision: int | None = None
+    review_summary: str | None = None
+    created_by: str | None = None
+    created_by_name: str | None = None
+    created_at: str
+
+
+class BidSectionVersionListResponse(BaseModel):
+    run_id: str
+    section_id: str
+    versions: list[BidSectionVersionView] = Field(default_factory=list)
+
+
+class BidSectionVersionDetail(BidSectionVersionView):
+    run_id: str
+    section_id: str
+    markdown: str
+
+
+class BidSectionVersionDiffResponse(BaseModel):
+    run_id: str
+    section_id: str
+    version_id: int
+    against_version_id: int | None = None
+    from_label: str
+    to_label: str
+    from_sha256: str
+    to_sha256: str
+    changed: bool
+    diff: str
 
 
 class BidGateResponse(BaseModel):
@@ -205,6 +276,379 @@ class BidGateResponse(BaseModel):
     compliance_summary: dict[str, Any] | None = None
     consistency_status: str | None = None
     consistency_summary: dict[str, Any] | None = None
+
+
+class BidApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="", max_length=2000)
+    override: bool = False
+
+
+class BidApprovalResponse(BaseModel):
+    run_id: str
+    status: str
+    content_sha256: str | None = None
+    gate_status: str | None = None
+    approved_by: str | None = None
+    approved_by_name: str | None = None
+    reason: str = ""
+    override: bool = False
+    expires_at: str | None = None
+    created_at: str | None = None
+
+
+class BidApprovalListResponse(BaseModel):
+    run_id: str
+    current_content_sha256: str | None = None
+    approvals: list[BidApprovalResponse] = Field(default_factory=list)
+
+
+class BidCommentMention(BaseModel):
+    user_id: str
+    display_name: str
+
+
+class BidCommentCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=4000)
+    section_id: str | None = Field(default=None, max_length=64)
+    mentions: list[str] = Field(default_factory=list, max_length=20)
+    assignee_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("body")
+    @classmethod
+    def _body_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("body must not be blank")
+        return stripped
+
+
+class BidCommentUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    status: Literal["open", "resolved"] | None = None
+    assignee_id: str | None = Field(default=None, max_length=36)
+
+    @field_validator("body")
+    @classmethod
+    def _body_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("body must not be blank")
+        return stripped
+
+
+class BidCommentView(BaseModel):
+    comment_id: str
+    run_id: str
+    section_id: str | None = None
+    section_title: str | None = None
+    author_id: str | None = None
+    author_name: str
+    body: str
+    mentions: list[BidCommentMention] = Field(default_factory=list)
+    assignee_id: str | None = None
+    assignee_name: str | None = None
+    status: Literal["open", "resolved"] = "open"
+    resolved_by: str | None = None
+    resolved_by_name: str | None = None
+    resolved_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidCommentListResponse(BaseModel):
+    run_id: str
+    comments: list[BidCommentView] = Field(default_factory=list)
+
+
+class NotificationView(BaseModel):
+    notification_id: str
+    kind: str
+    title: str
+    body: str = ""
+    resource_type: str = ""
+    resource_id: str = ""
+    run_id: str | None = None
+    doc_id: str | None = None
+    comment_id: str | None = None
+    section_id: str | None = None
+    actor_name: str | None = None
+    read_at: datetime | None = None
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationView] = Field(default_factory=list)
+    unread: int = 0
+
+
+class NotificationPreferencesView(BaseModel):
+    comment_enabled: bool = True
+    run_enabled: bool = True
+    budget_enabled: bool = True
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    comment_enabled: bool | None = None
+    run_enabled: bool | None = None
+    budget_enabled: bool | None = None
+
+
+class NotificationUnreadResponse(BaseModel):
+    unread: int = 0
+
+
+class NotificationReadResponse(BaseModel):
+    read: bool = False
+
+
+class NotificationReadAllResponse(BaseModel):
+    updated: int = 0
+
+
+class BidFeedbackCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str | None = Field(default=None, max_length=64)
+    event_type: Literal["rating", "adopt", "reject"]
+    score: int | None = Field(default=None, ge=1, le=5)
+    reason: str = Field(default="", max_length=1000)
+    content_sha256: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class BidTemplateView(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    filename: str
+    sha256: str
+    size_bytes: int = 0
+    is_active: bool = False
+    version: int = 1
+    created_by_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    download_url: str
+
+
+class BidTemplateListResponse(BaseModel):
+    templates: list[BidTemplateView] = Field(default_factory=list)
+
+
+class BidTemplateUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    is_active: bool | None = None
+
+
+class BidExternalUsageView(BaseModel):
+    id: int
+    provider: str
+    operation: str
+    units: int = 0
+    unit_type: str
+    cost_cny: float | None = None
+    status: str = "ok"
+    created_at: datetime
+
+
+class BidUsageResponse(BaseModel):
+    run_id: str
+    doc_id: str
+    project_id: str
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_cny: float = 0.0
+    retries: int = 0
+    fallback_calls: int = 0
+    duration_ms: int = 0
+    run_budget_cents: int | None = None
+    budget_enforcement: str = "warn"
+    project_monthly_budget_cents: int | None = None
+    project_month_cost_cny: float = 0.0
+    external: list[BidExternalUsageView] = Field(default_factory=list)
+
+
+class BidFeedbackView(BaseModel):
+    id: int
+    run_id: str
+    section_id: str | None = None
+    user_id: str | None = None
+    user_name: str = ""
+    event_type: str
+    score: int | None = None
+    reason: str = ""
+    content_sha256: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class BidFeedbackListResponse(BaseModel):
+    run_id: str
+    feedback: list[BidFeedbackView] = Field(default_factory=list)
+
+
+class AnalyticsRuns(BaseModel):
+    total: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_gate: dict[str, int] = Field(default_factory=dict)
+    failed: int = 0
+    avg_duration_seconds: float | None = None
+
+
+class AnalyticsUsage(BaseModel):
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_cny: float = 0.0
+    retries: int = 0
+    fallback_calls: int = 0
+
+
+class AnalyticsFeedbackReason(BaseModel):
+    reason: str
+    count: int
+
+
+class AnalyticsFeedback(BaseModel):
+    total: int = 0
+    by_type: dict[str, int] = Field(default_factory=dict)
+    avg_rating: float | None = None
+    top_reasons: list[AnalyticsFeedbackReason] = Field(default_factory=list)
+
+
+class AnalyticsProviderUsage(BaseModel):
+    records: int = 0
+    units: int = 0
+    cost_cny: float = 0.0
+
+
+class AnalyticsExternal(BaseModel):
+    records: int = 0
+    units: int = 0
+    cost_cny: float = 0.0
+    by_provider: dict[str, AnalyticsProviderUsage] = Field(
+        default_factory=dict
+    )
+
+
+class AnalyticsQuality(BaseModel):
+    snapshots: int = 0
+    by_gate: dict[str, int] = Field(default_factory=dict)
+    avg_requirements_coverage: float | None = None
+    avg_citation_coverage: float | None = None
+
+
+class AnalyticsProject(BaseModel):
+    project_id: str
+    project_name: str = ""
+    runs: int = 0
+    llm_calls: int = 0
+    cost_cny: float = 0.0
+    gate_blocked: int = 0
+    monthly_budget_cents: int | None = None
+    month_cost_cny: float = 0.0
+
+
+class AnalyticsDaily(BaseModel):
+    date: str
+    runs: int = 0
+    gate_blocked: int = 0
+    cost_cny: float = 0.0
+
+
+class AnalyticsBudgetTrendPoint(BaseModel):
+    date: str
+    llm_cost_cny: float = 0.0
+    external_cost_cny: float = 0.0
+    total_cost_cny: float = 0.0
+    cumulative_cost_cny: float = 0.0
+
+
+class AnalyticsBudgetTrend(BaseModel):
+    days: int
+    project_id: str | None = None
+    project_name: str | None = None
+    month_start: str
+    range_start: str
+    budget_cents: int | None = None
+    month_cost_cny: float = 0.0
+    budget_status: Literal["none", "ok", "warning", "exceeded"] = "none"
+    daily: list[AnalyticsBudgetTrendPoint] = Field(default_factory=list)
+
+
+class AnalyticsBudgetAlert(BaseModel):
+    kind: str
+    title: str = ""
+    body: str = ""
+    run_id: str | None = None
+    doc_id: str | None = None
+    user_id: str
+    read: bool = False
+    created_at: datetime
+
+
+class AnalyticsOverview(BaseModel):
+    days: int
+    runs: AnalyticsRuns = Field(default_factory=AnalyticsRuns)
+    usage: AnalyticsUsage = Field(default_factory=AnalyticsUsage)
+    external: AnalyticsExternal = Field(default_factory=AnalyticsExternal)
+    feedback: AnalyticsFeedback = Field(default_factory=AnalyticsFeedback)
+    quality: AnalyticsQuality = Field(default_factory=AnalyticsQuality)
+    projects: list[AnalyticsProject] = Field(default_factory=list)
+    daily: list[AnalyticsDaily] = Field(default_factory=list)
+    budget_alerts: list[AnalyticsBudgetAlert] = Field(default_factory=list)
+
+
+class BidRunEventSection(BaseModel):
+    section_id: str
+    title: str
+    status: str
+
+
+class BidRunEventJob(BaseModel):
+    job_id: str
+    status: str
+    stage: str | None = None
+    percent: int = 0
+    message: str | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class BidRunEventSnapshot(BaseModel):
+    run_id: str
+    status: str
+    stage: str | None = None
+    percent: int = 0
+    message: str | None = None
+    gate_status: str | None = None
+    content_sha256: str | None = None
+    revision: int = 0
+    updated_at: datetime
+    counts: BidRunCounts = Field(default_factory=BidRunCounts)
+    sections: list[BidRunEventSection] = Field(default_factory=list)
+    job: BidRunEventJob | None = None
+    server_time: datetime
+    terminal: bool = False
 
 
 class BidFigureView(BaseModel):
@@ -263,6 +707,7 @@ class BidFixPlanItem(BaseModel):
     check_id: str
     title: str
     section_id: str | None = None
+    section_sha256: str | None = None
     action: Literal["replace", "manual"]
     find: str = ""
     replace: str = ""
@@ -282,6 +727,9 @@ class BidFixApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     section_id: str = Field(min_length=1, max_length=128)
+    expected_sha256: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
     find: str = Field(min_length=1, max_length=5000)
     replace: str = Field(min_length=1, max_length=5000)
 
@@ -333,7 +781,29 @@ class BidSummary(BaseModel):
     error: str | None = None
 
 
-JobResult = Annotated[ParseSummary | BidSummary, Field(discriminator="kind")]
+class AttachmentJobSummary(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    kind: Literal["attach"] = "attach"
+    ok: bool = True
+    doc_id: str | None = None
+    attachment_id: str | None = None
+    file: str | None = None
+    sha256: str | None = None
+    chunk_count: int = 0
+    pages: int = 0
+    parser: str | None = None
+    replaced_chunks: int = 0
+    ingested: int | None = None
+    collection: str | None = None
+    storage_synced: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+JobResult = Annotated[
+    ParseSummary | BidSummary | AttachmentJobSummary,
+    Field(discriminator="kind"),
+]
 
 
 class JobStatusResponse(BaseModel):
@@ -465,6 +935,70 @@ class CompanyListResponse(BaseModel):
     companies: list[CompanySummary] = Field(default_factory=list)
 
 
+class CompanyQualificationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    qualification_type: str = Field(default="", max_length=64)
+    certificate_no: str | None = Field(default=None, max_length=128)
+    issuer: str | None = Field(default=None, max_length=128)
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
+
+class CompanyQualificationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    qualification_type: str | None = Field(default=None, max_length=64)
+    certificate_no: str | None = Field(default=None, max_length=128)
+    issuer: str | None = Field(default=None, max_length=128)
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
+
+class CompanyQualificationView(BaseModel):
+    id: str
+    company_id: str
+    name: str
+    qualification_type: str = ""
+    certificate_no: str | None = None
+    issuer: str | None = None
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str = ""
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CompanyQualificationListResponse(BaseModel):
+    company_id: str
+    qualifications: list[CompanyQualificationView] = Field(
+        default_factory=list
+    )
+
+
 UserRole = Literal["admin", "bid_manager", "writer", "reviewer", "viewer"]
 
 
@@ -538,6 +1072,7 @@ class ProjectSummary(BaseModel):
     description: str = ""
     role: str | None = None
     member_count: int = 0
+    monthly_budget_cents: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -555,6 +1090,7 @@ class ProjectCreateRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
+    monthly_budget_cents: int | None = Field(default=None, ge=0)
 
 
 class ProjectMemberSummary(BaseModel):
@@ -568,6 +1104,17 @@ class ProjectMemberSummary(BaseModel):
 
 class ProjectMemberListResponse(BaseModel):
     members: list[ProjectMemberSummary] = Field(default_factory=list)
+
+
+class ProjectMemberBrief(BaseModel):
+    user_id: str
+    username: str
+    display_name: str
+    role: str
+
+
+class ProjectMemberBriefListResponse(BaseModel):
+    members: list[ProjectMemberBrief] = Field(default_factory=list)
 
 
 class ProjectMemberUpsertRequest(BaseModel):

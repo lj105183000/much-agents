@@ -177,7 +177,10 @@ def test_docx_embeds_safe_image_and_preserves_legacy_placeholder(tmp_path: Path)
 
     legacy = markdown_to_docx(markdown, tmp_path / "legacy.docx")
     assert legacy.images == 0
-    assert "【图片：图 1】" in Document(str(legacy.path)).paragraphs[0].text
+    assert any(
+        "【图片：图 1】" in paragraph.text
+        for paragraph in Document(str(legacy.path)).paragraphs
+    )
 
 
 @pytest.mark.parametrize(

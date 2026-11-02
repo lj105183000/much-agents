@@ -119,6 +119,74 @@ def test_ledger_ignores_table_headers_and_placeholders(tmp_path: Path) -> None:
     assert all(item["value"] != "业主" for item in project["occurrences"])
 
 
+def test_ledger_ignores_evaluation_index_criteria(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "idx-00": (
+            "| 序号 | 评审阶段 | 评审因素 | 评审标准 | 对应章节 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| 1 | 形式评审 | 投标人名称 | 符合性 | 十一、其他资料 |\n"
+            "| 18 | 响应性评审 | 质量要求 | 符合性 | 十一、其他资料 |\n"
+        ),
+        narrative.id: "投标人：测试建设有限公司\n质量要求：合格\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    company = _fact(ledger, "company_name")
+    quality = _fact(ledger, "quality_requirement")
+    assert company["status"] == "consistent"
+    assert quality["status"] == "consistent"
+    assert all(item["section_id"] != "idx-00" for item in company["occurrences"])
+    assert all(item["section_id"] != "idx-00" for item in quality["occurrences"])
+
+
+def test_ledger_ignores_date_table_headers(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "narr-06-06": (
+            "| 序号 | 单位工程名称 | 计划开工日期 | 计划完成日期 | 紧前工序 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| 1 | 管道安装 | 2023 年 11 月 25 日 | 2024 年 6 月 30 日 | 施工准备 |\n"
+        ),
+        narrative.id: "计划开工日期：2023年11月25日\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    start = _fact(ledger, "planned_start")
+    assert start["status"] != "conflict"
+    assert "计划完成日期" not in start["conflicting_values"]
+
+
+def test_ledger_ignores_person_title_cells(tmp_path: Path) -> None:
+    planned, profile, narrative = _inputs(tmp_path)
+    markdown = {
+        "top-07": (
+            "| 姓名 | 岗位 | 职称 | 证书 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 王五 | 项目经理 | 高级工程师 | 一级建造师 |\n"
+        ),
+        narrative.id: "项目经理：王五\n",
+    }
+    ledger = build_consistency_ledger(
+        planned.context,
+        profile,
+        planned.outline,
+        markdown,
+    )
+    manager = _fact(ledger, "project_manager")
+    assert manager["status"] == "consistent"
+    assert manager["conflicting_values"] == []
+    assert all(item["value"] not in {"高级工程师", "一级建造师"} for item in manager["occurrences"])
+
+
 def test_ledger_reports_missing_canonical_values(tmp_path: Path) -> None:
     planned, _profile, narrative = _inputs(tmp_path)
     ledger = build_consistency_ledger(

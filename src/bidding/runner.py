@@ -153,6 +153,7 @@ def run_bid_writing(
         assembly.markdown,
         output_dir / "bid.docx",
         title=f"{context.facts.project_name} 投标文件",
+        template_path=settings.docx_template or None,
     )
     timings["export"] = time.perf_counter() - started
 

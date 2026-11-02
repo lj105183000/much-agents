@@ -77,6 +77,7 @@ class ProjectRecord:
     updated_at: datetime
     role: str | None = None
     member_count: int = 0
+    monthly_budget_cents: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,7 @@ def _project_record(row: ProjectRow, role: str | None = None, members: int = 0) 
         updated_at=_aware(row.updated_at) or _now(),
         role=role,
         member_count=int(members or 0),
+        monthly_budget_cents=row.monthly_budget_cents,
     )
 
 
@@ -258,12 +260,16 @@ class ProjectRepository:
         *,
         name: str | None = None,
         description: str | None = None,
+        monthly_budget_cents: int | None = None,
+        set_monthly_budget: bool = False,
     ) -> ProjectRecord | None:
         values: dict[str, Any] = {}
         if name is not None:
             values["name"] = name
         if description is not None:
             values["description"] = description
+        if set_monthly_budget:
+            values["monthly_budget_cents"] = monthly_budget_cents
         if not values:
             return await self.get_project(project_id)
         values["updated_at"] = _now()
@@ -689,6 +695,8 @@ class ProjectService:
         *,
         name: str | None = None,
         description: str | None = None,
+        monthly_budget_cents: int | None = None,
+        set_monthly_budget: bool = False,
     ) -> ProjectRecord:
         clean_name = None
         if name is not None:
@@ -702,10 +710,14 @@ class ProjectService:
             clean_description = description.strip()
             if len(clean_description) > 512:
                 raise ProjectError(400, "项目描述过长")
+        if monthly_budget_cents is not None and monthly_budget_cents < 0:
+            raise ProjectError(400, "月度预算不能为负数")
         updated = await self._require_repo().update_project(
             project_id,
             name=clean_name,
             description=clean_description,
+            monthly_budget_cents=monthly_budget_cents,
+            set_monthly_budget=set_monthly_budget,
         )
         if updated is None:
             raise ProjectError(404, "项目不存在")

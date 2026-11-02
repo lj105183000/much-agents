@@ -177,6 +177,7 @@ class ParseResult:
     warnings: list[str] = field(default_factory=list)
     timings_seconds: dict[str, float] = field(default_factory=dict)
     error: str | None = None
+    external_usage: list[dict[str, Any]] = field(default_factory=list)
 
     def to_summary(self) -> dict[str, Any]:
         return {
@@ -198,4 +199,5 @@ class ParseResult:
             "warnings": self.warnings,
             "timings_seconds": {k: round(v, 3) for k, v in self.timings_seconds.items()},
             "error": self.error,
+            "external_usage": list(self.external_usage),
         }

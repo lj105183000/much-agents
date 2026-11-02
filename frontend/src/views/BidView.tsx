@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
+  BidApprovalListResponse,
+  BidApprovalResponse,
   BidGateResponse,
   BidOutlineResponse,
   BidSectionDetail,
@@ -9,13 +11,18 @@ import type {
 } from '../api/types'
 import { useCompanies } from '../hooks/useCompanies'
 import { useBidRun } from '../hooks/useBidRun'
+import { useBidRunEvents } from '../hooks/useBidRunEvents'
 import { usePermissions } from '../hooks/usePermissions'
+import { BidCommentsPanel } from '../components/BidCommentsPanel'
 import { BidCompliancePanel } from '../components/BidCompliancePanel'
+import { BidCoveragePanel } from '../components/BidCoveragePanel'
 import { BidFiguresPanel } from '../components/BidFiguresPanel'
 import { BidGatePanel } from '../components/BidGatePanel'
 import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
+import { BidUsagePanel } from '../components/BidUsagePanel'
 import { BidSectionModal } from '../components/BidSectionModal'
+import { BidTemplatesPanel } from '../components/BidTemplatesPanel'
 import { ProfileEditor } from '../components/ProfileEditor'
 import { ArtifactPanel } from '../components/ArtifactPanel'
 import { Icon } from '../components/icons'
@@ -43,6 +50,8 @@ interface BidViewProps {
   initialDocId: string | null
   initialCompanyId: string | null
   initialRunId: string | null
+  pdfExportAvailable: boolean
+  docExportAvailable: boolean
   onRunChange: (runId: string | null) => void
   onNavigate: (view: ViewKey) => void
   onActiveJobChange: (jobId: string | null) => void
@@ -71,6 +80,8 @@ export function BidView({
   initialDocId,
   initialCompanyId,
   initialRunId,
+  pdfExportAvailable,
+  docExportAvailable,
   onRunChange,
   onNavigate,
   onActiveJobChange,
@@ -97,8 +108,16 @@ export function BidView({
   const [gate, setGate] = useState<BidGateResponse | null>(null)
   const [gateLoading, setGateLoading] = useState(false)
   const [gateError, setGateError] = useState<string | null>(null)
+  const [approval, setApproval] = useState<BidApprovalResponse | null>(null)
+  const [approvalHistory, setApprovalHistory] =
+    useState<BidApprovalListResponse | null>(null)
+  const [approvalLoading, setApprovalLoading] = useState(false)
+  const [approvalBusy, setApprovalBusy] = useState(false)
+  const [approvalError, setApprovalError] = useState<string | null>(null)
   const [complianceRefresh, setComplianceRefresh] = useState(0)
   const [exporting, setExporting] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+  const [exportingDoc, setExportingDoc] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [preview, setPreview] = useState<BidSectionDetail | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -110,13 +129,23 @@ export function BidView({
   const [sectionActionError, setSectionActionError] = useState<string | null>(
     null,
   )
-  const { canWrite } = usePermissions()
+  const { canManage, canWrite } = usePermissions()
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
   const selected = documents.find((document) => document.doc_id === docId)
   const runStatus = run?.status
   const active = run ? ACTIVE_STATUSES.has(run.status) : false
+  const live = useBidRunEvents(runId, apiBase, active)
+
+  useEffect(() => {
+    if (!runId || !live.snapshot || live.snapshot.status === runStatus) {
+      return
+    }
+    // The stream can observe a terminal/queued transition before the 2s poll.
+    bidRun.refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, live.snapshot?.status, runStatus])
 
   const loadCompany = async (id: string) => {
     if (!id) {
@@ -158,6 +187,10 @@ export function BidView({
     setOutlineError(null)
     setGate(null)
     setGateError(null)
+    setApproval(null)
+    setApprovalError(null)
+    setApprovalLoading(false)
+    setApprovalBusy(false)
     setExportError(null)
     setPreview(null)
     setPreviewError(null)
@@ -204,6 +237,38 @@ export function BidView({
     // Only reload when the gate changes, not on every outline poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, run?.gate_status])
+
+  useEffect(() => {
+    if (!runId || !run?.gate_status) {
+      setApproval(null)
+      setApprovalHistory(null)
+      return
+    }
+    let cancelled = false
+    setApprovalLoading(true)
+    setApprovalError(null)
+    Promise.all([api.getBidApproval(runId), api.listBidApprovals(runId)])
+      .then(([response, history]) => {
+        if (!cancelled) {
+          setApproval(response)
+          setApprovalHistory(history)
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setApprovalError(
+            caught instanceof ApiError ? caught.message : '审批状态读取失败',
+          )
+          setApprovalHistory(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setApprovalLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [runId, run?.gate_status, run?.content_sha256])
 
   useEffect(() => {
     if (runStatus === 'assembled') {
@@ -420,6 +485,116 @@ export function BidView({
     }
   }
 
+  const exportPdf = async (force: boolean) => {
+    if (!runId) return
+    if (
+      force &&
+      !window.confirm(
+        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
+      )
+    ) {
+      return
+    }
+    setExportingPdf(true)
+    setExportError(null)
+    try {
+      const blob = await api.exportBidRunPdf(runId, force)
+      const name = safeFilename(run?.project_name || docId || runId || '投标文件')
+      downloadBlob(blob, `${name}-投标文件.pdf`)
+      if (force) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } catch (caught) {
+      setExportError(
+        caught instanceof ApiError ? caught.message : 'PDF 导出失败',
+      )
+      if (runId) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } finally {
+      setExportingPdf(false)
+    }
+  }
+
+  const exportDoc = async (force: boolean) => {
+    if (!runId) return
+    if (
+      force &&
+      !window.confirm(
+        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
+      )
+    ) {
+      return
+    }
+    setExportingDoc(true)
+    setExportError(null)
+    try {
+      const blob = await api.exportBidRunDoc(runId, force)
+      const name = safeFilename(run?.project_name || docId || runId || '投标文件')
+      downloadBlob(blob, `${name}-投标文件.doc`)
+      if (force) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } catch (caught) {
+      setExportError(
+        caught instanceof ApiError ? caught.message : 'DOC 导出失败',
+      )
+      if (runId) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } finally {
+      setExportingDoc(false)
+    }
+  }
+
+  const approveRun = async (reason: string, override: boolean) => {
+    if (!runId) return
+    setApprovalBusy(true)
+    setApprovalError(null)
+    try {
+      const result = await api.approveBidRun(runId, { reason, override })
+      setApproval(result)
+      setApprovalHistory(await api.listBidApprovals(runId))
+      setNotice('已通过审批')
+    } catch (caught) {
+      setApprovalError(
+        caught instanceof ApiError ? caught.message : '审批失败',
+      )
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
+
+  const rejectRun = async (reason: string) => {
+    if (!runId) return
+    setApprovalBusy(true)
+    setApprovalError(null)
+    try {
+      const result = await api.rejectBidRun(runId, { reason })
+      setApproval(result)
+      setApprovalHistory(await api.listBidApprovals(runId))
+      setNotice('已驳回')
+    } catch (caught) {
+      setApprovalError(
+        caught instanceof ApiError ? caught.message : '驳回失败',
+      )
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
+
   const closeSectionModal = () => {
     setSectionModalOpen(false)
     setSectionStartEditing(false)
@@ -455,6 +630,18 @@ export function BidView({
     }
   }
 
+  const refreshPreview = async (sectionId: string) => {
+    if (!runId) return
+    try {
+      setPreview(await api.getBidSection(runId, sectionId))
+      setPreviewError(null)
+    } catch (caught) {
+      setPreviewError(
+        caught instanceof ApiError ? caught.message : '章节读取失败',
+      )
+    }
+  }
+
   const saveSection = async (markdown: string): Promise<boolean> => {
     if (!runId || !preview) return false
     if (outlineDirty) {
@@ -468,6 +655,7 @@ export function BidView({
         runId,
         preview.section_id,
         markdown,
+        preview.content_sha256,
       )
       setPreview(updated)
       setSectionStartEditing(false)
@@ -479,13 +667,37 @@ export function BidView({
       bidRun.refresh()
       return true
     } catch (caught) {
-      setSectionActionError(
-        caught instanceof ApiError ? caught.message : '正文保存失败',
-      )
+      if (caught instanceof ApiError && caught.status === 409) {
+        await refreshPreview(preview.section_id)
+        setSectionActionError(
+          '正文已被其他用户修改，已加载最新内容；请重新应用你的修改。',
+        )
+      } else {
+        setSectionActionError(
+          caught instanceof ApiError ? caught.message : '正文保存失败',
+        )
+      }
       return false
     } finally {
       setSectionSaving(false)
     }
+  }
+
+  const handleSectionConflict = async () => {
+    if (!preview) return
+    await refreshPreview(preview.section_id)
+    setSectionActionError('正文已被其他用户修改，已加载最新内容。')
+  }
+
+  const handleSectionRestored = (updated: BidSectionDetail) => {
+    setPreview(updated)
+    setSectionStartEditing(false)
+    setGate(null)
+    setGateError(null)
+    setExportError(null)
+    setComplianceRefresh((value) => value + 1)
+    setNotice('已恢复历史版本；旧门禁与合规报告已失效，请重新组装并检查。')
+    bidRun.refresh()
   }
 
   const regenerateSection = async (sectionId: string) => {
@@ -548,6 +760,11 @@ export function BidView({
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
+      <BidTemplatesPanel
+        canManage={canManage}
+        previewAvailable={pdfExportAvailable}
+      />
+
       {!runId ? (
         <>
           <Card className="p-5">
@@ -832,6 +1049,7 @@ export function BidView({
             <BidRunWorkspace
               run={run}
               outline={bidRun.outline ?? outlineDraft}
+              live={live.snapshot}
               busy={
                 actionBusy ||
                 savingOutline ||
@@ -850,19 +1068,52 @@ export function BidView({
           ) : null}
 
           {run ? (
+            <BidUsagePanel
+              runId={run.run_id}
+              active={active}
+              refreshKey={`${run.updated_at}:${run.gate_status ?? ''}`}
+            />
+          ) : null}
+
+          {run ? (
+            <BidCommentsPanel
+              key={`comments:${run.run_id}`}
+              runId={run.run_id}
+              outline={bidRun.outline ?? outlineDraft}
+            />
+          ) : null}
+
+          {run ? (
             <BidGatePanel
+              key={`gate:${run.run_id}`}
               gate={gate}
               loading={gateLoading}
               error={gateError}
+              approval={approval}
+              approvalHistory={approvalHistory}
+              currentContentSha256={run?.content_sha256 ?? null}
+              approvalLoading={approvalLoading}
+              approvalBusy={approvalBusy}
+              approvalError={approvalError}
+              onApprove={(reason, override) =>
+                void approveRun(reason, override)
+              }
+              onReject={(reason) => void rejectRun(reason)}
               exporting={exporting}
+              exportingPdf={exportingPdf}
+              exportingDoc={exportingDoc}
+              pdfAvailable={pdfExportAvailable}
+              docAvailable={docExportAvailable}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}
+              onExportPdf={(force) => void exportPdf(force)}
+              onExportDoc={(force) => void exportDoc(force)}
             />
           ) : null}
 
           {run ? (
             <BidCompliancePanel
-              key={`${run.run_id}:${complianceRefresh}`}
+              key={`compliance:${run.run_id}:${complianceRefresh}`}
               runId={run.run_id}
               active={active}
               onApplied={handleFixApplied}
@@ -870,8 +1121,17 @@ export function BidView({
           ) : null}
 
           {run ? (
+            <BidCoveragePanel
+              key={`coverage:${run.run_id}:${complianceRefresh}`}
+              runId={run.run_id}
+              active={active}
+              refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
+            />
+          ) : null}
+
+          {run ? (
             <BidFiguresPanel
-              key={run.run_id}
+              key={`figures:${run.run_id}`}
               runId={run.run_id}
               refreshKey={`${run.updated_at}:${run.gate_status ?? 'none'}`}
               active={active}
@@ -907,6 +1167,8 @@ export function BidView({
         onRegenerate={() => {
           if (preview) void regenerateSection(preview.section_id)
         }}
+        onRestored={handleSectionRestored}
+        onConflict={handleSectionConflict}
       />
     </div>
   )

@@ -6,6 +6,13 @@
 #   BACKUP_CHROMA=1 scripts/backup.sh
 #   BACKUP_RETENTION_DAYS=14 scripts/backup.sh
 #   ALLOW_EMPTY_MINIO=1 scripts/backup.sh   # accept an intentionally empty bucket
+#   BACKUP_ENCRYPT=age BACKUP_AGE_RECIPIENT=age1... scripts/backup.sh
+#   BACKUP_OFFSITE_TARGET=remote:much-agents-backups scripts/backup.sh
+#   BACKUP_METRICS_DIR=/var/lib/node_exporter/textfile scripts/backup.sh
+#
+# The local directory remains the fast-restore source. BACKUP_ENCRYPT creates a
+# separate encrypted archive for offsite storage; configure BACKUP_OFFSITE_TARGET
+# to copy it with rclone (remote:path) or rsync (local/NAS path).
 #
 # Run on the production Docker host. The compose stack must be running.
 set -euo pipefail
@@ -101,6 +108,62 @@ fi
     | xargs -0 sha256sum > SHA256SUMS
 )
 
+OFFSITE_ARCHIVE=""
+if [[ -n "${BACKUP_ENCRYPT:-}" ]]; then
+  OFFSITE_ARCHIVE="$DEST.tar.gz"
+  tar -czf "$OFFSITE_ARCHIVE" -C "$(dirname "$DEST")" "$(basename "$DEST")"
+  case "$BACKUP_ENCRYPT" in
+    age)
+      command -v age >/dev/null 2>&1 || {
+        echo "BACKUP_ENCRYPT=age requires the age binary" >&2
+        exit 1
+      }
+      : "${BACKUP_AGE_RECIPIENT:?BACKUP_AGE_RECIPIENT is required for age encryption}"
+      age -r "$BACKUP_AGE_RECIPIENT" -o "$OFFSITE_ARCHIVE.age" "$OFFSITE_ARCHIVE"
+      rm -f "$OFFSITE_ARCHIVE"
+      OFFSITE_ARCHIVE="$OFFSITE_ARCHIVE.age"
+      ;;
+    gpg)
+      command -v gpg >/dev/null 2>&1 || {
+        echo "BACKUP_ENCRYPT=gpg requires the gpg binary" >&2
+        exit 1
+      }
+      : "${BACKUP_GPG_RECIPIENT:?BACKUP_GPG_RECIPIENT is required for gpg encryption}"
+      gpg --batch --yes --encrypt --recipient "$BACKUP_GPG_RECIPIENT" \
+        --output "$OFFSITE_ARCHIVE.gpg" "$OFFSITE_ARCHIVE"
+      rm -f "$OFFSITE_ARCHIVE"
+      OFFSITE_ARCHIVE="$OFFSITE_ARCHIVE.gpg"
+      ;;
+    "")
+      ;;
+    *)
+      echo "BACKUP_ENCRYPT must be empty, age or gpg" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [[ -n "${BACKUP_OFFSITE_TARGET:-}" ]]; then
+  if [[ -z "$OFFSITE_ARCHIVE" ]]; then
+    echo "warning: BACKUP_OFFSITE_TARGET is set without BACKUP_ENCRYPT; copying plaintext" >&2
+    OFFSITE_ARCHIVE="$DEST"
+  fi
+  if command -v rclone >/dev/null 2>&1 && [[ "$BACKUP_OFFSITE_TARGET" == *:* ]]; then
+    rclone copy "$OFFSITE_ARCHIVE" "$BACKUP_OFFSITE_TARGET"
+  else
+    mkdir -p "$BACKUP_OFFSITE_TARGET"
+    rsync -a "$OFFSITE_ARCHIVE" "$BACKUP_OFFSITE_TARGET/"
+  fi
+fi
+
+if [[ -n "${BACKUP_METRICS_DIR:-}" ]]; then
+  mkdir -p "$BACKUP_METRICS_DIR"
+  printf '# TYPE much_agents_backup_last_success_timestamp_seconds gauge\n' \
+    > "$BACKUP_METRICS_DIR/much-agents-backup.prom"
+  printf 'much_agents_backup_last_success_timestamp_seconds %s\n' \
+    "$(date +%s)" >> "$BACKUP_METRICS_DIR/much-agents-backup.prom"
+fi
+
 echo
 echo "Backup complete: $DEST"
 echo "Verify with: (cd '$DEST' && sha256sum -c SHA256SUMS)"
@@ -110,4 +173,7 @@ echo "it is intentionally not copied into this backup."
 if [[ -d "$ROOT/backups" ]]; then
   find "$ROOT/backups" -mindepth 1 -maxdepth 1 -type d \
     -mtime "+$RETENTION_DAYS" -print -exec rm -rf -- {} + || true
+  find "$ROOT/backups" -maxdepth 1 -type f \
+    \( -name '*.age' -o -name '*.gpg' -o -name '*.tar.gz' \) \
+    -mtime "+$RETENTION_DAYS" -print -delete || true
 fi

@@ -337,7 +337,7 @@ def build_brief(context: TenderContext, outline: BidOutline) -> str:
         f"最高投标限价（仅供引用，不得自行报价）：{facts.max_price_text}",
         f"投标截止时间：{facts.bid_deadline}",
         "技术标（施工组织设计）篇幅不得超过 150 页（含封面、目录、正文和附件）。",
-        "所有未知的公司、人员、证书、业绩、设备数量、检测结果、报价、日期必须使用【待填写：...】占位，绝不编造。",
+        "所有未知的公司、人员、证书、业绩、检测结果、报价及招标文件已明确的日期/数量必须使用【待填写：...】占位，绝不编造；施工设备、劳动力、周转材料等投标人拟投入内容和相对阶段安排可提出具体方案，但须标注“拟投入/拟安排”，且不得与招标文件的工期、质量、范围冲突。",
     ]
     if outline.warnings:
         lines.extend(f"注意：{warning}" for warning in outline.warnings)

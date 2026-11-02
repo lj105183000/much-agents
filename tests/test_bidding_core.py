@@ -9,7 +9,7 @@ from src.bidding.checks import build_allowed, redact_unsupported
 from src.bidding.config import BidSettings
 from src.bidding.context import ChunkRecord, TenderContext
 from src.bidding.errors import BidContextError
-from src.bidding.outline import build_outline, canonical_checklist
+from src.bidding.outline import build_brief, build_outline, canonical_checklist
 from src.bidding.profile import BidderProfile, placeholder, resolve
 from src.bidding.retrieval import (
     ChromaTenderRetriever,
@@ -47,6 +47,99 @@ def test_example_profile_and_placeholders() -> None:
     assert profile.consortium.is_consortium is None
     assert profile.subcontracting.has_subcontracting is None
     assert profile.bid.bid_bond_amount is None
+
+
+def test_profile_brief_includes_safe_facts_and_excludes_sensitive_fields() -> None:
+    profile = BidderProfile.from_mapping(
+        {
+            "company": {
+                "name": "测试公司",
+                "address": "测试地址",
+                "phone": "010-1",
+                "credit_code": "91110000TEST",
+                "bank_name": "测试银行",
+                "bank_account": "622200000",
+            },
+            "legal_representative": {
+                "name": "张三",
+                "position": "董事长",
+                "id_number": "110101199001010000",
+            },
+            "authorized_agent": {
+                "name": "李四",
+                "position": "商务经理",
+                "id_number": "110101199002020000",
+            },
+            "project_manager": {
+                "name": "王五",
+                "certificate_name": "一级建造师",
+                "certificate_number": "京111",
+                "id_number": "110101198003030000",
+            },
+            "personnel": [
+                {"role": "安全员", "name": "赵六", "certificate_number": "C-1"}
+            ],
+            "similar_projects": [
+                {"name": "测试项目", "owner": "测试业主", "contract_amount": "100 万元"}
+            ],
+            "financials": {
+                "years": [
+                    {"year": "2025", "revenue": "1000 万元", "net_profit": "100 万元"}
+                ]
+            },
+            "bid": {"bid_bond_amount": "10 万元", "bid_validity_days": "90"},
+            "other": {"secret_note": "do-not-send"},
+        }
+    )
+
+    brief = profile.brief()
+    assert "测试公司" in brief
+    assert "测试地址" in brief
+    assert "王五" in brief
+    assert "一级建造师" in brief
+    assert "赵六" in brief
+    assert "测试项目" in brief
+    assert "10 万元" in brief
+    assert "110101199001010000" not in brief
+    assert "110101199002020000" not in brief
+    assert "110101198003030000" not in brief
+    assert "622200000" not in brief
+    assert "91110000TEST" not in brief
+    assert "do-not-send" not in brief
+
+
+def test_profile_facts_include_list_items() -> None:
+    profile = BidderProfile.from_mapping(
+        {
+            "management_certificates": [
+                {
+                    "name": "ISO9001",
+                    "number": "ISO-2026-0001",
+                    "valid_until": "2028-12-31",
+                }
+            ],
+            "personnel": [{"name": "赵六", "certificate_number": "C-1"}],
+        }
+    )
+
+    facts = profile.facts()
+
+    assert facts["management_certificates[0].number"] == "ISO-2026-0001"
+    assert facts["management_certificates[0].valid_until"] == "2028-12-31"
+    assert facts["personnel[0].name"] == "赵六"
+
+
+def test_brief_allows_labeled_resource_proposals(tmp_path: Path) -> None:
+    write_parsed_fixture(tmp_path)
+    settings = make_bid_settings(tmp_path)
+    context = TenderContext.load("doc-1", settings)
+    outline = build_outline(context, max_sections=1)
+
+    brief = build_brief(context, outline)
+
+    assert "拟投入/拟安排" in brief
+    assert "【待填写" in brief
+    assert "绝不编造" in brief
 
 
 def test_context_load_and_validation(tmp_path: Path) -> None:

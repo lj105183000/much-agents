@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from src.bidding.budget import evaluate_budget
 from src.bidding.checks import build_allowed
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
@@ -14,7 +15,9 @@ from src.bidding.llm import DeepSeekChatClient
 from src.bidding.outline import build_brief
 from src.bidding.profile import BidderProfile
 from src.bidding.retrieval import build_retriever
-from src.bidding.staged import generate_sections
+from src.bidding.staged import StagedSectionOutcome, generate_sections
+from src.observability.logging import get_request_id, set_job_context
+from src.observability.metrics import RUN_DURATION, RUNS
 from src.mcp_client.config import McpClientConfig
 from src.mcp_client.manager import (
     McpClientManager,
@@ -39,6 +42,7 @@ from .bid_runs import BidRunService
 from .config import ApiSettings
 from .db import Database
 from .jobs import Job, JobStoreError, JobStoreProtocol
+from .notifications import NotificationService, NotificationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +58,15 @@ class _RunHooks:
     job_id: str
     run_id: str
     generation_token: str
+    version_keep: int = 50
+    budget_stopped: bool = False
 
     async def update_section(self, section_id: str, **fields: Any) -> None:
         updated = await self.repo.update_section(
             self.run_id,
             section_id,
+            expected_token=self.generation_token,
+            version_keep=self.version_keep,
             **fields,
         )
         if not updated:
@@ -82,6 +90,8 @@ class _RunHooks:
             logger.warning("could not persist Redis job progress", exc_info=True)
 
     async def is_cancelled(self) -> bool:
+        if self.budget_stopped:
+            return True
         run = await self.repo.get_run(self.run_id)
         return bool(run and run.cancel_requested)
 
@@ -169,6 +179,8 @@ async def execute_staged_bid_job(
 ) -> None:
     payload = job.payload or {}
     run_id = str(payload.get("run_id") or "")
+    request_id = str(payload.get("request_id") or get_request_id())
+    set_job_context(job_id=job.job_id, run_id=run_id)
     generation_token = str(payload.get("generation_token") or "")
     section_ids = [
         str(item) for item in (payload.get("section_ids") or []) if item
@@ -209,6 +221,11 @@ async def execute_staged_bid_job(
                 exit_code=3,
             )
             return
+        set_job_context(
+            job_id=job.job_id,
+            run_id=run_id,
+            project_id=run.project_id,
+        )
 
         run_dir = bid_settings.bids_dir / run.doc_id / run.run_id
         if is_remote(storage):
@@ -266,6 +283,7 @@ async def execute_staged_bid_job(
         ):
             evidence_provider = mcp_manager.collect_evidence
         company_name = (profile.company.name or "").strip()
+        profile_brief = profile.brief()
         states: dict[str, SectionStateRecord] = {
             state.section_id: state for state in await repo.get_states(run_id)
         }
@@ -275,7 +293,92 @@ async def execute_staged_bid_job(
             job_id=job.job_id,
             run_id=run_id,
             generation_token=generation_token,
+            version_keep=bid_settings.section_version_keep,
         )
+        notification_service = NotificationService(
+            repo,
+            NotificationSettings.from_env(),
+            dispatch_inline=True,
+        )
+        budget_stop_message: str | None = None
+        budget_warned = False
+
+        async def check_budget() -> None:
+            nonlocal budget_stop_message, budget_warned
+            if bid_settings.run_budget_cents > 0:
+                try:
+                    usage = await repo.get_run_usage(run_id)
+                except Exception:  # noqa: BLE001 - budget is best-effort
+                    logger.warning(
+                        "could not read run usage for budget check",
+                        exc_info=True,
+                    )
+                    usage = None
+                decision = evaluate_budget(
+                    budget_cents=bid_settings.run_budget_cents,
+                    enforcement=bid_settings.budget_enforcement,
+                    cost_cny=usage.cost_cny if usage is not None else 0.0,
+                )
+                if decision.exceeded or decision.warning:
+                    level = (
+                        "exceeded" if decision.exceeded else "warning"
+                    )
+                    try:
+                        await notification_service.notify_budget(
+                            project_id=run.project_id,
+                            scope="run",
+                            level=level,
+                            spent_cny=decision.cost_cents / 100,
+                            budget_cents=decision.budget_cents,
+                            run=run,
+                        )
+                    except Exception:  # noqa: BLE001 - alerts are best-effort
+                        logger.warning(
+                            "could not send run budget alert", exc_info=True
+                        )
+                if decision.exceeded:
+                    if decision.stop:
+                        hooks.budget_stopped = True
+                        if budget_stop_message is None:
+                            budget_stop_message = decision.message
+                            warnings.append(decision.message)
+                    elif not budget_warned:
+                        budget_warned = True
+                        warnings.append(decision.message)
+            try:
+                project_budget = await repo.get_project_monthly_budget(
+                    run.project_id
+                )
+                if project_budget is not None and project_budget > 0:
+                    spent = await repo.project_month_cost(run.project_id)
+                    project_decision = evaluate_budget(
+                        budget_cents=project_budget,
+                        enforcement="warn",
+                        cost_cny=spent,
+                    )
+                    if (
+                        project_decision.exceeded
+                        or project_decision.warning
+                    ):
+                        level = (
+                            "exceeded"
+                            if project_decision.exceeded
+                            else "warning"
+                        )
+                        await notification_service.notify_budget(
+                            project_id=run.project_id,
+                            scope="project",
+                            level=level,
+                            spent_cny=project_decision.cost_cents / 100,
+                            budget_cents=project_decision.budget_cents,
+                            project_name=run.project_name,
+                        )
+            except Exception:  # noqa: BLE001 - budget is best-effort
+                logger.warning(
+                    "could not check project monthly budget", exc_info=True
+                )
+
+        await check_budget()
         await repo.update_run(
             run_id,
             stage="planning",
@@ -286,6 +389,41 @@ async def execute_staged_bid_job(
             store.update_progress(job.job_id, "planning", 5, "planning sections")
         except JobStoreError:
             logger.warning("could not update Redis job progress", exc_info=True)
+
+        persisted_usage: set[str] = set()
+        persisted_retrieval: set[str] = set()
+
+        async def persist_section_artifacts(item: StagedSectionOutcome) -> None:
+            # Persist per section so a crash/resume does not lose the ledger
+            # for sections that already finished.  Failures fall back to the
+            # final aggregate write below.
+            if item.usage:
+                try:
+                    await repo.add_llm_usage(
+                        run_id, item.usage, project_id=run.project_id
+                    )
+                    persisted_usage.add(item.section_id)
+                except Exception:  # noqa: BLE001 - final flush retries
+                    logger.warning(
+                        "could not persist incremental LLM usage for %s",
+                        item.section_id,
+                        exc_info=True,
+                    )
+            if isinstance(item.retrieval, dict):
+                try:
+                    await repo.add_retrieval_snapshots(
+                        run_id,
+                        [{"section_id": item.section_id, **item.retrieval}],
+                        project_id=run.project_id,
+                    )
+                    persisted_retrieval.add(item.section_id)
+                except Exception:  # noqa: BLE001 - final flush retries
+                    logger.warning(
+                        "could not persist incremental retrieval snapshot for %s",
+                        item.section_id,
+                        exc_info=True,
+                    )
+            await check_budget()
 
         outcome = await generate_sections(
             context=context,
@@ -311,7 +449,43 @@ async def execute_staged_bid_job(
             section_ids=section_ids or None,
             evidence_provider=evidence_provider,
             company_name=company_name,
+            profile_brief=profile_brief,
+            run_id=run_id,
+            job_id=job.job_id,
+            request_id=request_id,
+            project_id=run.project_id,
+            usage_sink=persist_section_artifacts,
         )
+        usage_records = [
+            record
+            for item in outcome.outcomes
+            if item.section_id not in persisted_usage
+            for record in item.usage
+        ]
+        if usage_records:
+            try:
+                await repo.add_llm_usage(
+                    run_id, usage_records, project_id=run.project_id
+                )
+            except Exception:  # noqa: BLE001 - ledger must not lose the run
+                logger.warning("could not persist LLM usage", exc_info=True)
+                warnings.append("LLM usage ledger write failed")
+        retrieval_records = [
+            {"section_id": item.section_id, **item.retrieval}
+            for item in outcome.outcomes
+            if item.section_id not in persisted_retrieval
+            and isinstance(item.retrieval, dict)
+        ]
+        if retrieval_records:
+            try:
+                await repo.add_retrieval_snapshots(
+                    run_id, retrieval_records, project_id=run.project_id
+                )
+            except Exception:  # noqa: BLE001 - snapshots are best-effort
+                logger.warning(
+                    "could not persist retrieval snapshots", exc_info=True
+                )
+                warnings.append("retrieval snapshot write failed")
         warnings = list(
             dict.fromkeys(
                 [
@@ -344,7 +518,19 @@ async def execute_staged_bid_job(
             outcome.cancelled
             or (latest_run is not None and latest_run.cancel_requested)
         )
-        if cancelled:
+        if budget_stop_message is not None:
+            status = "paused"
+            await repo.update_run(
+                run_id,
+                status=status,
+                stage="paused",
+                percent=65,
+                message=budget_stop_message,
+                warnings=warnings,
+                error=None,
+                finished_at=_now(),
+            )
+        elif cancelled:
             status = "paused"
             await repo.update_run(
                 run_id,
@@ -361,6 +547,7 @@ async def execute_staged_bid_job(
                 bid_settings=bid_settings,
                 repo=repo,
                 storage=storage,
+                notifier=notification_service,
             )
             external_renderer = None
             if (
@@ -403,6 +590,9 @@ async def execute_staged_bid_job(
                 error=None,
                 finished_at=None,
             )
+        elapsed = max(0.0, (_now() - run.created_at).total_seconds())
+        RUNS.inc(status=status)
+        RUN_DURATION.observe(elapsed, status=status)
         summary = _summary(
             run,
             selected=selected_count,
@@ -417,9 +607,16 @@ async def execute_staged_bid_job(
         summary["outline_path"] = str(run_dir / "outline.json")
         summary["sections_dir"] = str(run_dir / "sections")
         try:
-            store.mark_succeeded(job.job_id, summary)
+            if cancelled:
+                store.mark_failed(
+                    job.job_id,
+                    error="cancelled by user",
+                    exit_code=130,
+                )
+            else:
+                store.mark_succeeded(job.job_id, summary)
         except JobStoreError:
-            logger.warning("could not mark Redis job succeeded", exc_info=True)
+            logger.warning("could not persist Redis job terminal state", exc_info=True)
     except Exception as exc:  # noqa: BLE001 - never leave a run/job running
         logger.exception("staged bid job %s failed", job.job_id)
         if run is not None:

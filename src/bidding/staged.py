@@ -9,7 +9,11 @@ without repeating completed sections.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import logging
+import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -18,7 +22,11 @@ from .agents import ReviserAgent, ReviewerAgent, WriterAgent
 from .checks import AllowedFacts, redact_unsupported
 from .config import BidSettings
 from .context import TenderContext
+from src.observability.logging import section_id_var
+from src.observability.metrics import SECTION_FAILURES
+
 from .llm import ChatClient
+from .llm_usage import MeteredChatClient, usage_scope
 from .models import (
     Evidence,
     OutlineSection,
@@ -66,6 +74,11 @@ class StagedSectionOutcome:
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
     llm_calls: int = 0
+    usage: list[dict[str, Any]] = field(default_factory=list)
+    retrieval: dict[str, Any] | None = None
+
+
+UsageSink = Callable[[StagedSectionOutcome], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -110,6 +123,94 @@ def _merge_evidence(
     return truncate_evidence([*local_kept, *external_kept], budget)
 
 
+def build_retrieval_snapshot(
+    query: str,
+    evidence: list[Evidence],
+    warning: str | None,
+    top_k: int,
+) -> dict[str, Any]:
+    lowered = (warning or "").lower()
+    if "chroma disabled" in lowered or "keyword" in lowered:
+        mode = "keyword"
+    elif "fallback" in lowered:
+        mode = "fallback"
+    else:
+        mode = "semantic"
+    hits = []
+    for item in evidence:
+        text = item.text or ""
+        hits.append(
+            {
+                "chunk_id": item.chunk_id,
+                "score": item.score,
+                "page_start": item.page_start,
+                "page_end": item.page_end,
+                "section_path": item.section_path,
+                "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "text_chars": len(text),
+            }
+        )
+    return {
+        "query_text": query,
+        "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        "mode": mode,
+        "top_k": int(top_k),
+        "hits": hits,
+        "evidence_chars": sum(len(item.text or "") for item in evidence),
+        "warning": warning,
+    }
+
+
+_ATTACHMENT_QUERY = (
+    "工程量清单 项目编码 技术参数 设计参数 施工图纸 管径 水压试验 "
+    "回填压实度 沟槽支护"
+)
+
+_ISSUE_NOISE_RE = re.compile(r"[*`#>\s]+")
+
+
+def _merge_attachment_evidence(
+    main: list[Evidence],
+    attachment: list[Evidence],
+    max_chars: int,
+) -> list[Evidence]:
+    """Put attachment hits first, deduplicate, and enforce the budget."""
+
+    hits = [
+        item
+        for item in attachment
+        if item.section_path.startswith("附件：")
+    ]
+    if not hits:
+        return truncate_evidence(main, max_chars)
+    seen = {item.chunk_id for item in hits}
+    merged = hits + [item for item in main if item.chunk_id not in seen]
+    return truncate_evidence(merged, max_chars)
+
+
+def _quote_in_markdown(quote: str, markdown: str) -> bool:
+    normalized_quote = _ISSUE_NOISE_RE.sub("", quote or "")
+    if not normalized_quote:
+        return False
+    return normalized_quote in _ISSUE_NOISE_RE.sub("", markdown or "")
+
+
+def _filter_review_issues(
+    issues: list[ReviewIssue], markdown: str
+) -> list[ReviewIssue]:
+    """Drop quoted issues that no longer exist after a revision.
+
+    The LLM reviewer runs on the draft.  If the reviser removes the quoted
+    text, the old issue must not keep blocking the export gate.
+    """
+
+    return [
+        issue
+        for issue in issues
+        if not issue.quote or _quote_in_markdown(issue.quote, markdown)
+    ]
+
+
 async def _write(
     writer: WriterAgent,
     section: OutlineSection,
@@ -118,6 +219,7 @@ async def _write(
     evidence: list[Evidence],
     content_plan: dict[str, Any] | None,
     writing_focus: str,
+    profile_brief: str = "",
 ) -> SectionDraft:
     try:
         return await asyncio.to_thread(
@@ -128,6 +230,7 @@ async def _write(
             evidence,
             content_plan,
             writing_focus,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("writer raised for %s: %s", section.id, exc)
@@ -146,6 +249,7 @@ async def _review(
     draft: SectionDraft,
     evidence: list[Evidence],
     brief: str,
+    profile_brief: str = "",
 ) -> SectionReview:
     try:
         return await asyncio.to_thread(
@@ -154,6 +258,7 @@ async def _review(
             draft,
             evidence,
             brief,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("reviewer raised for %s: %s", section.id, exc)
@@ -171,6 +276,7 @@ async def _revise(
     draft: SectionDraft,
     review: SectionReview,
     evidence: list[Evidence],
+    profile_brief: str = "",
 ) -> SectionRevision:
     try:
         return await asyncio.to_thread(
@@ -179,6 +285,7 @@ async def _revise(
             draft,
             review,
             evidence,
+            profile_brief,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("reviser raised for %s: %s", section.id, exc)
@@ -208,6 +315,8 @@ async def _run_section(
     semaphore: asyncio.Semaphore,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    profile_brief: str = "",
+    retrieval_out: dict[str, Any] | None = None,
 ) -> StagedSectionOutcome:
     async with semaphore:
         if await hooks.is_cancelled():
@@ -233,6 +342,24 @@ async def _run_section(
                 settings.retrieval_top_k,
             )
             provider_warnings: list[str] = []
+            if any(
+                item.section_path.startswith("附件：") for item in context.chunks
+            ):
+                attachment_evidence, attachment_warning = await _retrieve(
+                    retriever,
+                    _ATTACHMENT_QUERY,
+                    context.doc_id,
+                    settings.retrieval_top_k,
+                )
+                evidence = _merge_attachment_evidence(
+                    evidence,
+                    attachment_evidence,
+                    settings.max_evidence_chars,
+                )
+                if attachment_warning:
+                    provider_warnings.append(
+                        f"附件证据检索失败：{attachment_warning}"
+                    )
             if evidence_provider is not None:
                 try:
                     external, provider_warnings = await evidence_provider(
@@ -259,6 +386,15 @@ async def _run_section(
                     external,
                     settings.max_evidence_chars,
                 )
+            if retrieval_out is not None:
+                retrieval_out.update(
+                    build_retrieval_snapshot(
+                        query,
+                        evidence,
+                        retrieval_warning,
+                        settings.retrieval_top_k,
+                    )
+                )
             await hooks.update_section(section.id, evidence_count=len(evidence))
             draft = await _write(
                 writer,
@@ -268,8 +404,14 @@ async def _run_section(
                 evidence,
                 content_plan,
                 writing_focus,
+                profile_brief,
             )
+            if await hooks.is_cancelled():
+                return StagedSectionOutcome(
+                    section_id=section.id, status="pending"
+                )
             if not draft.written:
+                SECTION_FAILURES.inc(stage="writer")
                 warning = "; ".join(draft.warnings) or "writer produced no content"
                 await hooks.update_section(
                     section.id,
@@ -292,7 +434,13 @@ async def _run_section(
                 draft_markdown=draft.markdown,
                 warnings=list(draft.warnings),
             )
-            review = await _review(reviewer, section, draft, evidence, brief)
+            review = await _review(
+                reviewer, section, draft, evidence, brief, profile_brief
+            )
+            if await hooks.is_cancelled():
+                return StagedSectionOutcome(
+                    section_id=section.id, status="pending"
+                )
             await hooks.update_section(
                 section.id,
                 status="reviewed",
@@ -302,7 +450,13 @@ async def _run_section(
             revision: SectionRevision | None = None
             if review.needs_revision and settings.max_review_revisions > 0:
                 await hooks.update_section(section.id, status="revising")
-                revision = await _revise(reviser, section, draft, review, evidence)
+                revision = await _revise(
+                    reviser, section, draft, review, evidence, profile_brief
+                )
+                if await hooks.is_cancelled():
+                    return StagedSectionOutcome(
+                        section_id=section.id, status="pending"
+                    )
                 await hooks.update_section(
                     section.id,
                     status="revised",
@@ -318,7 +472,10 @@ async def _run_section(
                 final_source = "draft"
 
             final_markdown, redactions = redact_unsupported(final_markdown, allowed)
-            issues = [issue.to_dict() for issue in review.issues]
+            issues = [
+                issue.to_dict()
+                for issue in _filter_review_issues(review.issues, final_markdown)
+            ]
             if redactions:
                 issues.extend(
                     ReviewIssue(
@@ -363,6 +520,7 @@ async def _run_section(
                 llm_calls=calls,
             )
         except Exception as exc:  # noqa: BLE001 - isolate one section
+            SECTION_FAILURES.inc(stage="section")
             logger.exception("staged section failed: %s", section.id)
             try:
                 await hooks.update_section(
@@ -397,6 +555,12 @@ async def generate_sections(
     section_ids: list[str] | None = None,
     evidence_provider: EvidenceProvider | None = None,
     company_name: str = "",
+    profile_brief: str = "",
+    run_id: str = "",
+    job_id: str = "",
+    request_id: str = "",
+    project_id: str = "",
+    usage_sink: UsageSink | None = None,
 ) -> StagedRunOutcome:
     requested = set(section_ids or [])
     candidates = [
@@ -410,55 +574,116 @@ async def generate_sections(
     if not candidates:
         return StagedRunOutcome()
 
-    writer = WriterAgent(llm, settings)
-    reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
-    reviser = ReviserAgent(llm, allowed, settings)
+    writer = WriterAgent(MeteredChatClient(llm, operation="writer"), settings)
+    reviewer = ReviewerAgent(
+        MeteredChatClient(llm, operation="reviewer"),
+        allowed,
+        settings,
+        context.facts,
+    )
+    reviser = ReviserAgent(
+        MeteredChatClient(llm, operation="reviser"), allowed, settings
+    )
     semaphore = asyncio.Semaphore(max(1, int(settings.llm_concurrency)))
     total = len(candidates)
     completed = 0
     cancelled = False
+    progress = {"percent": 10}
+
+    async def heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(max(5, int(settings.heartbeat_seconds)))
+            try:
+                await hooks.heartbeat("write", progress["percent"], "generating")
+            except Exception:  # noqa: BLE001 - heartbeat is best-effort
+                logger.warning("periodic heartbeat failed", exc_info=True)
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
 
     async def run_one(section: OutlineSection) -> StagedSectionOutcome:
         nonlocal cancelled
-        result = await _run_section(
-            section=section,
-            context=context,
-            brief=brief,
-            content_plan=content_plans.get(section.id),
-            writing_focus=writing_focus.get(section.id, ""),
-            attempt=int(existing_attempt.get(section.id, 0)) + 1,
-            settings=settings,
-            writer=writer,
-            reviewer=reviewer,
-            reviser=reviser,
-            retriever=retriever,
-            allowed=allowed,
-            hooks=hooks,
-            semaphore=semaphore,
-            evidence_provider=evidence_provider,
-            company_name=company_name,
-        )
+        retrieval_holder: dict[str, Any] = {}
+        section_token = section_id_var.set(section.id)
+        try:
+            with usage_scope(
+                run_id=run_id,
+                job_id=job_id,
+                request_id=request_id,
+                project_id=project_id,
+                section_id=section.id,
+            ) as scope:
+                result = await _run_section(
+                    section=section,
+                    context=context,
+                    brief=brief,
+                    content_plan=content_plans.get(section.id),
+                    writing_focus=writing_focus.get(section.id, ""),
+                    attempt=int(existing_attempt.get(section.id, 0)) + 1,
+                    settings=settings,
+                    writer=writer,
+                    reviewer=reviewer,
+                    reviser=reviser,
+                    retriever=retriever,
+                    allowed=allowed,
+                    hooks=hooks,
+                    semaphore=semaphore,
+                    evidence_provider=evidence_provider,
+                    company_name=company_name,
+                    profile_brief=profile_brief,
+                    retrieval_out=retrieval_holder,
+                )
+        finally:
+            section_id_var.reset(section_token)
+        result.retrieval = retrieval_holder or None
+        result.usage = [record.to_dict() for record in scope.records]
+        result.llm_calls = len(scope.records)
+        if result.status in ("final", "failed"):
+            try:
+                await hooks.update_section(
+                    section.id, llm_calls=result.llm_calls
+                )
+            except Exception:  # noqa: BLE001 - usage must not drop a section
+                logger.warning(
+                    "could not persist actual llm_calls for %s",
+                    section.id,
+                    exc_info=True,
+                )
         if result.status == "pending":
             cancelled = True
         return result
 
-    tasks = [asyncio.create_task(run_one(section)) for section in candidates]
     outcomes: list[StagedSectionOutcome] = []
-    for task in asyncio.as_completed(tasks):
-        result = await task
-        outcomes.append(result)
-        if result.status == "pending":
-            continue
-        completed += 1
-        percent = 10 + int(65 * completed / total)
-        try:
-            await hooks.heartbeat(
-                "write",
-                percent,
-                f"completed {result.section_id}",
-            )
-        except Exception:  # noqa: BLE001 - heartbeat must not drop a section
-            logger.warning("could not persist staged heartbeat", exc_info=True)
+    try:
+        tasks = [asyncio.create_task(run_one(section)) for section in candidates]
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            outcomes.append(result)
+            if usage_sink is not None:
+                try:
+                    await usage_sink(result)
+                except Exception:  # noqa: BLE001 - usage must not drop a section
+                    logger.warning(
+                        "could not persist incremental usage for %s",
+                        result.section_id,
+                        exc_info=True,
+                    )
+            if result.status == "pending":
+                continue
+            completed += 1
+            percent = 10 + int(65 * completed / total)
+            progress["percent"] = percent
+            try:
+                await hooks.heartbeat(
+                    "write",
+                    percent,
+                    f"completed {result.section_id}",
+                )
+            except Exception:  # noqa: BLE001 - heartbeat must not drop a section
+                logger.warning("could not persist staged heartbeat", exc_info=True)
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
     return StagedRunOutcome(outcomes=outcomes, cancelled=cancelled)
 
 
@@ -467,5 +692,6 @@ __all__ = [
     "StagedHooks",
     "StagedRunOutcome",
     "StagedSectionOutcome",
+    "UsageSink",
     "generate_sections",
 ]

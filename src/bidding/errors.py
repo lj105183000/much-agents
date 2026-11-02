@@ -25,9 +25,17 @@ class BidLLMError(BidError):
     exit_code = BID_EXIT_GENERATION
 
 
+class BidLLMTruncatedError(BidLLMError):
+    """The model stopped at max_tokens; the returned text is incomplete."""
+
+
 class BidGenerationError(BidError):
     exit_code = BID_EXIT_GENERATION
 
 
 class BidExportError(BidError):
     exit_code = BID_EXIT_EXPORT
+
+
+class PdfExportError(BidExportError):
+    """PDF conversion is unavailable or failed."""
