@@ -39,6 +39,13 @@ class ZhipuEmbedder:
                 timeout=settings.embedding_timeout,
             )
         self.client = client
+        self.usage: dict[str, int | str] = {
+            "calls": 0,
+            "texts": 0,
+            "prompt_tokens": 0,
+            "total_tokens": 0,
+            "model": settings.embedding_model,
+        }
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
@@ -67,6 +74,19 @@ class ZhipuEmbedder:
                 vectors = [list(_attr(item, "embedding") or []) for item in data]
                 if not vectors or any(not vector for vector in vectors):
                     raise IngestError("embedding API returned an empty vector")
+                usage = getattr(response, "usage", None)
+                prompt_tokens = _attr(usage, "prompt_tokens")
+                total_tokens = _attr(usage, "total_tokens")
+                self.usage["calls"] = int(self.usage["calls"]) + 1
+                self.usage["texts"] = int(self.usage["texts"]) + len(batch)
+                if prompt_tokens:
+                    self.usage["prompt_tokens"] = (
+                        int(self.usage["prompt_tokens"]) + int(prompt_tokens)
+                    )
+                if total_tokens:
+                    self.usage["total_tokens"] = (
+                        int(self.usage["total_tokens"]) + int(total_tokens)
+                    )
                 return vectors
             except Exception as exc:  # noqa: BLE001 - vendor exception types vary
                 last_error = exc
@@ -199,5 +219,6 @@ def run_ingest(
         "existing_before": len(before),
         "source_sha256": source_sha256,
         "chroma": f"{settings.chroma_host}:{settings.chroma_port}",
+        "embedding_usage": dict(getattr(embedder, "usage", {}) or {}),
         "ingested_at": datetime.now(timezone.utc).isoformat(),
     }

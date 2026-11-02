@@ -462,6 +462,21 @@ class AnalyticsFeedback(BaseModel):
     top_reasons: list[AnalyticsFeedbackReason] = Field(default_factory=list)
 
 
+class AnalyticsProviderUsage(BaseModel):
+    records: int = 0
+    units: int = 0
+    cost_cny: float = 0.0
+
+
+class AnalyticsExternal(BaseModel):
+    records: int = 0
+    units: int = 0
+    cost_cny: float = 0.0
+    by_provider: dict[str, AnalyticsProviderUsage] = Field(
+        default_factory=dict
+    )
+
+
 class AnalyticsQuality(BaseModel):
     snapshots: int = 0
     by_gate: dict[str, int] = Field(default_factory=dict)
@@ -489,6 +504,7 @@ class AnalyticsOverview(BaseModel):
     days: int
     runs: AnalyticsRuns = Field(default_factory=AnalyticsRuns)
     usage: AnalyticsUsage = Field(default_factory=AnalyticsUsage)
+    external: AnalyticsExternal = Field(default_factory=AnalyticsExternal)
     feedback: AnalyticsFeedback = Field(default_factory=AnalyticsFeedback)
     quality: AnalyticsQuality = Field(default_factory=AnalyticsQuality)
     projects: list[AnalyticsProject] = Field(default_factory=list)

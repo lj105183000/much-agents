@@ -84,6 +84,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
   const usage = data?.usage
   const feedback = data?.feedback
   const quality = data?.quality
+  const external = data?.external
   const totalRuns = runs?.total ?? 0
   const gatePass = runs?.by_gate.pass ?? 0
   const passRate = totalRuns ? gatePass / totalRuns : 0
@@ -150,9 +151,11 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               hint={`失败 ${runs?.failed ?? 0} 次`}
             />
             <Stat
-              label="LLM 成本"
-              value={money(usage?.cost_cny)}
-              hint={`${compact(usage?.llm_calls ?? 0)} 次调用`}
+              label="模型 / 外部成本"
+              value={money((usage?.cost_cny ?? 0) + (external?.cost_cny ?? 0))}
+              hint={`LLM ${compact(usage?.llm_calls ?? 0)} 次 · 外部 ${
+                external?.records ?? 0
+              } 次`}
             />
             <Stat
               label="反馈 / 平均评分"
@@ -225,7 +228,28 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                       {usage?.retries ?? 0} / {usage?.fallback_calls ?? 0}
                     </dd>
                   </div>
+                  <div>
+                    <dt className="text-slate-600">外部用量</dt>
+                    <dd>
+                      {external?.units ?? 0} 单位 ·{' '}
+                      {money(external?.cost_cny)}
+                    </dd>
+                  </div>
                 </dl>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(external?.by_provider ?? {}).map(
+                    ([provider, item]) => (
+                      <Badge key={provider} tone="neutral">
+                        {provider} · {item.units} · {money(item.cost_cny)}
+                      </Badge>
+                    ),
+                  )}
+                  {Object.keys(external?.by_provider ?? {}).length === 0 ? (
+                    <span className="text-[11px] text-slate-600">
+                      暂无 MinerU/Embedding 用量
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </Card>
 

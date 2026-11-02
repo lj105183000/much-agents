@@ -550,6 +550,46 @@ class RunUsageRow(Base):
     )
 
 
+class ExternalUsageRow(Base):
+    __tablename__ = "external_usage"
+    __table_args__ = (
+        Index("ix_external_usage_project_created", "project_id", "created_at"),
+        Index("ix_external_usage_provider_created", "provider", "created_at"),
+        Index("ix_external_usage_doc_created", "doc_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger(),
+        Identity(always=False),
+        primary_key=True,
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+    )
+    doc_id: Mapped[str | None] = mapped_column(String(128))
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    units: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    unit_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    cost_cny: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'ok'")
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    usage_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class BidApprovalRow(Base):
     __tablename__ = "bid_approvals"
     __table_args__ = (

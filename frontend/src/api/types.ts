@@ -903,6 +903,19 @@ export interface AnalyticsFeedback {
   top_reasons: Array<{ reason: string; count: number }>
 }
 
+export interface AnalyticsProviderUsage {
+  records: number
+  units: number
+  cost_cny: number
+}
+
+export interface AnalyticsExternal {
+  records: number
+  units: number
+  cost_cny: number
+  by_provider: Record<string, AnalyticsProviderUsage>
+}
+
 export interface AnalyticsQuality {
   snapshots: number
   by_gate: Record<string, number>
@@ -930,6 +943,7 @@ export interface AnalyticsOverview {
   days: number
   runs: AnalyticsRuns
   usage: AnalyticsUsage
+  external: AnalyticsExternal
   feedback: AnalyticsFeedback
   quality: AnalyticsQuality
   projects: AnalyticsProject[]

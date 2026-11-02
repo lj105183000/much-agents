@@ -63,12 +63,43 @@ MinIO（大对象） + Prometheus（时序）
 
 不记录正文、profile、证据原文；完整报告仍在 run 目录/MinIO。
 
-## 4. 运营看板
+## 4. 外部用量（MinerU / Embedding）
+
+迁移 `0018` 新增 `external_usage`：
+
+| 字段 | 说明 |
+|---|---|
+| `project_id` / `doc_id` / `job_id` | 来源关联；项目删除时置空 |
+| `provider` / `operation` | `mineru/parse`、`zhipu/embedding` |
+| `units` / `unit_type` | 页数或 token/text 数 |
+| `cost_cny` | 可选；价格未配置时为 null |
+| `status` / `latency_ms` / `usage_metadata` | 状态、耗时与模型/批次等元数据 |
+
+- 解析任务结束后，`execute_parse_job` 通过 `api/external_usage.py` 写入账本；Celery 与本地 runner 都覆盖。
+- MinerU：仅当实际使用 `mineru` 解析时记录页数；PyMuPDF 回退不计外部用量。
+- Embedding：`ZhipuEmbedder` 从响应 `usage` 累计调用数、文本数、prompt/total tokens，写入 `ingest.json` 摘要并进入账本；缓存命中不重复计入。
+- 计价：`MINERU_PRICE_PER_PAGE_CNY`、`EMBEDDING_PRICE_PER_1K_TOKENS_CNY`，0 表示只记录用量不算成本。
+- 运营看板新增外部记录数、单位数、成本与按 provider 拆分。
+
+## 5. Run 预算
+
+```ini
+BID_RUN_BUDGET_CENTS=500          # 500 分 = ¥5.00；0 关闭
+BID_BUDGET_ENFORCEMENT=warn       # warn | stop
+```
+
+- 预算基于 `run_usage.cost_cny` 累计；价格未配置时 LLM 成本为 0，无法触发预算。
+- `warn`：达到预算后继续生成，在 run warnings 中追加提示。
+- `stop`：达到预算后停止继续调度新章节（已并发中的章节可完成），run 变为 `paused`，message/warnings 记录预算超限；`generate/resume/regenerate` 在预算仍超限时返回 409，需管理员调整预算或新建 run。
+- 单节重写/续跑同样受预算约束；预算检查为 best-effort，账本写入失败只 warning。
+
+## 6. 运营看板
 
 `GET /api/analytics/overview?days=7|30|90`（仅 admin）：
 
 - 运行：总数、状态/门禁分布、失败数、平均耗时
 - 用量：LLM 调用、prompt/completion/total tokens、成本、重试、回退（来自 `run_usage`）
+- 外部用量：MinerU/Embedding 记录数、页/token 单位、成本与 provider 拆分（来自 `external_usage`）
 - 反馈：总数、类型分布、平均评分、Top 原因
 - 质量：快照数、门禁分布、平均需求/引用覆盖率
 - 项目 Top 10：runs、调用、门禁阻断、成本
@@ -76,9 +107,9 @@ MinIO（大对象） + Prometheus（时序）
 
 前端左侧「运营看板」仅管理员可见，支持 7/30/90 天切换与刷新。查询全部走 PostgreSQL 聚合，不新增外部服务。
 
-## 5. 隐私与边界
+## 7. 隐私与边界
 
 - 反馈 reason 可能含业务信息：仅管理员看板聚合展示 Top 原因；不进入审计 detail、日志或 Webhook。
 - 快照只存摘要和哈希，不存正文/profile。
-- 当前仍未实现：`external_usage`（MinerU/Embedding 成本）、物化视图/预聚合、报表导出、SQL 自由查询、计费。
+- 当前仍未实现：物化视图/预聚合、报表导出、SQL 自由查询、按客户计费、预算配额 UI。
 - 数据量增长后先加索引/物化视图/定时聚合；达到 0.2 节触发条件再评估重型数据平台。

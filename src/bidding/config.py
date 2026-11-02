@@ -84,6 +84,8 @@ class BidSettings:
     figure_page_estimate: float = 0.5
     figures_external: bool = False
     docx_template: str = ""
+    run_budget_cents: int = 0
+    budget_enforcement: str = "warn"
 
     @property
     def parsed_dir(self) -> Path:
@@ -114,6 +116,11 @@ class BidSettings:
         bids_dir = Path(_str(env, "BIDS_DIR", str(base.project_root / "upload" / "bids")))
         if not bids_dir.is_absolute():
             bids_dir = base.project_root / bids_dir
+        budget_enforcement = (
+            _str(env, "BID_BUDGET_ENFORCEMENT", "warn").strip().lower()
+        )
+        if budget_enforcement not in {"warn", "stop"}:
+            budget_enforcement = "warn"
 
         return cls(
             base=base,
@@ -150,6 +157,10 @@ class BidSettings:
             ),
             figures_external=_bool(env, "BID_FIGURES_EXTERNAL", False),
             docx_template=_str(env, "BID_DOCX_TEMPLATE", "").strip(),
+            run_budget_cents=_int(
+                env, "BID_RUN_BUDGET_CENTS", 0, minimum=0
+            ),
+            budget_enforcement=budget_enforcement,
         )
 
 

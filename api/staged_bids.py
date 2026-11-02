@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from src.bidding.budget import evaluate_budget
 from src.bidding.checks import build_allowed
 from src.bidding.config import BidSettings
 from src.bidding.context import TenderContext
@@ -58,6 +59,7 @@ class _RunHooks:
     run_id: str
     generation_token: str
     version_keep: int = 50
+    budget_stopped: bool = False
 
     async def update_section(self, section_id: str, **fields: Any) -> None:
         updated = await self.repo.update_section(
@@ -88,6 +90,8 @@ class _RunHooks:
             logger.warning("could not persist Redis job progress", exc_info=True)
 
     async def is_cancelled(self) -> bool:
+        if self.budget_stopped:
+            return True
         run = await self.repo.get_run(self.run_id)
         return bool(run and run.cancel_requested)
 
@@ -291,6 +295,37 @@ async def execute_staged_bid_job(
             generation_token=generation_token,
             version_keep=bid_settings.section_version_keep,
         )
+        budget_stop_message: str | None = None
+        budget_warned = False
+
+        async def check_budget() -> None:
+            nonlocal budget_stop_message, budget_warned
+            if bid_settings.run_budget_cents <= 0:
+                return
+            try:
+                usage = await repo.get_run_usage(run_id)
+            except Exception:  # noqa: BLE001 - budget is best-effort
+                logger.warning(
+                    "could not read run usage for budget check", exc_info=True
+                )
+                return
+            decision = evaluate_budget(
+                budget_cents=bid_settings.run_budget_cents,
+                enforcement=bid_settings.budget_enforcement,
+                cost_cny=usage.cost_cny if usage is not None else 0.0,
+            )
+            if not decision.exceeded:
+                return
+            if decision.stop:
+                hooks.budget_stopped = True
+                if budget_stop_message is None:
+                    budget_stop_message = decision.message
+                    warnings.append(decision.message)
+            elif not budget_warned:
+                budget_warned = True
+                warnings.append(decision.message)
+
+        await check_budget()
         await repo.update_run(
             run_id,
             stage="planning",
@@ -335,6 +370,7 @@ async def execute_staged_bid_job(
                         item.section_id,
                         exc_info=True,
                     )
+            await check_budget()
 
         outcome = await generate_sections(
             context=context,
@@ -429,7 +465,19 @@ async def execute_staged_bid_job(
             outcome.cancelled
             or (latest_run is not None and latest_run.cancel_requested)
         )
-        if cancelled:
+        if budget_stop_message is not None:
+            status = "paused"
+            await repo.update_run(
+                run_id,
+                status=status,
+                stage="paused",
+                percent=65,
+                message=budget_stop_message,
+                warnings=warnings,
+                error=None,
+                finished_at=_now(),
+            )
+        elif cancelled:
             status = "paused"
             await repo.update_run(
                 run_id,

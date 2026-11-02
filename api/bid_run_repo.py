@@ -21,6 +21,7 @@ from .database import (
     BidRunRow,
     BidSectionStateRow,
     BidSectionVersionRow,
+    ExternalUsageRow,
     FeedbackEventRow,
     LlmCallLogRow,
     NotificationRow,
@@ -174,6 +175,38 @@ class SectionVersionRecord:
     review_summary: str | None
     created_by: str | None
     created_by_name: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RunUsageRecord:
+    run_id: str
+    project_id: str
+    llm_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_cny: float
+    retries: int
+    fallback_calls: int
+    duration_ms: int
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalUsageRecord:
+    id: int
+    project_id: str | None
+    doc_id: str | None
+    job_id: str | None
+    provider: str
+    operation: str
+    units: int
+    unit_type: str
+    cost_cny: float | None
+    status: str
+    latency_ms: int | None
+    metadata: dict[str, Any]
     created_at: datetime
 
 
@@ -409,6 +442,40 @@ def _notification_record(row: NotificationRow) -> NotificationRecord:
         actor_name=row.actor_name,
         dedupe_key=row.dedupe_key,
         read_at=row.read_at,
+        created_at=row.created_at,
+    )
+
+
+def _run_usage_record(row: RunUsageRow) -> RunUsageRecord:
+    return RunUsageRecord(
+        run_id=row.run_id,
+        project_id=row.project_id,
+        llm_calls=int(row.llm_calls or 0),
+        prompt_tokens=int(row.prompt_tokens or 0),
+        completion_tokens=int(row.completion_tokens or 0),
+        total_tokens=int(row.total_tokens or 0),
+        cost_cny=float(row.cost_cny or 0.0),
+        retries=int(row.retries or 0),
+        fallback_calls=int(row.fallback_calls or 0),
+        duration_ms=int(row.duration_ms or 0),
+        updated_at=row.updated_at,
+    )
+
+
+def _external_usage_record(row: ExternalUsageRow) -> ExternalUsageRecord:
+    return ExternalUsageRecord(
+        id=int(row.id),
+        project_id=row.project_id,
+        doc_id=row.doc_id,
+        job_id=row.job_id,
+        provider=row.provider,
+        operation=row.operation,
+        units=int(row.units or 0),
+        unit_type=row.unit_type,
+        cost_cny=row.cost_cny,
+        status=row.status,
+        latency_ms=row.latency_ms,
+        metadata=dict(row.usage_metadata or {}),
         created_at=row.created_at,
     )
 
@@ -1813,6 +1880,48 @@ class BidRunRepository:
                 record = _quality_record(row) if row is not None else None
         return record
 
+    async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
+        async with self._session_factory() as session:
+            row = await session.get(RunUsageRow, run_id)
+        return _run_usage_record(row) if row is not None else None
+
+    async def add_external_usage(
+        self, rows: list[dict[str, Any]]
+    ) -> list[ExternalUsageRecord]:
+        if not rows:
+            return []
+        objects = [
+            ExternalUsageRow(
+                project_id=row.get("project_id") or None,
+                doc_id=row.get("doc_id") or None,
+                job_id=row.get("job_id") or None,
+                provider=str(row["provider"]),
+                operation=str(row["operation"]),
+                units=max(0, int(row.get("units") or 0)),
+                unit_type=str(row.get("unit_type") or "unit")[:16],
+                cost_cny=(
+                    float(row["cost_cny"])
+                    if row.get("cost_cny") is not None
+                    else None
+                ),
+                status=str(row.get("status") or "ok")[:16],
+                latency_ms=(
+                    int(row["latency_ms"])
+                    if row.get("latency_ms") is not None
+                    else None
+                ),
+                usage_metadata=dict(row.get("metadata") or {}),
+                created_at=_now(),
+            )
+            for row in rows
+        ]
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add_all(objects)
+                await session.flush()
+                records = [_external_usage_record(row) for row in objects]
+        return records
+
     async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
         window = max(1, min(int(days), 365))
         start = _now() - timedelta(days=window)
@@ -1891,6 +2000,27 @@ class BidRunRepository:
                     .group_by(FeedbackEventRow.reason)
                     .order_by(func.count(FeedbackEventRow.id).desc())
                     .limit(10)
+                )
+            ).all()
+            external = (
+                await session.execute(
+                    select(
+                        func.count(ExternalUsageRow.id),
+                        func.coalesce(func.sum(ExternalUsageRow.units), 0),
+                        func.coalesce(func.sum(ExternalUsageRow.cost_cny), 0.0),
+                    ).where(ExternalUsageRow.created_at >= start)
+                )
+            ).one()
+            external_by_provider = (
+                await session.execute(
+                    select(
+                        ExternalUsageRow.provider,
+                        func.count(ExternalUsageRow.id),
+                        func.coalesce(func.sum(ExternalUsageRow.units), 0),
+                        func.coalesce(func.sum(ExternalUsageRow.cost_cny), 0.0),
+                    )
+                    .where(ExternalUsageRow.created_at >= start)
+                    .group_by(ExternalUsageRow.provider)
                 )
             ).all()
             quality = (
@@ -2058,6 +2188,19 @@ class BidRunRepository:
                     for reason, count in reason_rows
                 ],
             },
+            "external": {
+                "records": int(external[0] or 0),
+                "units": int(external[1] or 0),
+                "cost_cny": round(float(external[2] or 0), 4),
+                "by_provider": {
+                    str(provider): {
+                        "records": int(records),
+                        "units": int(units),
+                        "cost_cny": round(float(cost or 0), 4),
+                    }
+                    for provider, records, units, cost in external_by_provider
+                },
+            },
             "quality": {
                 "snapshots": int(quality[0] or 0),
                 "by_gate": {
@@ -2080,11 +2223,13 @@ __all__ = [
     "BidCommentRecord",
     "BidRunRecord",
     "BidRunRepository",
+    "ExternalUsageRecord",
     "FeedbackRecord",
     "NotificationRecord",
     "NotificationRecipient",
     "OutlineSectionRecord",
     "QualitySnapshotRecord",
+    "RunUsageRecord",
     "SectionStateRecord",
     "SectionVersionRecord",
 ]

@@ -7,7 +7,7 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .artifacts import (
     atomic_write_json,
@@ -293,6 +293,7 @@ def parse_document(
 
     # ---- ingest ----
     ingested = False
+    fresh_ingest_summary: dict[str, Any] | None = None
     collection_name: str | None = options.collection or settings.chroma_collection
     started = time.perf_counter()
     if options.ingest:
@@ -331,6 +332,7 @@ def parse_document(
                         store=store,
                         collection=collection_name,
                     )
+                    fresh_ingest_summary = summary
                     atomic_write_json(ingest_path, summary)
                     ingested = True
             except IngestError as exc:
@@ -353,6 +355,64 @@ def parse_document(
     else:
         status = "failed"
 
+    external_usage: list[dict[str, Any]] = []
+    if document.parser_used == "mineru":
+        pages = max(0, int(document.page_count or 0))
+        cost = (
+            round(pages * settings.mineru_price_per_page_cny, 6)
+            if pages and settings.mineru_price_per_page_cny > 0
+            else None
+        )
+        external_usage.append(
+            {
+                "provider": "mineru",
+                "operation": "parse",
+                "units": pages,
+                "unit_type": "page",
+                "cost_cny": cost,
+                "status": "ok",
+                "latency_ms": int(timings.get("parse", 0) * 1000),
+                "metadata": {
+                    "model": settings.mineru_model_version,
+                    "parser_requested": options.parser,
+                },
+            }
+        )
+    embedding_usage = (
+        (fresh_ingest_summary or {}).get("embedding_usage") or {}
+    )
+    embedding_calls = int(embedding_usage.get("calls") or 0)
+    if embedding_calls:
+        tokens = int(embedding_usage.get("total_tokens") or 0)
+        texts = int(embedding_usage.get("texts") or 0)
+        units = tokens or texts
+        cost = (
+            round(
+                tokens / 1000.0
+                * settings.embedding_price_per_1k_tokens_cny,
+                6,
+            )
+            if tokens and settings.embedding_price_per_1k_tokens_cny > 0
+            else None
+        )
+        external_usage.append(
+            {
+                "provider": "zhipu",
+                "operation": "embedding",
+                "units": units,
+                "unit_type": "token" if tokens else "text",
+                "cost_cny": cost,
+                "status": "ok",
+                "latency_ms": int(timings.get("ingest", 0) * 1000),
+                "metadata": {
+                    "model": settings.embedding_model,
+                    "calls": embedding_calls,
+                    "texts": texts,
+                    "chunks": len(chunks),
+                },
+            }
+        )
+
     return ParseResult(
         ok=exit_code == EXIT_OK,
         status=status,
@@ -370,4 +430,5 @@ def parse_document(
         collection=collection_name if options.ingest else None,
         warnings=list(dict.fromkeys(warnings)),
         timings_seconds=timings,
+        external_usage=external_usage,
     )
