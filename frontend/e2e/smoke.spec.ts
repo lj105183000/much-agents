@@ -81,6 +81,9 @@ test('admin creates a bid run and resolves a review comment', async ({
 
   await logout(page)
   await login(page, VIEWER_USERNAME, VIEWER_PASSWORD)
+  // The bell is keyed by project; wait for project context and unread load
+  // before opening it, otherwise the remount closes the dropdown.
+  await expect(page.getByTestId('notification-bell')).toContainText('1')
   await page.getByTestId('notification-bell').click()
   const assignment = page
     .getByTestId('notification-item')
@@ -102,6 +105,22 @@ test('viewer is read-only', async ({ page }) => {
   await expect(
     page.getByRole('button', { name: '创建大纲' }),
   ).toBeDisabled()
+  await logout(page)
+})
+
+test('company qualification registry shows the seeded certificate', async ({
+  page,
+}) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await navigate(page, /公司库/)
+  await expect(page.getByText('E2E 建设有限公司')).toBeVisible()
+  await page.getByRole('button', { name: '资质' }).first().click()
+  const item = page
+    .getByTestId('qualification-item')
+    .filter({ hasText: '市政公用工程施工总承包二级' })
+  await expect(item).toBeVisible()
+  await expect(item).toContainText('E2E-D123456789')
+  await page.keyboard.press('Escape')
   await logout(page)
 })
 

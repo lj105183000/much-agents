@@ -142,6 +142,7 @@ def write_staged_outputs(
     requirements: dict[str, Any] | None = None,
     citations: dict[str, Any] | None = None,
     image_width_cm: float = 15.5,
+    docx_template: str = "",
 ) -> dict[str, Any]:
     root = ensure_dir(Path(output_dir))
     sections_dir = ensure_dir(root / "sections")
@@ -152,6 +153,7 @@ def write_staged_outputs(
         title=f"{context.facts.project_name} 投标文件",
         asset_dir=root,
         image_width_cm=image_width_cm,
+        template_path=docx_template or None,
     )
     report = dict(assembly.report)
     if extra_report:

@@ -49,6 +49,7 @@ interface BidViewProps {
   initialCompanyId: string | null
   initialRunId: string | null
   pdfExportAvailable: boolean
+  docExportAvailable: boolean
   onRunChange: (runId: string | null) => void
   onNavigate: (view: ViewKey) => void
   onActiveJobChange: (jobId: string | null) => void
@@ -78,6 +79,7 @@ export function BidView({
   initialCompanyId,
   initialRunId,
   pdfExportAvailable,
+  docExportAvailable,
   onRunChange,
   onNavigate,
   onActiveJobChange,
@@ -113,6 +115,7 @@ export function BidView({
   const [complianceRefresh, setComplianceRefresh] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
+  const [exportingDoc, setExportingDoc] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [preview, setPreview] = useState<BidSectionDetail | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -514,6 +517,43 @@ export function BidView({
       }
     } finally {
       setExportingPdf(false)
+    }
+  }
+
+  const exportDoc = async (force: boolean) => {
+    if (!runId) return
+    if (
+      force &&
+      !window.confirm(
+        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
+      )
+    ) {
+      return
+    }
+    setExportingDoc(true)
+    setExportError(null)
+    try {
+      const blob = await api.exportBidRunDoc(runId, force)
+      const name = safeFilename(run?.project_name || docId || runId || '投标文件')
+      downloadBlob(blob, `${name}-投标文件.doc`)
+      if (force) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } catch (caught) {
+      setExportError(
+        caught instanceof ApiError ? caught.message : 'DOC 导出失败',
+      )
+      if (runId) {
+        void api
+          .getBidGate(runId)
+          .then((response) => setGate(response))
+          .catch(() => undefined)
+      }
+    } finally {
+      setExportingDoc(false)
     }
   }
 
@@ -1046,10 +1086,13 @@ export function BidView({
               onReject={(reason) => void rejectRun(reason)}
               exporting={exporting}
               exportingPdf={exportingPdf}
+              exportingDoc={exportingDoc}
               pdfAvailable={pdfExportAvailable}
+              docAvailable={docExportAvailable}
               exportError={exportError}
               onExport={(force) => void exportDocx(force)}
               onExportPdf={(force) => void exportPdf(force)}
+              onExportDoc={(force) => void exportDoc(force)}
             />
           ) : null}
 

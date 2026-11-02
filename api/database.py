@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -41,6 +42,45 @@ class CompanyRow(Base):
     bank_name: Mapped[str | None] = mapped_column(String(255))
     bank_account: Mapped[str | None] = mapped_column(String(128))
     profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CompanyQualificationRow(Base):
+    __tablename__ = "company_qualifications"
+    __table_args__ = (
+        Index(
+            "ix_company_qualifications_company_expiry",
+            "company_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    qualification_type: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("''")
+    )
+    certificate_no: Mapped[str | None] = mapped_column(String(128))
+    issuer: Mapped[str | None] = mapped_column(String(128))
+    issued_at: Mapped[date | None] = mapped_column(Date)
+    expires_at: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

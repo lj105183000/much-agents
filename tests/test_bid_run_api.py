@@ -570,6 +570,73 @@ def test_bid_run_pdf_export_reports_converter_failure(
         assert "LibreOffice" in exported.json()["detail"]
 
 
+def test_bid_run_doc_export_uses_converter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    doc_magic = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+    def fake_convert(docx_path, doc_path, **kwargs):
+        Path(doc_path).write_bytes(doc_magic + b"fake word 97 body")
+        return Path(doc_path)
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_doc", fake_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/doc?force=true&reason=test"
+        )
+        assert exported.status_code == 200, exported.text
+        assert exported.content.startswith(doc_magic)
+        assert "bid.doc" in exported.headers["content-disposition"]
+
+        run_dir = tmp_path / "bids" / "doc-1" / run_id
+        assert (run_dir / "bid.doc").is_file()
+        edited = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "修改后正文，需要重新导出 DOC。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert not (run_dir / "bid.doc").is_file()
+
+
+def test_bid_run_doc_export_reports_converter_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from src.bidding.doc_export import DocExportError
+
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+
+    def failing_convert(docx_path, doc_path, **kwargs):
+        raise DocExportError("LibreOffice is not installed")
+
+    monkeypatch.setattr("api.bid_runs.convert_docx_to_doc", failing_convert)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assert client.post(f"/api/bid-runs/{run_id}/assemble").status_code == 200
+
+        exported = client.post(
+            f"/api/bid-runs/{run_id}/export/doc?force=true&reason=test"
+        )
+        assert exported.status_code == 503
+        assert "LibreOffice" in exported.json()["detail"]
+
+
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(
         tmp_path, require_approval=True

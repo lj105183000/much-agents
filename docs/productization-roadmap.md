@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF 导出（Headless LibreOffice），P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -289,23 +289,22 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 ## 6. P3 — 交付物与复用（25–30 人日）
 
-### 6.1 高保真 DOCX/PDF
+### 6.1 高保真 DOCX/PDF（PDF/DOC 已实现，复杂排版待补）
 
-- DOCX：页眉页脚、页码域、目录域、分节、样式、图表题注与交叉引用、编号；`python-docx` 扩展 + `docxtpl` 模板注入。
-- PDF：LibreOffice headless（独立容器/队列）转换，内置 Noto CJK 字体；失败回退并提示。
+- DOCX：页眉页脚、页码域、目录域、分节、样式、图表题注与交叉引用、编号；`python-docx` 扩展 + 可选全局 DOCX 样式模板（`BID_DOCX_TEMPLATE`，保留模板页边距/页眉页脚/样式）。
+- PDF/DOC：LibreOffice headless 转换（PDF 与 Word 97-2003），内置 Noto CJK 字体；DOC 校验 OLE magic 与缓存失效；失败提示。
 - 交付检查：目录可更新、页码存在、图片嵌入且 DPI 达标、字体不缺失、图表编号连续、页数上限；进入 gate（先 warn 后 block）。
 - TOC 域需在 Word/LibreOffice 更新；导出时尝试自动更新，失败则明确提示。
 
-### 6.2 模板管理
+### 6.2 模板管理（最小版已实现）
 
-- `templates` 表 + MinIO（项目级/组织级）；DOCX 封面/页眉页脚/样式模板，变量 JSON Schema 校验；未知/缺失变量阻断导出。
-- 模板版本化、预览、启用/停用；后续再支持整本文档模板。
+- 已实现可选的全局 DOCX 样式模板：保留页边距/页眉页脚/样式，清空示例正文后写入生成内容；没有模板库/UI/版本化/变量校验。
+- 尚未实现：`templates` 表 + MinIO（项目级/组织级）、变量 JSON Schema、未知/缺失变量阻断、模板版本化/预览/启停、整本文档模板。
 
-### 6.3 企业资质与资料库
+### 6.3 企业资质与资料库（资质 CRUD 已实现）
 
-- `company_assets`：资质证书、人员证书、业绩、财务；字段含证书号、有效期、扫描件私有对象、核验状态。
-- 到期提醒（P2 通知 + beat 任务）；投标时从资产库生成 profile 片段，保留出处。
-- 敏感字段继续按角色掩码；资产文件不进公开 artifact allowlist。
+- 已实现 `company_qualifications`：资质名称/类型/证书号/发证机关/发证与到期日/备注；API CRUD、到期 30 天状态徽章、审计与前端弹窗。
+- 尚未实现：扫描件私有对象、人员证书/业绩/财务统一资产库、核验状态、到期提醒（P2 通知 + beat 任务）、从资产库生成 profile 片段并保留出处。
 
 ### 6.4 跨标书内容复用
 

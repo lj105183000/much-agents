@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -21,6 +21,7 @@ class HealthResponse(BaseModel):
     storage_backend: Literal["local", "minio"] = "local"
     storage_ok: bool = True
     pdf_export_available: bool = False
+    doc_export_available: bool = False
 
 
 class JobCreatedResponse(BaseModel):
@@ -717,6 +718,70 @@ class CompanyDetail(CompanySummary):
 
 class CompanyListResponse(BaseModel):
     companies: list[CompanySummary] = Field(default_factory=list)
+
+
+class CompanyQualificationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    qualification_type: str = Field(default="", max_length=64)
+    certificate_no: str | None = Field(default=None, max_length=128)
+    issuer: str | None = Field(default=None, max_length=128)
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
+
+class CompanyQualificationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    qualification_type: str | None = Field(default=None, max_length=64)
+    certificate_no: str | None = Field(default=None, max_length=128)
+    issuer: str | None = Field(default=None, max_length=128)
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
+
+class CompanyQualificationView(BaseModel):
+    id: str
+    company_id: str
+    name: str
+    qualification_type: str = ""
+    certificate_no: str | None = None
+    issuer: str | None = None
+    issued_at: date | None = None
+    expires_at: date | None = None
+    notes: str = ""
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CompanyQualificationListResponse(BaseModel):
+    company_id: str
+    qualifications: list[CompanyQualificationView] = Field(
+        default_factory=list
+    )
 
 
 UserRole = Literal["admin", "bid_manager", "writer", "reviewer", "viewer"]

@@ -22,7 +22,11 @@ from api.bid_run_repo import (
     SectionStateRecord,
     SectionVersionRecord,
 )
-from api.companies import CompanyError, CompanyRecord
+from api.companies import (
+    CompanyError,
+    CompanyQualificationRecord,
+    CompanyRecord,
+)
 from api.config import ApiSettings
 from api.jobs import Job, JobStore, JobStoreError
 from api.projects import (
@@ -1840,6 +1844,7 @@ class FakeAuditRepository:
 class FakeCompanyService:
     def __init__(self) -> None:
         self.records: dict[str, CompanyRecord] = {}
+        self.qualifications: dict[str, CompanyQualificationRecord] = {}
 
     async def init(self) -> None:
         return None
@@ -1917,6 +1922,118 @@ class FakeCompanyService:
 
     async def delete(self, company_id: str) -> bool:
         return self.records.pop(company_id, None) is not None
+
+    def _validate_qualification(
+        self, name: str, issued_at, expires_at
+    ) -> str:
+        clean = (name or "").strip()
+        if not clean:
+            raise CompanyError(400, "资质名称不能为空")
+        if issued_at and expires_at and expires_at < issued_at:
+            raise CompanyError(422, "到期日期不能早于发证日期")
+        return clean
+
+    async def list_qualifications(
+        self, company_id: str
+    ) -> list[CompanyQualificationRecord]:
+        if company_id not in self.records:
+            raise CompanyError(404, "公司不存在")
+        rows = [
+            record
+            for record in self.qualifications.values()
+            if record.company_id == company_id
+        ]
+        rows.sort(key=lambda record: record.expires_at or datetime.max.date())
+        return rows
+
+    async def create_qualification(
+        self,
+        company_id: str,
+        *,
+        name: str,
+        qualification_type: str,
+        certificate_no: str | None,
+        issuer: str | None,
+        issued_at,
+        expires_at,
+        notes: str,
+        created_by: str | None,
+    ) -> CompanyQualificationRecord:
+        if company_id not in self.records:
+            raise CompanyError(404, "公司不存在")
+        clean = self._validate_qualification(name, issued_at, expires_at)
+        now = datetime.now(timezone.utc)
+        record = CompanyQualificationRecord(
+            id=uuid4().hex,
+            company_id=company_id,
+            name=clean,
+            qualification_type=(qualification_type or "").strip(),
+            certificate_no=(certificate_no or "").strip() or None,
+            issuer=(issuer or "").strip() or None,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            notes=(notes or "").strip(),
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+        )
+        self.qualifications[record.id] = record
+        return record
+
+    async def update_qualification(
+        self,
+        company_id: str,
+        qualification_id: str,
+        *,
+        fields: dict[str, Any],
+    ) -> CompanyQualificationRecord | None:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            return None
+        values = {
+            key: value
+            for key, value in fields.items()
+            if key
+            in {
+                "name",
+                "qualification_type",
+                "certificate_no",
+                "issuer",
+                "issued_at",
+                "expires_at",
+                "notes",
+            }
+        }
+        if "name" in values and values["name"] is None:
+            raise CompanyError(422, "资质名称不能为空")
+        if "name" in values:
+            values["name"] = self._validate_qualification(
+                str(values["name"]),
+                values.get("issued_at", existing.issued_at),
+                values.get("expires_at", existing.expires_at),
+            )
+        elif "issued_at" in values or "expires_at" in values:
+            self._validate_qualification(
+                existing.name,
+                values.get("issued_at", existing.issued_at),
+                values.get("expires_at", existing.expires_at),
+            )
+        updated = replace(
+            existing,
+            updated_at=datetime.now(timezone.utc),
+            **values,
+        )
+        self.qualifications[qualification_id] = updated
+        return updated
+
+    async def delete_qualification(
+        self, company_id: str, qualification_id: str
+    ) -> bool:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            return False
+        del self.qualifications[qualification_id]
+        return True
 
 
 class FakeAuthRepository:

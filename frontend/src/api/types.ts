@@ -79,6 +79,7 @@ export interface HealthResponse {
   storage_backend: 'local' | 'minio'
   storage_ok: boolean
   pdf_export_available: boolean
+  doc_export_available: boolean
 }
 
 export interface JobCreatedResponse {
@@ -246,6 +247,38 @@ export interface CompanyDetail extends CompanySummary {
 export interface CompanyListResponse {
   companies: CompanySummary[]
 }
+
+export interface CompanyQualification {
+  id: string
+  company_id: string
+  name: string
+  qualification_type: string
+  certificate_no: string | null
+  issuer: string | null
+  issued_at: string | null
+  expires_at: string | null
+  notes: string
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CompanyQualificationListResponse {
+  company_id: string
+  qualifications: CompanyQualification[]
+}
+
+export interface CompanyQualificationInput {
+  name: string
+  qualification_type?: string
+  certificate_no?: string | null
+  issuer?: string | null
+  issued_at?: string | null
+  expires_at?: string | null
+  notes?: string
+}
+
+export type CompanyQualificationUpdate = Partial<CompanyQualificationInput>
 
 export interface CompanyUpsertRequest {
   profile: Record<string, unknown>

@@ -35,7 +35,7 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `src/bidding/` | LangGraph 写作、大纲、合规、一致性、修复方案、配图 |
 | `src/storage/` | 本地 / MinIO 对象存储与 hydration |
 | `src/mcp_client/` | 白名单 MCP 客户端 |
-| `migrations/` | Alembic 迁移（`0001`–`0015`） |
+| `migrations/` | Alembic 迁移（`0001`–`0016`） |
 | `frontend/` | React 19 + TypeScript + TailwindCSS 4 + Electron |
 | `deploy/` | Nginx/TLS、生产 Compose 环境模板 |
 | `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测 |
@@ -147,6 +147,7 @@ uv run python -m scripts.load_test --endpoint health --endpoint runs
 - [前端 E2E 与压测](docs/e2e-and-load-testing.md)
 - [站内通知、Webhook 与 SMTP](docs/notifications.md)
 - [干净主机生产验收](docs/production-acceptance.md)
+- [DOC 导出、DOCX 模板与企业资质库](docs/export-and-qualifications.md)
 - [产品化路线图](docs/productization-roadmap.md)
 - [生产就绪与评测路线图](docs/production-readiness.md)
 - [产品设计与技术架构演示（PPT）](docs/presentation/much-agents-product-architecture.pptx)
@@ -156,7 +157,7 @@ uv run python -m scripts.load_test --endpoint health --endpoint runs
 
 ## 状态与未实现项
 
-P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）、审批 UI（意见/override/历史/内容哈希提示）、经 Headless LibreOffice 的 PDF 导出、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，以及需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）。浏览器 E2E（Playwright，隔离 PostgreSQL 栈）、只读 HTTP/SSE 压测、站内通知与可选 Webhook/SMTP、干净主机验收工具 `scripts/acceptance_check.py` 已落地。尚未完成：真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）、远程 CI 结果确认、DOC（97-2003）导出、Alertmanager 真实通知渠道、MCP OAuth 与前端配置 UI、Cosign 签名、L1/L2 评测校准。
+P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产验收（认证/RBAC、项目隔离、审计、MinIO 降级、重启持久化、备份恢复）；已完成完整真实 profile 11 节生成/组装/门禁/审批/DOCX 导出演练，新增附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）、审批 UI（意见/override/历史/内容哈希提示）、经 Headless LibreOffice 的 PDF 导出、章节版本历史/diff/恢复、评审评论/@提及/指派与 SSE 实时进度，以及需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）。浏览器 E2E（Playwright，隔离 PostgreSQL 栈）、只读 HTTP/SSE 压测、站内通知与可选 Webhook/SMTP、DOC（Word 97-2003）导出、可选 DOCX 样式模板、企业资质库、干净主机验收工具 `scripts/acceptance_check.py` 已落地。尚未完成：真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）、远程 CI 结果确认、多模板库/模板 UI、资质扫描件与到期自动通知、Alertmanager 真实通知渠道、MCP OAuth 与前端配置 UI、Cosign 签名、L1/L2 评测校准。
 
 ## License
 

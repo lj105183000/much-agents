@@ -11,11 +11,13 @@ import argparse
 import asyncio
 import json
 import os
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.auth import AuthPolicy, AuthRepository, AuthService
+from api.companies import CompanyService
 from api.projects import DEFAULT_PROJECT_ID, ProjectRepository, ProjectService
 
 E2E_DOC_ID = "e2e-doc"
@@ -287,6 +289,45 @@ async def seed(database_url: str, root: Path) -> dict[str, str]:
             "e2e-tender.pdf",
             admin.id,
         )
+
+        company_service = CompanyService(
+            database_url,
+            engine=engine,
+            session_factory=factory,
+        )
+        companies = await company_service.list(limit=100)
+        company = next(
+            (
+                item
+                for item in companies
+                if item.company_name == "E2E 建设有限公司"
+            ),
+            None,
+        )
+        if company is None:
+            company = await company_service.create(
+                {
+                    "company": {
+                        "name": "E2E 建设有限公司",
+                        "credit_code": "91110000E2E0000001",
+                        "address": "北京市 E2E 测试区",
+                        "phone": "010-88886666",
+                    }
+                }
+            )
+        existing = await company_service.list_qualifications(company.id)
+        if not existing:
+            await company_service.create_qualification(
+                company.id,
+                name="市政公用工程施工总承包二级",
+                qualification_type="施工资质",
+                certificate_no="E2E-D123456789",
+                issuer="E2E 省住建厅",
+                issued_at=date(2024, 1, 1),
+                expires_at=date(2030, 12, 31),
+                notes="E2E 资质库样本",
+                created_by=admin.id,
+            )
     finally:
         await engine.dispose()
 
@@ -298,6 +339,8 @@ async def seed(database_url: str, root: Path) -> dict[str, str]:
         "viewer_username": VIEWER_USERNAME,
         "viewer_password": VIEWER_PASSWORD,
         "sample_pdf": str(sample_pdf.resolve()),
+        "company_id": company.id,
+        "company_name": company.company_name,
     }
     (root / "seed.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"

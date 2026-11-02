@@ -37,6 +37,7 @@ DERIVED_REPORT_FILES: tuple[str, ...] = (
     "requirements.json",
     "citations.json",
     "bid.pdf",
+    "bid.doc",
 )
 
 
