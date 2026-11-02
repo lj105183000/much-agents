@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 export type Theme = 'dark' | 'light'
 
-const STORAGE_KEY = 'much-agents:theme:v1'
+const STORAGE_KEY = 'much-agents:theme:v2'
 
 function readTheme(): Theme {
   if (typeof document !== 'undefined') {
@@ -15,7 +15,7 @@ function readTheme(): Theme {
   } catch {
     // Ignore restricted storage contexts.
   }
-  return 'dark'
+  return 'light'
 }
 
 export function useTheme() {
@@ -26,7 +26,7 @@ export function useTheme() {
     document.documentElement.style.colorScheme = theme
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'dark' ? '#020617' : '#f8fafc')
+      ?.setAttribute('content', theme === 'dark' ? '#020617' : '#ffffff')
     try {
       window.localStorage.setItem(STORAGE_KEY, theme)
     } catch {

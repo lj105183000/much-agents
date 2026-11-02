@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "license": "AGPL-3.0-or-later",
-  "description": "多 Agent 标书编写系统桌面端",
+  "description": "标书哨兵 · 多 Agent 标书编写系统桌面端",
   "author": "lj105183000",
   "type": "module",
   "main": "electron/main.cjs",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.muchagents.app",
-    "productName": "MuchAgents",
+    "productName": "标书哨兵",
     "directories": {
       "output": "release"
     },
