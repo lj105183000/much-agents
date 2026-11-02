@@ -82,6 +82,54 @@ jobs:
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: much_agents
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: much_agents
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U much_agents -d much_agents"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      E2E_DATABASE_URL: postgresql+asyncpg://much_agents:ci_password@127.0.0.1:5432/much_agents_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run browser E2E against an isolated database
+        run: uv run python scripts/run_e2e.py --database-url "$E2E_DATABASE_URL"
+      - name: Upload E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics
+          if-no-files-found: ignore
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            .e2e/logs
+
   docker:
     runs-on: ubuntu-latest
     steps:

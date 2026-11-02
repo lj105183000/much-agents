@@ -48,3 +48,10 @@ dist/
 release/
 *.tsbuildinfo
 .vite/
+
+# E2E / load-test artifacts
+.e2e/
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/playwright/.cache/

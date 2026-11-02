@@ -1,7 +1,7 @@
 # 第三方组件与许可证声明
 
 > 项目：Much Agents 0.1.0（多 Agent 标书编写系统）
-> 更新日期：2026-10-24
+> 更新日期：2026-11-02
 > 适用范围：本仓库源码、Docker 镜像、Electron 桌面端及前端静态站点所包含的第三方组件。
 
 本文件汇总本项目使用的主要第三方组件及其许可证，供再分发与合规审查使用。它是归属信息汇总，**不构成法律意见**；再分发前请核对各上游项目的最新许可证与版权声明。若本文件与上游许可证原文冲突，以上游原文为准。
@@ -122,7 +122,7 @@ MPL-2.0 是文件级 copyleft：只要不修改 MPL 覆盖的文件，可与 AGP
 
 ### 4.3 构建与开发依赖
 
-`vite`、`typescript`、`tailwindcss`、`@vitejs/plugin-react`、`oxlint`、`vitest`、`electron`、`electron-builder` 等仅用于构建/开发，不进入浏览器运行时产物。它们自身的许可证以 `frontend/package-lock.json` 与各包 `LICENSE` 为准。
+`vite`、`typescript`、`tailwindcss`、`@vitejs/plugin-react`、`oxlint`、`vitest`、`@playwright/test`、`electron`、`electron-builder` 等仅用于构建/开发（`@playwright/test` 为 Apache-2.0，仅用于 E2E），不进入浏览器运行时产物。它们自身的许可证以 `frontend/package-lock.json` 与各包 `LICENSE` 为准。
 
 ### 4.4 Electron 桌面端
 

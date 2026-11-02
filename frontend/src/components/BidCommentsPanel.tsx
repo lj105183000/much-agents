@@ -130,7 +130,6 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
       setAssigneeId('')
       setSectionId('')
       await load()
-      setFilter('open')
     } catch (caught) {
       setError(errorMessage(caught, '评论发表失败'))
     } finally {
@@ -231,6 +230,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
         <div className="mt-4 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
           <Field label="发表评论">
             <textarea
+              data-testid="comment-body"
               className={cn(textareaClass, 'min-h-20')}
               value={body}
               maxLength={4000}
@@ -302,6 +302,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
           ) : null}
           <div className="flex justify-end">
             <Button
+              data-testid="comment-submit"
               size="sm"
               loading={creating}
               disabled={!body.trim()}
@@ -334,6 +335,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
             return (
               <article
                 key={comment.comment_id}
+                data-testid="comment-card"
                 className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
