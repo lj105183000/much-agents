@@ -44,3 +44,39 @@ jobs:
         with:
           name: eval-regression
           path: ${{ runner.temp }}/regression.json
+
+  benchmark:
+    # Budget-capped real-LLM latency/token/cost benchmark.
+    # Enable with repository variable LLM_BENCHMARK_ENABLED=true and secrets
+    # DEEPSEEK_API_KEY + LLM_PRICE_TABLE. Set BENCHMARK_BASELINE to a report
+    # path on the runner (or download a previous artifact) to gate regressions.
+    if: ${{ vars.LLM_BENCHMARK_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run budget-capped LLM benchmark
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_PRICE_TABLE: ${{ secrets.LLM_PRICE_TABLE }}
+          BENCHMARK_BASELINE: ${{ vars.BENCHMARK_BASELINE }}
+          BENCHMARK_MAX_COST_CNY: ${{ vars.BENCHMARK_MAX_COST_CNY }}
+        run: |
+          args=(
+            --max-cost-cny "${BENCHMARK_MAX_COST_CNY:-0.5}"
+            --output "$RUNNER_TEMP/llm-benchmark.json"
+          )
+          if [ -n "$BENCHMARK_BASELINE" ]; then
+            args+=(--baseline "$BENCHMARK_BASELINE")
+          fi
+          uv run python -m scripts.eval_benchmark "${args[@]}"
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-benchmark
+          path: ${{ runner.temp }}/llm-benchmark.json

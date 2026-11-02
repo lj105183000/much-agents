@@ -79,6 +79,7 @@ MinIO（大对象） + Prometheus（时序）
 - MinerU：仅当实际使用 `mineru` 解析/OCR 时记录页数；PyMuPDF 回退不计外部用量。
 - Embedding：`ZhipuEmbedder` 从响应 `usage` 累计调用数、文本数、prompt/total tokens，写入 `ingest.json` 摘要并进入账本；缓存命中不重复计入。附件 PDF OCR 与附件 embedding 也计入。
 - 计价：`MINERU_PRICE_PER_PAGE_CNY`、`EMBEDDING_PRICE_PER_1K_TOKENS_CNY`，0 表示只记录用量不算成本。
+- LLM 价格表支持同一模型多个 `effective_from` 条目，按调用日期选择生效价格；详见 [LLM 基准与成本对账](llm-benchmark-and-cost-reconciliation.md)。
 - 运营看板新增外部记录数、单位数、成本与按 provider 拆分。
 
 ## 5. Run 预算
