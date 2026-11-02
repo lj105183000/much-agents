@@ -10,7 +10,7 @@
 
 - **文档解析**：MinerU 云端解析（PyMuPDF 兜底）、目录/页码对齐、表格与页脚清理、DeepSeek 结构化抽取、向量入库。
 - **检索**：Chroma 语义检索，Chroma/智谱不可用时自动回退关键词检索。
-- **多 Agent 写作**：确定性大纲 → 逐节检索 → Writer/Reviewer/Reviser → 组装；支持可编辑大纲、章节续跑、单节编辑与重写。
+- **多 Agent 写作**：3 个核心 Agent（Writer/Reviewer/Reviser，见下文「Agent 工作流」）；确定性大纲 → 逐节检索 → 并行写作 → 审查 → 条件修订 → 组装；支持可编辑大纲、章节续跑、单节编辑与重写。
 - **质量与门禁**：21 项合规检查、跨章节一致性台账、确定性/LLM 修复方案、导出前门禁与严格 DOCX 导出。
 - **AI 配图**：组织架构、工艺流程、进度横道、施工总平面；只使用招标事实与已脱敏正文，不文生图、不编造事实。
 - **认证与隔离**：本地账号、可撤销会话、5 角色 RBAC、项目级 ACL、append-only 审计哈希链。
@@ -42,6 +42,131 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `docs/` | 认证、项目 ACL、审计、对象存储、部署、AI 配图/MCP、E2E/压测 |
 | `tests/` | 后端单元/接口测试（全部 mock 网络） |
 | `frontend/e2e/` | Playwright 浏览器 E2E（真实隔离 API + PostgreSQL） |
+
+## Agent 工作流
+
+写作链路固定使用 **3 个核心 LLM Agent**，均定义在 `src/bidding/agents.py`；只有施工组织设计的叙事章节（最多 11 个）经过它们。表单、附件、检索、组装、合规与门禁均为确定性代码或模板。
+
+| Agent | 职责 | 输入 | 输出 | 失败/降级 |
+|---|---|---|---|---|
+| `WriterAgent` | 逐节起草施工方案正文 | 章节、项目事实、编写简报、检索证据、内容计划、编写重点、资料摘要 | `SectionDraft`（Markdown） | 返回占位稿并标记 `written=False`，不重试；该节 failed，Reviewer 跳过 |
+| `ReviewerAgent` | 先做确定性检查，再用 LLM 做 JSON 审查 | 草稿、项目事实、前 3 条证据、简报、资料摘要 | `SectionReview`（问题、缺失点、覆盖点、是否修订） | LLM 最多尝试 2 次；失败保留确定性检查结果并告警，不阻断 run |
+| `ReviserAgent` | 按审查意见改写需要修订的章节 | 原稿、审查问题、资料摘要（不含检索证据） | `SectionRevision`（接受则新稿，否则原稿） | 异常或未通过验收时保留原稿；默认每节只修订 1 轮 |
+
+```text
+选中的叙事章节（最多 11 个）
+        │
+        ▼
+确定性检索（Chroma/关键词 + 附件 + 可选 MCP 证据）
+        │
+        ▼
+Writer（每节 1 次 LLM）──失败──► 占位稿 + 该节 failed
+        │
+        ▼
+Reviewer（确定性检查 + 最多 2 次 LLM JSON）
+        │
+        ├── 不需要修订 ──► 确定性脱敏/定稿
+        │
+        └── 需要修订 ──► Reviser（1 次 LLM）
+                              │
+                    接受 ─────┴───── 拒绝/异常
+                      │               │
+                 采用修订稿        保留原稿
+                      └───────┬───────┘
+                              ▼
+                     确定性脱敏/定稿
+```
+
+普通章节典型消耗 2 次 LLM 调用（Writer + Reviewer），触发修订时 3 次；默认 `BID_LLM_CONCURRENCY=2`、`BID_MAX_REVIEW_REVISIONS=1`。Writer 不重试；Reviewer 失败会降级为确定性告警；Reviser 失败保留原稿。
+
+**两条执行链路：**
+
+| 链路 | 入口 | 特点 |
+|---|---|---|
+| LangGraph | CLI `python -m src.cli write`、`POST /api/bids` | `plan → research → 并行 write → 并行 review → 条件 revise → 确定性 assemble`；进程内状态，无逐节 DB 检查点，不执行配图/合规/一致性/门禁 |
+| 持久化 run | `POST /api/bid-runs` + `generate/resume` | 逐节检索 → Writer → Reviewer → 条件 Reviser → 确定性定稿；`bid_section_states` 逐节检查点、心跳、取消、预算与用量账本；`resume` 跳过已完成章节；组装后执行配图、需求/引用、21 项合规、一致性、门禁、审批与严格导出 |
+
+**不属于 Agent 的部分：** `FigurePlanner` 是确定性配图数据规划器，仅工艺流程步骤可选 LLM 兜底并做逐字校验；合规修复方案（`fix_plan.py`）的 LLM 只产生候选，最终仍由确定性流程校验/应用；解析与抽取阶段的 DeepSeek 不在写作 Agent 图内。
+
+**已知边界：** Reviewer 只看到前 3 条检索证据；Reviser 不接收检索证据；Writer 失败不自动重试；默认每节 1 轮修订。源码：`src/bidding/agents.py`、`src/bidding/graph.py`、`src/bidding/staged.py`；实现细节见 `CLAUDE.md` 的「多 Agent 投标文件编写」与「持久化投标 run」章节。
+
+## RAG 与防幻觉
+
+RAG 不是独立服务，而是写作链路的一部分：先建向量库，再按章节检索，最后把带编号的证据注入 Agent。防幻觉是在生成前、生成后和交付前做多层约束，不能保证 100% 无幻觉。
+
+### RAG 链路
+
+```text
+招标 PDF ──► 解析/结构对齐 ──► 章节切块（700/120）──► embedding-3 ──► Chroma
+                                                                     │
+每节：标题 + 编写要求 + 项目名 ──► 语义检索（失败回退关键词）◄────────┘
+                                      │
+                         附件 BOQ 专项 query + 可选 MCP 证据
+                                      │
+                                      ▼
+                     Writer 提示词中的带编号证据 + [E编号] 引用要求
+```
+
+- **建库**：`src/parsing/chunking.py` 按 TOC 章节切块；`src/parsing/ingest.py` 调智谱 `embedding-3` 写入 Chroma 集合 `bidding_documents`。
+- **检索**：`src/bidding/retrieval.py` 语义优先；Chroma/智谱不可用或空结果时回退关键词。
+- **附件**：PDF/CSV/XLSX 等工程量清单可追加为附件，检索时额外执行 BOQ 专项 query 并前置合并。
+- **外部证据**：MCP 证据标记为未核实来源，只作线索，最多占总证据预算 1/3。
+- **溯源**：每节 query/mode/hits/页码/文本哈希写入 `retrieval_snapshots`；引用编号按生成时实际提供的证据校验。
+
+### 防幻觉三层
+
+| 层级 | 机制 | 代码 |
+|---|---|---|
+| 生成前 | 只允许项目事实 + 招标证据；缺失事实必须 `【待填写：...】`；公司/人员/证书/业绩/报价/绝对日期不得编造；“拟投入/拟安排”必须标注为方案；MCP 证据不得作为具体事实 | `src/bidding/prompts.py` |
+| 生成后 | 白名单校验金额/日期/证件号；未授权值替换为 `【待填写：...】`；确定性审查 + LLM JSON 审查；修订需通过高危/篇幅/非空验收；`[E编号]` 引用校验 | `src/bidding/checks.py`、`src/bidding/citations.py` |
+| 交付前 | 需求覆盖矩阵、21 项合规、跨章节一致性、导出前门禁；block 时严格导出被拒；`force=true` 仅管理员且记审计 | `src/bidding/requirements.py`、`src/bidding/compliance.py`、`src/bidding/consistency.py`、`src/bidding/gate.py` |
+
+**其他约束：**
+
+- Writer/Reviewer/Reviser 只接收 `BidderProfile.brief()` 非敏感摘要，完整 profile 不进入提示词。
+- AI 配图确定性绘制，不做文生图；缺失数据用明确占位。
+- 解析/抽取阶段的 DeepSeek 与合规修复 LLM 都受各自的确定性校验/回退约束。
+
+**当前边界：**
+
+- RAG 质量取决于招标文件和附件是否完整；图纸/清单未进入文本时无法检索出对应事实。
+- 确定性检查主要覆盖金额、日期、证件号；其他事实性陈述仍依赖 Reviewer LLM，可能漏检。
+- Reviewer 只看到前 3 条证据，Reviser 不接收证据，这是当前链路的主要弱点。
+- 引用覆盖率和需求缺失默认是 warn（`BID_CITATION_MIN_COVERAGE=0.8`、`BID_REQUIREMENTS_BLOCK=false`），管理员可强制导出。
+- 没有 NLI/语义蕴含模型或外部事实核查服务；这是多层约束，不是 100% 保证。
+
+## 知识库
+
+系统的知识库不是通用大模型知识，而是三类持久化资料；写作时只使用它们和当前项目事实。
+
+### 招标文件知识库（项目级）
+
+- **解析产物**：`upload/parsed/<doc_id>/` 保存 `full.md`、`content_list.json`、`toc.json`、`extraction.json`、`chunks.jsonl`、`meta.json`、`ingest.json`；MinIO 模式下 `parsed/<doc_id>/` 是权威对象，本地目录是工作缓存。
+- **切块与向量**：按 TOC 章节切块（默认 700 字 / 120 重叠），智谱 `embedding-3` 写入 Chroma 集合 `bidding_documents`；chunk id 为 `<doc_id>:<section_id>:<ordinal>`。
+- **附件证据**：PDF/CSV/XLSX/XLSM/TXT/MD 可追加；chunk id 为 `<doc_id>:att-<sha12>:<ordinal>`，不删除主文档向量；检索时执行 BOQ 专项 query。
+- **项目隔离**：PostgreSQL `documents` 注册表记录项目归属；检索与文档库按 `X-Project-Id` 过滤，跨项目按 404 处理。
+- **检索入口**：`POST /api/search` 支持 `semantic|keyword|auto`；语义不可用时回退关键词；结果带章节、页码、相关度。
+- **重建与清理**：源文件 sha256 用于缓存；`--force` 重跑；删除附件会同时清理 chunks、Chroma 向量与 MinIO 对象；重新入库会 upsert 并清理旧向量。
+
+### 企业资料库（全局共享）
+
+- PostgreSQL `companies` 保存完整 `BidderProfile` JSONB；`company_qualifications` 保存施工资质、安许、ISO、人员证书及发证/到期日。
+- 公司库全局共享；创建投标 run 时可用 `company_id` 载入资料，也可使用当前编辑的 profile。
+- 完整 profile 仅 admin / bid_manager 可见；其他角色读取公司列表时脱敏，读取单公司时 `profile` 为空。
+- profile 快照只写私有对象 key，不进入检索、MCP 输出、审计 detail 或下载 URL。
+
+### 模板库（项目级）
+
+- DOCX 模板存 `bid_templates` + 私有对象 `private/templates/<project_id>/<id>.docx`；每个项目最多一个启用模板，启用时优先于全局 `BID_DOCX_TEMPLATE`。
+- 模板文件与预览缓存在私有对象前缀；组装时下载到临时目录，结束后清理。
+
+### 边界
+
+- 招标文件知识库按项目隔离；企业资料库全局共享；两者权限模型不同。
+- 不使用 LLM 的通用知识作为事实来源；Writer 只能使用项目事实、检索证据和资料摘要。
+- MCP 外部证据实时获取、不落库、默认不可信；检索快照只记录哈希与元数据，不保存证据原文。
+- 图纸/清单未进入解析文本时，知识库无法补出对应事实；需要 OCR 或作为附件补充。
+- 知识库不包含投标 run 正文、评论、审计等业务数据；这些分别在 run 产物、`bid_comments`、`audit_events` 中。
 
 ## 快速开始
 
