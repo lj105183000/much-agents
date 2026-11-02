@@ -38,16 +38,20 @@ The builder only copies already-parsed artifacts and generates draft labels from
 
 ## Human annotation
 
-1. Review `evaluation_factors.json`: confirm category, factor and `max_score`.
-2. Review `key_facts.json`: confirm values and source pages; remove uncertain facts.
-3. Fill `must_cover_points.json` with 3–8 judgeable points per high-value factor.
-   Do not assign an overall score; mark whether the point appears, whether facts
-   are correct, and whether sections are consistent.
-4. Set `status` to `reviewed` and record the reviewer/date in the file once done.
-5. Run `uv run python -m scripts.eval_dataset mark-reviewed` to sync each
-   `manifest.json` to `reviewed`, then `uv run python -m scripts.eval_dataset validate`.
-5. Keep `must_cover_points.json` and any human section samples in the private
-   directory only.
+```bash
+uv run python -m scripts.eval_annotate export --case-id <doc_id>
+# edit eval-data/annotations/<doc_id>.csv in Excel/LibreOffice
+uv run python -m scripts.eval_annotate import --case-id <doc_id> --mark-reviewed
+uv run python -m scripts.eval_annotate validate --case-id <doc_id>
+uv run python -m scripts.eval_annotate status
+```
+
+The CSV has `factor`, `point` and `fact` rows. Confirm factor text/max_score,
+fill 3–8 judgeable points per high-value factor, and review fact values/pages.
+Set the row `status` to `reviewed` when done. Do not delete factor rows; new
+points/facts may leave `id` blank. `--mark-reviewed` requires all three label
+files reviewed and syncs `manifest.json`. See `docs/eval-annotation.md` for the
+full contract. Keep labels and CSV in the private directory only.
 
 ## Human review checklist
 
