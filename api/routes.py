@@ -96,6 +96,7 @@ from .projects import (
     require_run_write,
 )
 from .schemas import (
+    AnalyticsOverview,
     ArtifactListResponse,
     AttachmentDeleteResponse,
     AttachmentListResponse,
@@ -115,6 +116,9 @@ from .schemas import (
     BidComplianceResponse,
     BidConsistencyResponse,
     BidCreatedResponse,
+    BidFeedbackCreate,
+    BidFeedbackListResponse,
+    BidFeedbackView,
     BidFigureRegenerateRequest,
     BidFiguresResponse,
     BidFixApplyRequest,
@@ -1680,6 +1684,55 @@ def build_router() -> APIRouter:
             )
         return result
 
+    @router.get(
+        "/bid-runs/{run_id}/feedback",
+        response_model=BidFeedbackListResponse,
+    )
+    async def list_bid_run_feedback(
+        run_id: str,
+        section_id: str | None = Query(default=None, max_length=64),
+        limit: int = Query(100, ge=1, le=500),
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidFeedbackListResponse:
+        return await service.list_feedback(
+            run_id, section_id=section_id, limit=limit
+        )
+
+    @router.post(
+        "/bid-runs/{run_id}/feedback",
+        status_code=status.HTTP_201_CREATED,
+        response_model=BidFeedbackView,
+    )
+    async def create_bid_run_feedback(
+        run_id: str,
+        payload: BidFeedbackCreate,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidFeedbackView:
+        result = await service.record_feedback(
+            run_id,
+            payload,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
+        await _audit(
+            request,
+            "bid_run.feedback",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "feedback_id": result.id,
+                "event_type": result.event_type,
+                "section_id": result.section_id,
+                "score": result.score,
+            },
+        )
+        return result
+
     @router.get("/bid-runs/{run_id}/events")
     async def stream_bid_run_events(
         run_id: str,
@@ -2295,9 +2348,15 @@ def build_router() -> APIRouter:
         section_id: str,
         request: Request,
         context: ProjectContext = Depends(require_run_write),
+        user: UserContext = Depends(require_user),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidGenerateResponse:
-        result = await service.regenerate_section(run_id, section_id)
+        result = await service.regenerate_section(
+            run_id,
+            section_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
         await _audit(
             request,
             "bid_run.section.regenerate",
@@ -2333,6 +2392,17 @@ def build_router() -> APIRouter:
                 detail="bidder profile template is unavailable",
             ) from exc
         return JSONResponse(content=payload)
+
+    @router.get(
+        "/analytics/overview",
+        response_model=AnalyticsOverview,
+        dependencies=[Depends(require_admin)],
+    )
+    async def get_analytics_overview(
+        days: int = Query(30, ge=1, le=365),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> AnalyticsOverview:
+        return await service.analytics_overview(days=days)
 
     @router.get("/companies", response_model=CompanyListResponse)
     async def list_companies(

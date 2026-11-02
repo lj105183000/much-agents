@@ -1,5 +1,6 @@
 import { isTrustedApiUrl } from './trustedUrl'
 import type {
+  AnalyticsOverview,
   ArtifactInfo,
   ArtifactListResponse,
   ArtifactSource,
@@ -16,6 +17,9 @@ import type {
   BidComplianceResponse,
   BidConsistencyResponse,
   BidCreatedResponse,
+  BidFeedbackCreate,
+  BidFeedbackListResponse,
+  BidFeedbackView,
   BidFigureRegenerateRequest,
   BidFiguresResponse,
   BidFixApplyRequest,
@@ -84,6 +88,7 @@ const PROJECT_EXEMPT_PREFIXES = [
   '/api/health',
   '/api/live',
   '/api/ready',
+  '/api/analytics',
 ]
 
 export function setAuthToken(token: string | null): void {
@@ -844,6 +849,38 @@ export const api = {
     return request<NotificationReadAllResponse>('/api/notifications/read-all', {
       method: 'POST',
     })
+  },
+
+  listBidFeedback(
+    runId: string,
+    sectionId?: string,
+  ): Promise<BidFeedbackListResponse> {
+    const query = sectionId
+      ? `?section_id=${encodeURIComponent(sectionId)}`
+      : ''
+    return request<BidFeedbackListResponse>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/feedback${query}`,
+    )
+  },
+
+  createBidFeedback(
+    runId: string,
+    payload: BidFeedbackCreate,
+  ): Promise<BidFeedbackView> {
+    return request<BidFeedbackView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/feedback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
+    return request<AnalyticsOverview>(
+      `/api/analytics/overview?days=${days}`,
+    )
   },
 
   listBidComments(

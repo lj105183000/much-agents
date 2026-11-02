@@ -53,6 +53,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'layers',
   },
   {
+    key: 'analytics',
+    label: '运营看板',
+    description: '生成质量、成本与反馈趋势',
+    icon: 'chart',
+    adminOnly: true,
+  },
+  {
     key: 'audit',
     label: '审计日志',
     description: '不可篡改的操作记录与链校验',
@@ -99,6 +106,10 @@ export const VIEW_META: Record<
   projects: {
     title: '项目管理',
     subtitle: '项目决定文档、任务与产物的可见范围；切换项目会刷新工作台数据',
+  },
+  analytics: {
+    title: '运营看板',
+    subtitle: '生成质量、成本、反馈与项目用量趋势（仅管理员）',
   },
   audit: {
     title: '审计日志',

@@ -401,6 +401,100 @@ class NotificationReadAllResponse(BaseModel):
     updated: int = 0
 
 
+class BidFeedbackCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str | None = Field(default=None, max_length=64)
+    event_type: Literal["rating", "adopt", "reject"]
+    score: int | None = Field(default=None, ge=1, le=5)
+    reason: str = Field(default="", max_length=1000)
+    content_sha256: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class BidFeedbackView(BaseModel):
+    id: int
+    run_id: str
+    section_id: str | None = None
+    user_id: str | None = None
+    user_name: str = ""
+    event_type: str
+    score: int | None = None
+    reason: str = ""
+    content_sha256: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class BidFeedbackListResponse(BaseModel):
+    run_id: str
+    feedback: list[BidFeedbackView] = Field(default_factory=list)
+
+
+class AnalyticsRuns(BaseModel):
+    total: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_gate: dict[str, int] = Field(default_factory=dict)
+    failed: int = 0
+    avg_duration_seconds: float | None = None
+
+
+class AnalyticsUsage(BaseModel):
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_cny: float = 0.0
+    retries: int = 0
+    fallback_calls: int = 0
+
+
+class AnalyticsFeedbackReason(BaseModel):
+    reason: str
+    count: int
+
+
+class AnalyticsFeedback(BaseModel):
+    total: int = 0
+    by_type: dict[str, int] = Field(default_factory=dict)
+    avg_rating: float | None = None
+    top_reasons: list[AnalyticsFeedbackReason] = Field(default_factory=list)
+
+
+class AnalyticsQuality(BaseModel):
+    snapshots: int = 0
+    by_gate: dict[str, int] = Field(default_factory=dict)
+    avg_requirements_coverage: float | None = None
+    avg_citation_coverage: float | None = None
+
+
+class AnalyticsProject(BaseModel):
+    project_id: str
+    project_name: str = ""
+    runs: int = 0
+    llm_calls: int = 0
+    cost_cny: float = 0.0
+    gate_blocked: int = 0
+
+
+class AnalyticsDaily(BaseModel):
+    date: str
+    runs: int = 0
+    gate_blocked: int = 0
+    cost_cny: float = 0.0
+
+
+class AnalyticsOverview(BaseModel):
+    days: int
+    runs: AnalyticsRuns = Field(default_factory=AnalyticsRuns)
+    usage: AnalyticsUsage = Field(default_factory=AnalyticsUsage)
+    feedback: AnalyticsFeedback = Field(default_factory=AnalyticsFeedback)
+    quality: AnalyticsQuality = Field(default_factory=AnalyticsQuality)
+    projects: list[AnalyticsProject] = Field(default_factory=list)
+    daily: list[AnalyticsDaily] = Field(default_factory=list)
+
+
 class BidRunEventSection(BaseModel):
     section_id: str
     title: str

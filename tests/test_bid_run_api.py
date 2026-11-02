@@ -637,6 +637,69 @@ def test_bid_run_doc_export_reports_converter_failure(
         assert "LibreOffice" in exported.json()["detail"]
 
 
+def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
+    app, repo, _store, _dispatcher = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/bid-runs",
+            json={"doc_id": "doc-1", "profile": {}, "max_sections": 1},
+        )
+        run_id = created.json()["run_id"]
+        _mark_section_final(repo, run_id)
+        assembled = client.post(f"/api/bid-runs/{run_id}/assemble")
+        assert assembled.status_code == 200, assembled.text
+        assert len(repo.quality_snapshots) == 1
+        snapshot = repo.quality_snapshots[0]
+        assert snapshot.run_id == run_id
+        assert snapshot.gate_status in {"pass", "warn", "block"}
+
+        analytics = client.get("/api/analytics/overview?days=30")
+        assert analytics.status_code == 200, analytics.text
+        payload = analytics.json()
+        assert payload["runs"]["total"] == 1
+        assert payload["quality"]["snapshots"] == 1
+        assert payload["usage"]["llm_calls"] == 0
+
+        feedback = client.post(
+            f"/api/bid-runs/{run_id}/feedback",
+            json={
+                "section_id": "narr-06-01",
+                "event_type": "rating",
+                "score": 5,
+                "reason": "内容完整，可采纳",
+            },
+        )
+        assert feedback.status_code == 201, feedback.text
+        assert feedback.json()["score"] == 5
+        assert feedback.json()["content_sha256"]
+
+        listed = client.get(f"/api/bid-runs/{run_id}/feedback")
+        assert listed.status_code == 200
+        assert len(listed.json()["feedback"]) == 1
+
+        missing_score = client.post(
+            f"/api/bid-runs/{run_id}/feedback",
+            json={"event_type": "rating"},
+        )
+        assert missing_score.status_code == 422
+
+        edit = client.patch(
+            f"/api/bid-runs/{run_id}/sections/narr-06-01",
+            json={
+                "markdown": "人工修改后的章节正文，用于反馈事件验证。",
+                "expected_sha256": _section_sha(client, run_id),
+            },
+        )
+        assert edit.status_code == 200, edit.text
+        assert any(
+            record.event_type == "edit" for record in repo.feedback_events
+        )
+
+        refreshed = client.get("/api/analytics/overview?days=30").json()
+        assert refreshed["feedback"]["total"] == 2
+        assert refreshed["feedback"]["avg_rating"] == 5.0
+
+
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(
         tmp_path, require_approval=True

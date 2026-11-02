@@ -9,6 +9,7 @@ export type ViewKey =
   | 'library'
   | 'history'
   | 'projects'
+  | 'analytics'
   | 'audit'
   | 'users'
 
@@ -840,6 +841,99 @@ export interface BidCommentUpdateInput {
   body?: string
   status?: 'open' | 'resolved'
   assignee_id?: string | null
+}
+
+export type BidFeedbackEventType =
+  | 'rating'
+  | 'adopt'
+  | 'reject'
+  | 'edit'
+  | 'rewrite'
+  | 'restore'
+
+export interface BidFeedbackView {
+  id: number
+  run_id: string
+  section_id: string | null
+  user_id: string | null
+  user_name: string
+  event_type: BidFeedbackEventType | string
+  score: number | null
+  reason: string
+  content_sha256: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface BidFeedbackListResponse {
+  run_id: string
+  feedback: BidFeedbackView[]
+}
+
+export interface BidFeedbackCreate {
+  section_id?: string | null
+  event_type: 'rating' | 'adopt' | 'reject'
+  score?: number | null
+  reason?: string
+  content_sha256?: string | null
+}
+
+export interface AnalyticsRuns {
+  total: number
+  by_status: Record<string, number>
+  by_gate: Record<string, number>
+  failed: number
+  avg_duration_seconds: number | null
+}
+
+export interface AnalyticsUsage {
+  llm_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost_cny: number
+  retries: number
+  fallback_calls: number
+}
+
+export interface AnalyticsFeedback {
+  total: number
+  by_type: Record<string, number>
+  avg_rating: number | null
+  top_reasons: Array<{ reason: string; count: number }>
+}
+
+export interface AnalyticsQuality {
+  snapshots: number
+  by_gate: Record<string, number>
+  avg_requirements_coverage: number | null
+  avg_citation_coverage: number | null
+}
+
+export interface AnalyticsProject {
+  project_id: string
+  project_name: string
+  runs: number
+  llm_calls: number
+  cost_cny: number
+  gate_blocked: number
+}
+
+export interface AnalyticsDaily {
+  date: string
+  runs: number
+  gate_blocked: number
+  cost_cny: number
+}
+
+export interface AnalyticsOverview {
+  days: number
+  runs: AnalyticsRuns
+  usage: AnalyticsUsage
+  feedback: AnalyticsFeedback
+  quality: AnalyticsQuality
+  projects: AnalyticsProject[]
+  daily: AnalyticsDaily[]
 }
 
 export type NotificationKind =

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -17,12 +17,15 @@ from .database import (
     BidApprovalRow,
     BidCommentRow,
     BidOutlineSectionRow,
+    BidQualitySnapshotRow,
     BidRunRow,
     BidSectionStateRow,
     BidSectionVersionRow,
+    FeedbackEventRow,
     LlmCallLogRow,
     NotificationRow,
     ProjectMemberRow,
+    ProjectRow,
     PromptRegistryRow,
     RetrievalSnapshotRow,
     RunUsageRow,
@@ -171,6 +174,39 @@ class SectionVersionRecord:
     review_summary: str | None
     created_by: str | None
     created_by_name: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackRecord:
+    id: int
+    project_id: str
+    run_id: str
+    section_id: str | None
+    user_id: str | None
+    user_name: str
+    event_type: str
+    score: int | None
+    reason: str
+    content_sha256: str | None
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class QualitySnapshotRecord:
+    id: int
+    project_id: str
+    run_id: str
+    revision: int
+    content_sha256: str
+    gate_status: str | None
+    compliance_status: str | None
+    consistency_status: str | None
+    requirements_coverage: float | None
+    citation_coverage: float | None
+    model: str | None
+    summary: dict[str, Any]
     created_at: datetime
 
 
@@ -373,6 +409,41 @@ def _notification_record(row: NotificationRow) -> NotificationRecord:
         actor_name=row.actor_name,
         dedupe_key=row.dedupe_key,
         read_at=row.read_at,
+        created_at=row.created_at,
+    )
+
+
+def _feedback_record(row: FeedbackEventRow) -> FeedbackRecord:
+    return FeedbackRecord(
+        id=int(row.id),
+        project_id=row.project_id,
+        run_id=row.run_id,
+        section_id=row.section_id,
+        user_id=row.user_id,
+        user_name=row.user_name or "",
+        event_type=row.event_type,
+        score=row.score,
+        reason=row.reason or "",
+        content_sha256=row.content_sha256,
+        metadata=dict(row.event_metadata or {}),
+        created_at=row.created_at,
+    )
+
+
+def _quality_record(row: BidQualitySnapshotRow) -> QualitySnapshotRecord:
+    return QualitySnapshotRecord(
+        id=int(row.id),
+        project_id=row.project_id,
+        run_id=row.run_id,
+        revision=int(row.revision or 0),
+        content_sha256=row.content_sha256,
+        gate_status=row.gate_status,
+        compliance_status=row.compliance_status,
+        consistency_status=row.consistency_status,
+        requirements_coverage=row.requirements_coverage,
+        citation_coverage=row.citation_coverage,
+        model=row.model,
+        summary=dict(row.summary or {}),
         created_at=row.created_at,
     )
 
@@ -1642,13 +1713,378 @@ class BidRunRepository:
         ]
 
 
+    async def add_feedback(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        section_id: str | None,
+        user_id: str | None,
+        user_name: str,
+        event_type: str,
+        score: int | None,
+        reason: str,
+        content_sha256: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> FeedbackRecord:
+        row = FeedbackEventRow(
+            project_id=project_id,
+            run_id=run_id,
+            section_id=section_id,
+            user_id=user_id,
+            user_name=(user_name or "")[:128],
+            event_type=event_type[:24],
+            score=score,
+            reason=(reason or "")[:2000],
+            content_sha256=content_sha256,
+            event_metadata=dict(metadata or {}),
+            created_at=_now(),
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add(row)
+                await session.flush()
+                record = _feedback_record(row)
+        return record
+
+    async def list_feedback(
+        self,
+        run_id: str,
+        *,
+        section_id: str | None = None,
+        limit: int = 100,
+    ) -> list[FeedbackRecord]:
+        statement = (
+            select(FeedbackEventRow)
+            .where(FeedbackEventRow.run_id == run_id)
+            .order_by(FeedbackEventRow.created_at.desc())
+            .limit(max(1, min(int(limit), 500)))
+        )
+        if section_id:
+            statement = statement.where(
+                FeedbackEventRow.section_id == section_id
+            )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_feedback_record(row) for row in rows]
+
+    async def add_quality_snapshot(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        revision: int,
+        content_sha256: str,
+        gate_status: str | None,
+        compliance_status: str | None,
+        consistency_status: str | None,
+        requirements_coverage: float | None,
+        citation_coverage: float | None,
+        model: str | None,
+        summary: dict[str, Any],
+    ) -> QualitySnapshotRecord | None:
+        statement = (
+            pg_insert(BidQualitySnapshotRow)
+            .values(
+                project_id=project_id,
+                run_id=run_id,
+                revision=int(revision),
+                content_sha256=content_sha256,
+                gate_status=gate_status,
+                compliance_status=compliance_status,
+                consistency_status=consistency_status,
+                requirements_coverage=requirements_coverage,
+                citation_coverage=citation_coverage,
+                model=model,
+                summary=dict(summary),
+                created_at=_now(),
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    BidQualitySnapshotRow.run_id,
+                    BidQualitySnapshotRow.content_sha256,
+                ]
+            )
+            .returning(BidQualitySnapshotRow)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(statement)).scalar_one_or_none()
+                record = _quality_record(row) if row is not None else None
+        return record
+
+    async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
+        window = max(1, min(int(days), 365))
+        start = _now() - timedelta(days=window)
+        async with self._session_factory() as session:
+            status_rows = (
+                await session.execute(
+                    select(BidRunRow.status, func.count(BidRunRow.id))
+                    .where(BidRunRow.created_at >= start)
+                    .group_by(BidRunRow.status)
+                )
+            ).all()
+            gate_rows = (
+                await session.execute(
+                    select(BidRunRow.gate_status, func.count(BidRunRow.id))
+                    .where(
+                        BidRunRow.created_at >= start,
+                        BidRunRow.gate_status.is_not(None),
+                    )
+                    .group_by(BidRunRow.gate_status)
+                )
+            ).all()
+            avg_duration = (
+                await session.execute(
+                    select(
+                        func.avg(
+                            func.extract(
+                                "epoch",
+                                BidRunRow.finished_at - BidRunRow.started_at,
+                            )
+                        )
+                    ).where(
+                        BidRunRow.created_at >= start,
+                        BidRunRow.finished_at.is_not(None),
+                        BidRunRow.started_at.is_not(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            usage = (
+                await session.execute(
+                    select(
+                        func.coalesce(func.sum(RunUsageRow.llm_calls), 0),
+                        func.coalesce(func.sum(RunUsageRow.prompt_tokens), 0),
+                        func.coalesce(func.sum(RunUsageRow.completion_tokens), 0),
+                        func.coalesce(func.sum(RunUsageRow.total_tokens), 0),
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                        func.coalesce(func.sum(RunUsageRow.retries), 0),
+                        func.coalesce(func.sum(RunUsageRow.fallback_calls), 0),
+                    ).where(RunUsageRow.updated_at >= start)
+                )
+            ).one()
+            feedback_rows = (
+                await session.execute(
+                    select(
+                        FeedbackEventRow.event_type,
+                        func.count(FeedbackEventRow.id),
+                    )
+                    .where(FeedbackEventRow.created_at >= start)
+                    .group_by(FeedbackEventRow.event_type)
+                )
+            ).all()
+            avg_rating = (
+                await session.execute(
+                    select(func.avg(FeedbackEventRow.score)).where(
+                        FeedbackEventRow.created_at >= start,
+                        FeedbackEventRow.score.is_not(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            reason_rows = (
+                await session.execute(
+                    select(FeedbackEventRow.reason, func.count(FeedbackEventRow.id))
+                    .where(
+                        FeedbackEventRow.created_at >= start,
+                        FeedbackEventRow.reason != "",
+                    )
+                    .group_by(FeedbackEventRow.reason)
+                    .order_by(func.count(FeedbackEventRow.id).desc())
+                    .limit(10)
+                )
+            ).all()
+            quality = (
+                await session.execute(
+                    select(
+                        func.count(BidQualitySnapshotRow.id),
+                        func.avg(BidQualitySnapshotRow.requirements_coverage),
+                        func.avg(BidQualitySnapshotRow.citation_coverage),
+                    ).where(BidQualitySnapshotRow.created_at >= start)
+                )
+            ).one()
+            quality_gate_rows = (
+                await session.execute(
+                    select(
+                        BidQualitySnapshotRow.gate_status,
+                        func.count(BidQualitySnapshotRow.id),
+                    )
+                    .where(
+                        BidQualitySnapshotRow.created_at >= start,
+                        BidQualitySnapshotRow.gate_status.is_not(None),
+                    )
+                    .group_by(BidQualitySnapshotRow.gate_status)
+                )
+            ).all()
+            project_run_rows = (
+                await session.execute(
+                    select(
+                        BidRunRow.project_id,
+                        ProjectRow.name,
+                        func.count(BidRunRow.id),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (BidRunRow.gate_status == "block", 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ),
+                    )
+                    .join(ProjectRow, ProjectRow.id == BidRunRow.project_id)
+                    .where(BidRunRow.created_at >= start)
+                    .group_by(BidRunRow.project_id, ProjectRow.name)
+                )
+            ).all()
+            project_usage_rows = (
+                await session.execute(
+                    select(
+                        RunUsageRow.project_id,
+                        func.coalesce(func.sum(RunUsageRow.llm_calls), 0),
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                    )
+                    .where(RunUsageRow.updated_at >= start)
+                    .group_by(RunUsageRow.project_id)
+                )
+            ).all()
+            run_day = func.date_trunc(
+                text("'day'"), BidRunRow.created_at
+            )
+            cost_day = func.date_trunc(
+                text("'day'"), RunUsageRow.updated_at
+            )
+            daily_run_rows = (
+                await session.execute(
+                    select(
+                        run_day,
+                        func.count(BidRunRow.id),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (BidRunRow.gate_status == "block", 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ),
+                    )
+                    .where(BidRunRow.created_at >= start)
+                    .group_by(run_day)
+                    .order_by(run_day)
+                )
+            ).all()
+            daily_cost_rows = (
+                await session.execute(
+                    select(
+                        cost_day,
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                    )
+                    .where(RunUsageRow.updated_at >= start)
+                    .group_by(cost_day)
+                    .order_by(cost_day)
+                )
+            ).all()
+
+        by_status = {str(status): int(count) for status, count in status_rows}
+        by_gate = {str(status): int(count) for status, count in gate_rows}
+        usage_by_project = {
+            str(project_id): (int(calls), float(cost))
+            for project_id, calls, cost in project_usage_rows
+        }
+        projects = []
+        for project_id, name, runs, blocked in project_run_rows:
+            calls, cost = usage_by_project.get(str(project_id), (0, 0.0))
+            projects.append(
+                {
+                    "project_id": str(project_id),
+                    "project_name": str(name or ""),
+                    "runs": int(runs),
+                    "llm_calls": calls,
+                    "cost_cny": round(cost, 4),
+                    "gate_blocked": int(blocked or 0),
+                }
+            )
+        projects.sort(key=lambda item: (-item["runs"], -item["cost_cny"]))
+        daily: dict[str, dict[str, Any]] = {}
+        for day, runs, blocked in daily_run_rows:
+            key = day.date().isoformat() if day is not None else ""
+            if key:
+                daily[key] = {
+                    "date": key,
+                    "runs": int(runs),
+                    "gate_blocked": int(blocked or 0),
+                    "cost_cny": 0.0,
+                }
+        for day, cost in daily_cost_rows:
+            key = day.date().isoformat() if day is not None else ""
+            if not key:
+                continue
+            row = daily.setdefault(
+                key,
+                {"date": key, "runs": 0, "gate_blocked": 0, "cost_cny": 0.0},
+            )
+            row["cost_cny"] = round(float(cost or 0), 4)
+        return {
+            "days": window,
+            "runs": {
+                "total": sum(by_status.values()),
+                "by_status": by_status,
+                "by_gate": by_gate,
+                "failed": by_status.get("failed", 0),
+                "avg_duration_seconds": round(float(avg_duration), 2)
+                if avg_duration is not None
+                else None,
+            },
+            "usage": {
+                "llm_calls": int(usage[0] or 0),
+                "prompt_tokens": int(usage[1] or 0),
+                "completion_tokens": int(usage[2] or 0),
+                "total_tokens": int(usage[3] or 0),
+                "cost_cny": round(float(usage[4] or 0), 4),
+                "retries": int(usage[5] or 0),
+                "fallback_calls": int(usage[6] or 0),
+            },
+            "feedback": {
+                "total": sum(int(count) for _, count in feedback_rows),
+                "by_type": {
+                    str(event_type): int(count)
+                    for event_type, count in feedback_rows
+                },
+                "avg_rating": round(float(avg_rating), 2)
+                if avg_rating is not None
+                else None,
+                "top_reasons": [
+                    {"reason": str(reason)[:300], "count": int(count)}
+                    for reason, count in reason_rows
+                ],
+            },
+            "quality": {
+                "snapshots": int(quality[0] or 0),
+                "by_gate": {
+                    str(status): int(count)
+                    for status, count in quality_gate_rows
+                },
+                "avg_requirements_coverage": round(float(quality[1]), 4)
+                if quality[1] is not None
+                else None,
+                "avg_citation_coverage": round(float(quality[2]), 4)
+                if quality[2] is not None
+                else None,
+            },
+            "projects": projects[:10],
+            "daily": sorted(daily.values(), key=lambda item: item["date"]),
+        }
+
+
 __all__ = [
     "BidCommentRecord",
     "BidRunRecord",
     "BidRunRepository",
+    "FeedbackRecord",
     "NotificationRecord",
     "NotificationRecipient",
     "OutlineSectionRecord",
+    "QualitySnapshotRecord",
     "SectionStateRecord",
     "SectionVersionRecord",
 ]

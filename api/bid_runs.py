@@ -91,6 +91,7 @@ from .bid_run_repo import (
     BidCommentRecord,
     BidRunRecord,
     BidRunRepository,
+    FeedbackRecord,
     OutlineSectionRecord,
     SectionStateRecord,
 )
@@ -99,12 +100,16 @@ from .jobs import Job, JobStoreProtocol
 from .notifications import NotificationService
 from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
+    AnalyticsOverview,
     BidCommentCreateRequest,
     BidCommentListResponse,
     BidCommentMention,
     BidCommentUpdateRequest,
     BidCommentView,
     BidComplianceResponse,
+    BidFeedbackCreate,
+    BidFeedbackListResponse,
+    BidFeedbackView,
     BidConsistencyResponse,
     BidFixApplyRequest,
     BidFixPlanRequest,
@@ -1085,6 +1090,119 @@ class BidRunService:
             terminal=run.status not in ACTIVE_RUN_STATUSES,
         )
 
+    # ---- quality feedback and analytics -------------------------------
+
+    @staticmethod
+    def _feedback_payload(record: FeedbackRecord) -> BidFeedbackView:
+        return BidFeedbackView(
+            id=record.id,
+            run_id=record.run_id,
+            section_id=record.section_id,
+            user_id=record.user_id,
+            user_name=record.user_name,
+            event_type=record.event_type,
+            score=record.score,
+            reason=record.reason,
+            content_sha256=record.content_sha256,
+            metadata=dict(record.metadata),
+            created_at=record.created_at,
+        )
+
+    async def record_feedback(
+        self,
+        run_id: str,
+        payload: BidFeedbackCreate,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+    ) -> BidFeedbackView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        section_id = (payload.section_id or "").strip() or None
+        content_sha256 = payload.content_sha256
+        if section_id is not None:
+            sections = await repo.get_outline(run_id)
+            if section_id not in {section.section_id for section in sections}:
+                raise BidRunError(422, f"unknown outline section: {section_id}")
+            if content_sha256 is None:
+                state = await repo.get_state(run_id, section_id)
+                if state is not None and state.final_markdown:
+                    content_sha256 = compute_section_content_sha256(
+                        state.final_markdown
+                    )
+        if payload.event_type == "rating" and payload.score is None:
+            raise BidRunError(422, "rating feedback requires a score")
+        record = await repo.add_feedback(
+            project_id=run.project_id,
+            run_id=run_id,
+            section_id=section_id,
+            user_id=actor_id,
+            user_name=actor_name,
+            event_type=payload.event_type,
+            score=payload.score,
+            reason=payload.reason,
+            content_sha256=content_sha256,
+            metadata={"source": "api"},
+        )
+        return self._feedback_payload(record)
+
+    async def list_feedback(
+        self,
+        run_id: str,
+        *,
+        section_id: str | None = None,
+        limit: int = 100,
+    ) -> BidFeedbackListResponse:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        records = await repo.list_feedback(
+            run_id, section_id=section_id, limit=limit
+        )
+        return BidFeedbackListResponse(
+            run_id=run_id,
+            feedback=[self._feedback_payload(record) for record in records],
+        )
+
+    async def _record_feedback_event(
+        self,
+        *,
+        run: BidRunRecord,
+        section_id: str,
+        event_type: str,
+        actor_id: str | None,
+        actor_name: str | None,
+        content_sha256: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            await self._repo().add_feedback(
+                project_id=run.project_id,
+                run_id=run.run_id,
+                section_id=section_id,
+                user_id=actor_id,
+                user_name=actor_name or "",
+                event_type=event_type,
+                score=None,
+                reason="",
+                content_sha256=content_sha256,
+                metadata=metadata or {},
+            )
+        except Exception:  # noqa: BLE001 - feedback is best-effort
+            logger.warning(
+                "could not record %s feedback for %s",
+                event_type,
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def analytics_overview(self, days: int = 30) -> AnalyticsOverview:
+        payload = await self._repo().analytics_overview(days=days)
+        return AnalyticsOverview(**payload)
+
     async def patch_outline(
         self,
         run_id: str,
@@ -1614,6 +1732,7 @@ class BidRunService:
             ),
             actor_id=actor_id,
             actor_name=actor_name,
+            feedback_event="restore",
         )
 
     @staticmethod
@@ -1664,6 +1783,7 @@ class BidRunService:
         *,
         actor_id: str | None = None,
         actor_name: str | None = None,
+        feedback_event: str = "edit",
     ) -> BidSectionDetail:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1733,6 +1853,15 @@ class BidRunService:
         )
         if not run_updated:
             raise BidRunError(409, "bid run changed; reload and try again")
+        await self._record_feedback_event(
+            run=run,
+            section_id=section_id,
+            event_type=feedback_event,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            content_sha256=compute_section_content_sha256(payload.markdown),
+            metadata={"source": "manual"},
+        )
         await self._clear_reports(run)
         return await self.get_section(run_id, section_id)
 
@@ -1740,6 +1869,9 @@ class BidRunService:
         self,
         run_id: str,
         section_id: str,
+        *,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> BidGenerateResponse:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1759,6 +1891,9 @@ class BidRunService:
         if state.attempt >= self.section_max_attempts:
             raise BidRunError(409, "section has reached the maximum attempts")
         prior = state
+        prior_sha256 = compute_section_content_sha256(
+            prior.final_markdown or ""
+        )
 
         updated = await repo.update_section(
             run_id,
@@ -1801,7 +1936,7 @@ class BidRunService:
             raise BidRunError(409, "bid run changed; reload and try again")
         await self._clear_reports(run)
         try:
-            return await self.generate(
+            result = await self.generate(
                 run_id,
                 BidGenerateRequest(section_ids=[section_id], assemble=True),
             )
@@ -1830,6 +1965,16 @@ class BidRunService:
             )
             await self._clear_reports(run)
             raise
+        await self._record_feedback_event(
+            run=run,
+            section_id=section_id,
+            event_type="rewrite",
+            actor_id=actor_id,
+            actor_name=actor_name,
+            content_sha256=prior_sha256,
+            metadata={"source": "regenerate", "previous_status": prior.status},
+        )
+        return result
 
     async def _load_validation_inputs(
         self,
@@ -2368,6 +2513,50 @@ class BidRunService:
         updated = await repo.get_run(run_id)
         if updated is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
+        try:
+            requirements_summary = dict(requirements.get("summary") or {})
+            citations_summary = dict(citations.get("summary") or {})
+            check_counts: dict[str, int] = {}
+            for check in gate.get("checks") or []:
+                status = str(check.get("status") or "unknown")
+                check_counts[status] = check_counts.get(status, 0) + 1
+            await repo.add_quality_snapshot(
+                project_id=updated.project_id,
+                run_id=run_id,
+                revision=updated.revision,
+                content_sha256=content_sha256,
+                gate_status=str(gate.get("status") or "warn"),
+                compliance_status=(
+                    str(evaluation.compliance.get("status") or "") or None
+                ),
+                consistency_status=(
+                    str(evaluation.consistency.get("status") or "") or None
+                ),
+                requirements_coverage=requirements_summary.get(
+                    "weighted_coverage"
+                ),
+                citation_coverage=citations_summary.get("coverage"),
+                model=str(provenance.get("model") or "") or None,
+                summary={
+                    "gate_checks": check_counts,
+                    "compliance": dict(
+                        evaluation.compliance.get("summary") or {}
+                    ),
+                    "consistency": dict(
+                        evaluation.consistency.get("summary") or {}
+                    ),
+                    "requirements": requirements_summary,
+                    "citations": citations_summary,
+                    "warning_count": len(warnings),
+                    "page_limit": gate.get("page_limit"),
+                },
+            )
+        except Exception:  # noqa: BLE001 - analytics is best-effort
+            logger.warning(
+                "could not record quality snapshot for %s",
+                run_id,
+                exc_info=True,
+            )
         if self.notifier is not None:
             try:
                 await self.notifier.notify_run_assembled(
