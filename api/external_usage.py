@@ -21,13 +21,17 @@ from .jobs import Job
 logger = logging.getLogger(__name__)
 
 
-def build_parse_external_usage(
-    job: Job, result: ParseResult
+def build_external_usage(
+    job: Job, result: ParseResult | dict[str, Any]
 ) -> list[dict[str, Any]]:
     payload = job.payload or {}
     project_id = str(payload.get("project_id") or "").strip() or None
+    if isinstance(result, dict):
+        items = result.get("external_usage") or []
+    else:
+        items = result.external_usage
     rows: list[dict[str, Any]] = []
-    for item in result.external_usage:
+    for item in items:
         provider = str(item.get("provider") or "").strip()
         operation = str(item.get("operation") or "").strip()
         if not provider or not operation:
@@ -84,4 +88,10 @@ def persist_external_usage(
         logger.warning("external usage persistence timed out")
 
 
-__all__ = ["build_parse_external_usage", "persist_external_usage"]
+build_parse_external_usage = build_external_usage
+
+__all__ = [
+    "build_external_usage",
+    "build_parse_external_usage",
+    "persist_external_usage",
+]

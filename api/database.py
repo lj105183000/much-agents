@@ -156,6 +156,7 @@ class ProjectRow(Base):
     description: Mapped[str] = mapped_column(
         String(512), nullable=False, server_default=text("''")
     )
+    monthly_budget_cents: Mapped[int | None] = mapped_column(Integer)
     created_by: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("users.id", ondelete="SET NULL"),

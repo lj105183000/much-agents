@@ -216,7 +216,7 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 | `retrieval_snapshots` | 检索可追溯 | `run_id/section_id/query_text/query_sha256/mode/top_k/hits JSONB/evidence_chars/trace_key/created_at` | P1 |
 | `external_usage` | MinerU/Embedding 用量 | `provider/operation/project_id/doc_id/job_id/units/unit_type/cost_cny/status/latency_ms/created_at` | P1 |
 
-> 2026-11-02 进展：`bid_quality_snapshots`、`feedback_events` 已由迁移 `0017` 落地，`external_usage` 由 `0018` 落地；新增管理员「运营看板」与 `BID_RUN_BUDGET_CENTS`/`BID_BUDGET_ENFORCEMENT` 预算 warn/stop。项目月度配额与预算管理 UI 仍未实现。
+> 2026-11-02 进展：`bid_quality_snapshots`、`feedback_events` 已由迁移 `0017` 落地，`external_usage` 由 `0018` 落地，项目月度配额由 `0019` 落地；新增管理员「运营看板」、CSV 导出、`BID_RUN_BUDGET_CENTS`/`BID_BUDGET_ENFORCEMENT` warn/stop 与项目编辑中的月度预算。预算告警通知、配额历史和物化视图仍未实现。
 
 ### 3.3 迁移建议
 

@@ -930,6 +930,8 @@ export interface AnalyticsProject {
   llm_calls: number
   cost_cny: number
   gate_blocked: number
+  monthly_budget_cents: number | null
+  month_cost_cny: number
 }
 
 export interface AnalyticsDaily {
@@ -1071,6 +1073,7 @@ export interface ProjectSummary {
   description: string
   role: ProjectRole | null
   member_count: number
+  monthly_budget_cents: number | null
   created_at: string
   updated_at: string
 }
@@ -1088,6 +1091,7 @@ export interface ProjectCreateInput {
 export interface ProjectUpdateInput {
   name?: string
   description?: string
+  monthly_budget_cents?: number | null
 }
 
 export interface ProjectMemberSummary {

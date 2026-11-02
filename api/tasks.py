@@ -15,7 +15,7 @@ from .celery_app import celery_app
 from .config import ApiSettings
 from .db import Database
 from .external_usage import (
-    build_parse_external_usage,
+    build_external_usage,
     persist_external_usage,
 )
 from .redis_jobs import RedisJobStore
@@ -53,7 +53,7 @@ def parse_document_task(job_id: str) -> None:
             external_usage_recorder=lambda current, result: (
                 persist_external_usage(
                     repo,
-                    build_parse_external_usage(current, result),
+                    build_external_usage(current, result),
                 )
             ),
         )

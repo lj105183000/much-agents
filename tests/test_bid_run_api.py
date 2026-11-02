@@ -718,6 +718,14 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert refreshed["feedback"]["total"] == 2
         assert refreshed["feedback"]["avg_rating"] == 5.0
 
+        exported = client.get("/api/analytics/export.csv?days=30")
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["content-type"].startswith("text/csv")
+        assert "Summary" in exported.text
+        assert "runs_total" in exported.text
+        assert "External" in exported.text
+        assert "mineru" in exported.text
+
 
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
     app, repo, _store, _dispatcher = make_app(

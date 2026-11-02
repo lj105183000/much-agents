@@ -46,7 +46,7 @@ from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
 from .external_usage import (
-    build_parse_external_usage,
+    build_external_usage,
     persist_external_usage,
 )
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
@@ -146,7 +146,7 @@ def create_app(
                     external_usage_recorder=lambda current, result: (
                         persist_external_usage(
                             bid_run_repo,
-                            build_parse_external_usage(current, result),
+                            build_external_usage(current, result),
                         )
                     ),
                 )

@@ -34,6 +34,7 @@ from .errors import (
 )
 from .extraction import extract_document
 from .ingest import ChromaStore, run_ingest
+from .usage import embedding_usage, mineru_usage
 from .models import ContentBlock, ParseOptions, ParseResult, ParsedDocument, TocEntry
 from .parsers.mineru.parser import MineruParser
 from .parsers.pymupdf_parser import PyMuPDFParser
@@ -357,61 +358,26 @@ def parse_document(
 
     external_usage: list[dict[str, Any]] = []
     if document.parser_used == "mineru":
-        pages = max(0, int(document.page_count or 0))
-        cost = (
-            round(pages * settings.mineru_price_per_page_cny, 6)
-            if pages and settings.mineru_price_per_page_cny > 0
-            else None
+        mineru = mineru_usage(
+            document.page_count,
+            settings,
+            operation="parse",
+            latency_ms=int(timings.get("parse", 0) * 1000),
+            metadata={
+                "model": settings.mineru_model_version,
+                "parser_requested": options.parser,
+            },
         )
-        external_usage.append(
-            {
-                "provider": "mineru",
-                "operation": "parse",
-                "units": pages,
-                "unit_type": "page",
-                "cost_cny": cost,
-                "status": "ok",
-                "latency_ms": int(timings.get("parse", 0) * 1000),
-                "metadata": {
-                    "model": settings.mineru_model_version,
-                    "parser_requested": options.parser,
-                },
-            }
-        )
-    embedding_usage = (
-        (fresh_ingest_summary or {}).get("embedding_usage") or {}
+        if mineru is not None:
+            external_usage.append(mineru)
+    embedding = embedding_usage(
+        fresh_ingest_summary,
+        settings,
+        chunks=len(chunks),
+        latency_ms=int(timings.get("ingest", 0) * 1000),
     )
-    embedding_calls = int(embedding_usage.get("calls") or 0)
-    if embedding_calls:
-        tokens = int(embedding_usage.get("total_tokens") or 0)
-        texts = int(embedding_usage.get("texts") or 0)
-        units = tokens or texts
-        cost = (
-            round(
-                tokens / 1000.0
-                * settings.embedding_price_per_1k_tokens_cny,
-                6,
-            )
-            if tokens and settings.embedding_price_per_1k_tokens_cny > 0
-            else None
-        )
-        external_usage.append(
-            {
-                "provider": "zhipu",
-                "operation": "embedding",
-                "units": units,
-                "unit_type": "token" if tokens else "text",
-                "cost_cny": cost,
-                "status": "ok",
-                "latency_ms": int(timings.get("ingest", 0) * 1000),
-                "metadata": {
-                    "model": settings.embedding_model,
-                    "calls": embedding_calls,
-                    "texts": texts,
-                    "chunks": len(chunks),
-                },
-            }
-        )
+    if embedding is not None:
+        external_usage.append(embedding)
 
     return ParseResult(
         ok=exit_code == EXIT_OK,

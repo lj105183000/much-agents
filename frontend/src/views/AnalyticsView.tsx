@@ -43,6 +43,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
+  const [exporting, setExporting] = useState(false)
 
   const requestKey = `${days}|${version}`
   const loading = loadedKey !== requestKey
@@ -71,6 +72,28 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
       cancelled = true
     }
   }, [apiBase, days, version, isAdmin, requestKey])
+
+  const exportCsv = async () => {
+    setExporting(true)
+    setError(null)
+    try {
+      const blob = await api.exportAnalyticsCsv(days)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `much-agents-analytics-${days}d.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError ? caught.message : '报表导出失败',
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
 
   if (!isAdmin) {
     return (
@@ -119,6 +142,14 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                 onClick={() => setVersion((current) => current + 1)}
               >
                 刷新
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={exporting}
+                onClick={() => void exportCsv()}
+              >
+                导出 CSV
               </Button>
             </div>
           }
@@ -308,6 +339,9 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                       <th className="px-2 py-1.5 text-right font-medium">
                         成本
                       </th>
+                      <th className="px-2 py-1.5 text-right font-medium">
+                        本月 / 预算
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="text-slate-300">
@@ -330,6 +364,12 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           {money(project.cost_cny)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right">
+                          {money(project.month_cost_cny)} /{' '}
+                          {project.monthly_budget_cents === null
+                            ? '—'
+                            : money(project.monthly_budget_cents / 100)}
                         </td>
                       </tr>
                     ))}

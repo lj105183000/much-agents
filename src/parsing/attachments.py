@@ -24,6 +24,7 @@ from .config import Settings
 from .errors import IngestError
 from .ingest import run_ingest
 from .models import Chunk
+from .usage import embedding_usage, mineru_usage
 
 logger = logging.getLogger(__name__)
 
@@ -660,6 +661,24 @@ def attach_evidence(
                 warnings.append(f"ingest skipped: {exc}")
             else:
                 raise
+    external_usage: list[dict[str, Any]] = []
+    if str(meta.get("parser") or "") == "mineru":
+        ocr = mineru_usage(
+            int(meta.get("pages") or 0),
+            settings,
+            operation="ocr",
+            metadata={
+                "attachment_id": meta.get("attachment_id"),
+                "model": settings.mineru_model_version,
+            },
+        )
+        if ocr is not None:
+            external_usage.append(ocr)
+    embedding = embedding_usage(
+        ingest_summary, settings, chunks=len(chunks)
+    )
+    if embedding is not None:
+        external_usage.append(embedding)
     storage_synced = False
     if sync_storage:
         storage_synced, sync_warnings = _sync_parsed_files(
@@ -689,6 +708,7 @@ def attach_evidence(
         ),
         "storage_synced": storage_synced,
         "warnings": warnings,
+        "external_usage": external_usage,
     }
 
 

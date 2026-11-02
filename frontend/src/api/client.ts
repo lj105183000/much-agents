@@ -883,6 +883,12 @@ export const api = {
     )
   },
 
+  exportAnalyticsCsv(days = 30): Promise<Blob> {
+    return requestBlob(
+      `/api/analytics/export.csv?days=${days}`,
+    )
+  },
+
   listBidComments(
     runId: string,
     options: { status?: 'open' | 'resolved'; sectionId?: string } = {},

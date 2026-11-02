@@ -732,6 +732,8 @@ class FakeBidRunRepository:
         self.quality_snapshots: list[QualitySnapshotRecord] = []
         self.run_usage: dict[str, RunUsageRecord] = {}
         self.external_usage: list[ExternalUsageRecord] = []
+        self.project_monthly_budgets: dict[str, int | None] = {}
+        self.project_month_costs: dict[str, float] = {}
         self._feedback_id = 0
         self._quality_id = 0
         self._external_id = 0
@@ -1147,6 +1149,14 @@ class FakeBidRunRepository:
     async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
         return self.run_usage.get(run_id)
 
+    async def get_project_monthly_budget(
+        self, project_id: str
+    ) -> int | None:
+        return self.project_monthly_budgets.get(project_id)
+
+    async def project_month_cost(self, project_id: str) -> float:
+        return float(self.project_month_costs.get(project_id, 0.0))
+
     async def add_external_usage(
         self, rows: list[dict[str, Any]]
     ) -> list[ExternalUsageRecord]:
@@ -1212,7 +1222,25 @@ class FakeBidRunRepository:
                 "cost_cny": round(
                     sum(item.cost_cny or 0 for item in self.external_usage), 4
                 ),
-                "by_provider": {},
+                "by_provider": {
+                    provider: {
+                        "records": len(rows),
+                        "units": sum(item.units for item in rows),
+                        "cost_cny": round(
+                            sum(item.cost_cny or 0 for item in rows), 4
+                        ),
+                    }
+                    for provider in {
+                        item.provider for item in self.external_usage
+                    }
+                    for rows in [
+                        [
+                            item
+                            for item in self.external_usage
+                            if item.provider == provider
+                        ]
+                    ]
+                },
             },
             "feedback": {
                 "total": len(self.feedback_events),
@@ -1712,6 +1740,8 @@ class FakeProjectRepository:
         *,
         name: str | None = None,
         description: str | None = None,
+        monthly_budget_cents: int | None = None,
+        set_monthly_budget: bool = False,
     ) -> ProjectRecord | None:
         project = self.projects.get(project_id)
         if project is None:
@@ -1723,6 +1753,11 @@ class FakeProjectRepository:
                 description
                 if description is not None
                 else project.description
+            ),
+            monthly_budget_cents=(
+                monthly_budget_cents
+                if set_monthly_budget
+                else project.monthly_budget_cents
             ),
             updated_at=self._now(),
         )
