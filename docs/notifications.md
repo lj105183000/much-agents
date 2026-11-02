@@ -11,9 +11,14 @@
 | 标书已组装 | `run_assembled` | assemble 完成且门禁非 block、未要求审批 | 项目 manager + reviewer |
 | 门禁阻断 | `gate_blocked` | assemble 完成且门禁为 block | 项目 manager + reviewer |
 | 待审批 | `approval_pending` | assemble 完成、`BID_REQUIRE_APPROVAL=true`、门禁非 block | 项目 manager + reviewer |
+| Run 预算预警 | `run_budget_warning` | 累计成本达到 run 预算 80% | 项目 manager |
+| Run 预算超限 | `run_budget_exceeded` | 累计成本达到 run 预算 100% | 项目 manager |
+| 项目月度预算预警 | `project_budget_warning` | 当前自然月成本达到项目月度配额 80% | 项目 manager |
+| 项目月度预算超限 | `project_budget_exceeded` | 当前自然月成本达到项目月度配额 100% | 项目 manager |
 
 - 只通知启用中的项目成员；admin 若非项目成员不会收到 run 级通知（仍可在 UI 查看）。
 - 评论和 run 通知都有 `dedupe_key`（唯一约束 `(user_id, dedupe_key)`）。同一评论的同一提及/指派、同一内容哈希的同一 run 事件不会重复创建；重复 assemble 不会刷屏。
+- 预算告警按 `(scope, run/项目+月份, level, 预算值)` 去重：同一 run 的 80%/100% 各一次；项目月度配额按自然月、level、预算值各一次；调整预算后会重新触发。
 - 同一用户同时被 @ 和被指派会产生两条通知（类型不同），便于区分。
 
 ## 2. 数据与 API
@@ -43,9 +48,9 @@ NOTIFY_WEBHOOK_SECRET=change-me
 NOTIFY_WEBHOOK_TIMEOUT_SECONDS=5
 ```
 
-- `POST` JSON，`Content-Type: application/json`，`X-Much-Agents-Event: comment.mention | comment.assigned | run.assembled | run.gate_blocked | approval.pending`。
+- `POST` JSON，`Content-Type: application/json`，`X-Much-Agents-Event: comment.mention | comment.assigned | run.assembled | run.gate_blocked | approval.pending | budget.run_warning | budget.run_exceeded | budget.project_warning | budget.project_exceeded`。
 - 设置 secret 时附带 `X-Much-Agents-Signature: sha256=<hex(HMAC-SHA256(secret, raw_body))>`；接收方必须用原始字节验签。
-- 载荷只包含事件、时间、项目/run/doc/comment/section id、操作人 id/姓名、门禁状态、内容哈希、收件人 id。**不包含评论正文、profile、招标文件文本、token**。
+- 载荷只包含事件、时间、项目/run/doc/comment/section id、操作人 id/姓名、门禁状态、内容哈希、收件人 id；预算事件额外包含 `budget_scope/budget_level/budget_cents/spent_cny`。**不包含评论正文、profile、招标文件文本、token**。
 - 同步发送放在后台线程（API 请求所在 event loop 用 `asyncio.to_thread`；Celery worker 直接发送），单次超时默认 5 秒；失败只记 warning，不重试、不阻断主流程。
 
 ## 4. SMTP
@@ -72,4 +77,4 @@ NOTIFY_EMAIL_TO=bid-team@example.internal,ops@example.internal
 - 出站载荷与审计、日志都不得包含：评论正文（Webhook/SMTP）、投标人资料、身份证号/银行账号/信用代码、token、密码、profile 路径。
 - 站内通知正文可包含评论摘要（最多 200 字），仅当前项目用户可见。
 - 当前没有：通知重试/DLQ、用户级邮件地址、通知偏好设置、Webhook 白名单域名校验、资质到期提醒、项目看板。
-- 测试：`tests/test_notifications.py` 覆盖评论提及/指派、run 组装/门禁、去重、列表/已读 API、Webhook 签名与载荷、SMTP 元数据；E2E 覆盖铃铛与“全部已读”。
+- 测试：`tests/test_notifications.py` 覆盖评论提及/指派、run 组装/门禁、预算告警与去重、列表/已读 API、Webhook 签名与载荷、SMTP 元数据；E2E 覆盖铃铛与“全部已读”。

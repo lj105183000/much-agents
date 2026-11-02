@@ -7,13 +7,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from api.bid_run_repo import BidRunRecord, RunUsageRecord
+from api.bid_run_repo import (
+    BidRunRecord,
+    NotificationRecipient,
+    RunUsageRecord,
+)
 from api.bid_runs import BidRunError, BidRunService
 from api.external_usage import (
     build_parse_external_usage,
     persist_external_usage,
 )
 from api.jobs import Job, JobStore
+from api.notifications import NotificationService
 from src.bidding.budget import evaluate_budget
 from src.parsing.config import Settings
 from src.parsing.ingest import ZhipuEmbedder
@@ -165,6 +170,14 @@ def test_budget_decision_warn_and_stop() -> None:
     )
     assert disabled.exceeded is False
 
+    warning = evaluate_budget(
+        budget_cents=100, enforcement="stop", cost_cny=0.85
+    )
+    assert warning.exceeded is False
+    assert warning.warning is True
+    assert warning.stop is False
+    assert "warning" in warning.message
+
 
 def test_generate_is_blocked_when_budget_already_exceeded(
     tmp_path: Path,
@@ -186,6 +199,10 @@ def test_generate_is_blocked_when_budget_already_exceeded(
         duration_ms=1000,
         updated_at=now,
     )
+    repo.notification_recipients[run.project_id] = [
+        NotificationRecipient("u-manager", "manager", "Manager", "manager")
+    ]
+    notifier = NotificationService(repo)  # type: ignore[arg-type]
     service = BidRunService(
         bid_settings=make_bid_settings(
             tmp_path,
@@ -196,11 +213,16 @@ def test_generate_is_blocked_when_budget_already_exceeded(
         company_service=FakeCompanyService(),  # type: ignore[arg-type]
         store=JobStore(),
         dispatch=FakeDispatcher().dispatch,
+        notifier=notifier,
     )
     with pytest.raises(BidRunError) as exc:
         asyncio.run(service.generate(run.run_id))
     assert exc.value.status_code == 409
     assert "budget exceeded" in exc.value.detail
+    assert any(
+        record.kind == "run_budget_exceeded"
+        for record in repo.notifications.values()
+    )
 
 
 def test_generate_is_blocked_when_project_month_budget_exceeded(
@@ -211,14 +233,22 @@ def test_generate_is_blocked_when_project_month_budget_exceeded(
     repo.runs[run.run_id] = run
     repo.project_monthly_budgets[run.project_id] = 100
     repo.project_month_costs[run.project_id] = 1.25
+    repo.notification_recipients[run.project_id] = [
+        NotificationRecipient("u-manager", "manager", "Manager", "manager")
+    ]
     service = BidRunService(
         bid_settings=make_bid_settings(tmp_path),
         repo=repo,  # type: ignore[arg-type]
         company_service=FakeCompanyService(),  # type: ignore[arg-type]
         store=JobStore(),
         dispatch=FakeDispatcher().dispatch,
+        notifier=NotificationService(repo),  # type: ignore[arg-type]
     )
     with pytest.raises(BidRunError) as exc:
         asyncio.run(service.generate(run.run_id))
     assert exc.value.status_code == 409
     assert "project monthly budget exceeded" in exc.value.detail
+    assert any(
+        record.kind == "project_budget_exceeded"
+        for record in repo.notifications.values()
+    )

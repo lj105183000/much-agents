@@ -266,7 +266,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 ### 站内通知、Webhook 与 SMTP（P2，`api/notifications.py`、迁移 `0015`）
 
 - Alembic `0015` 新增 `notifications`：项目/用户/kind/title/body/资源 id/run/doc/comment/section/actor/`dedupe_key`/`read_at`；唯一约束 `(user_id, dedupe_key)` 防重复，索引 `(user_id, read_at, created_at)`、`(project_id, created_at)`，项目删除级联。`user_id` 不加外键，删除账号保留历史。
-- 事件：`comment_mention`、`comment_assigned`（评论创建/改派，收件人为被提及/新处理人，排除作者）；`run_assembled`、`gate_blocked`、`approval_pending`（assemble 完成，收件人为项目 manager + reviewer）。同一评论/同一内容哈希的 run 事件按 dedupe key 去重；重复 assemble 不刷屏。
+- 事件：`comment_mention`、`comment_assigned`（评论创建/改派，收件人为被提及/新处理人，排除作者）；`run_assembled`、`gate_blocked`、`approval_pending`（assemble 完成，收件人为项目 manager + reviewer）；`run_budget_warning`/`run_budget_exceeded`/`project_budget_warning`/`project_budget_exceeded`（80%/100% 预算阈值，收件人为项目 manager）。同一评论/同一内容哈希的 run 事件、同一 scope/run 或项目月份/level/预算值按 dedupe key 去重；重复 assemble/预算检查不刷屏，调整预算后重新触发。
 - 触发点：评论路由在审计后调用 `NotificationService.notify_comment`；`BidRunService.assemble` 在写入 assembled/gate 后调用 `notify_run_assembled`，API 与 Celery worker 的 inline assembler 都注入 notifier。通知失败只 warning，不影响主流程。
 - 出站：`NotificationDispatcher` 在 API event loop 中用 `asyncio.to_thread`、在 worker 中同步发送；Webhook `POST` JSON，可带 `X-Much-Agents-Signature: sha256=HMAC-SHA256(secret, raw_body)`，载荷只含事件/id/门禁/操作人，不含评论正文、profile、文档文本、token；SMTP 用全局 `NOTIFY_EMAIL_TO`（用户表暂无 email 字段），正文只含元数据。超时默认 5 秒，无重试/DLQ。
 - 接口：`GET /api/notifications`、`GET /api/notifications/unread`、`POST /api/notifications/{id}/read`、`POST /api/notifications/read-all`，全部挂项目只读守卫且只操作本人通知。前端 Header 通知铃铛 25 秒轮询 + 聚焦刷新，点击带 `run_id` 的通知直接打开标书 run。
@@ -297,7 +297,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - `GET /api/analytics/overview?days=7|30|90`：仅 admin，PostgreSQL 聚合运行/门禁/耗时、`run_usage` 的调用/token/成本/重试、反馈类型/评分/Top 原因、质量快照与覆盖率、项目 Top 10、最近 14 天趋势；前端新增管理员「运营看板」。
 - `external_usage`（迁移 `0018`）：解析/附件任务结束后由 `api/external_usage.py` 写入 MinerU 页数（parse/OCR）与 Zhipu Embedding 调用/文本/token；`ZhipuEmbedder` 从响应 usage 累计，缓存命中不重复计入；附件 OCR 与附件 embedding 同样入账；可选价格 `MINERU_PRICE_PER_PAGE_CNY`、`EMBEDDING_PRICE_PER_1K_TOKENS_CNY`。Celery 与本地 runner 都通过 `external_usage_recorder` 记录，失败不影响主流程。
 - Run 预算：`BID_RUN_BUDGET_CENTS`（分，0 关闭）+ `BID_BUDGET_ENFORCEMENT=warn|stop`。基于 `run_usage` 累计成本；warn 追加 run warning 继续生成，stop 在章节边界停止调度、run 置 paused 并记录 message/warnings，`generate/resume/regenerate` 在仍超预算时返回 409。`src/bidding/budget.py` 是纯决策函数；worker 在每节 usage 落库后检查，API 入口预检。
-- 项目月度配额：迁移 `0019` 给 `projects` 增加 `monthly_budget_cents`（NULL/0 不限制），项目编辑 UI 按元设置；`generate/resume/regenerate` 累计当前自然月 `run_usage`+`external_usage`，达到配额拒绝新生成/续跑（409），已运行任务不打断。运营看板项目表显示本月成本/预算。
+- 项目月度配额：迁移 `0019` 给 `projects` 增加 `monthly_budget_cents`（NULL/0 不限制），项目编辑 UI 按元设置；`generate/resume/regenerate` 累计当前自然月 `run_usage`+`external_usage`，达到配额拒绝新生成/续跑（409），已运行任务不打断。运营看板项目表显示本月成本/预算。run 与项目月度预算达到 80% 发 warning、100% 发 exceeded 通知（站内 + 可选 Webhook/SMTP），按 scope/run 或项目月份/level/预算值去重。
 - 运营看板新增外部记录/单位/成本与 provider 拆分；`GET /api/analytics/export.csv?days=7|30|90`（admin）导出 UTF-8 BOM CSV（Summary/Daily/Projects/Feedback/External），单元格做公式注入转义。这是**轻量数据底座**，不引入 ClickHouse/Kafka/dbt/Airflow；重型中台触发条件见 `docs/production-readiness.md` 0.2。当前未做物化视图预聚合、自由 SQL、预算告警通知。详见 `docs/feedback-and-analytics.md`。
 
 ### DOC 导出、DOCX 模板与企业资质库（P3，`src/bidding/doc_export.py`、`api/companies.py`、迁移 `0016`）
@@ -329,7 +329,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、多模板库/模板 UI/按项目选择模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与预算告警通知、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
+- **待办**：前端 IPC（打开本地目录）、多模板库/模板 UI/按项目选择模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与配额历史/预算趋势图、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 

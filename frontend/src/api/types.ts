@@ -958,6 +958,10 @@ export type NotificationKind =
   | 'run_assembled'
   | 'gate_blocked'
   | 'approval_pending'
+  | 'run_budget_warning'
+  | 'run_budget_exceeded'
+  | 'project_budget_warning'
+  | 'project_budget_exceeded'
 
 export interface NotificationView {
   notification_id: string

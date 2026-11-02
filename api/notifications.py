@@ -36,6 +36,10 @@ COMMENT_ASSIGNED = "comment_assigned"
 RUN_ASSEMBLED = "run_assembled"
 GATE_BLOCKED = "gate_blocked"
 APPROVAL_PENDING = "approval_pending"
+RUN_BUDGET_WARNING = "run_budget_warning"
+RUN_BUDGET_EXCEEDED = "run_budget_exceeded"
+PROJECT_BUDGET_WARNING = "project_budget_warning"
+PROJECT_BUDGET_EXCEEDED = "project_budget_exceeded"
 
 
 class NotificationError(Exception):
@@ -143,6 +147,10 @@ class NotificationEvent:
     actor_name: str | None = None
     gate_status: str | None = None
     content_sha256: str | None = None
+    budget_scope: str | None = None
+    budget_level: str | None = None
+    budget_cents: int | None = None
+    spent_cny: float | None = None
     recipient_user_ids: tuple[str, ...] = ()
 
     def public_payload(self) -> dict[str, Any]:
@@ -159,6 +167,10 @@ class NotificationEvent:
             "actor_name": self.actor_name,
             "gate_status": self.gate_status,
             "content_sha256": self.content_sha256,
+            "budget_scope": self.budget_scope,
+            "budget_level": self.budget_level,
+            "budget_cents": self.budget_cents,
+            "spent_cny": self.spent_cny,
             "recipient_user_ids": list(self.recipient_user_ids),
         }
 
@@ -247,6 +259,11 @@ class NotificationDispatcher:
             lines.append(f"章节: {event.section_id}")
         if event.gate_status:
             lines.append(f"门禁: {event.gate_status}")
+        if event.budget_scope:
+            lines.append(
+                f"预算: {event.budget_scope} {event.budget_level or ''} "
+                f"spent={event.spent_cny} budget_cents={event.budget_cents}"
+            )
         if event.actor_name:
             lines.append(f"操作人: {event.actor_name}")
         lines.extend(["", "请登录 Much Agents 查看详情。"])
@@ -523,6 +540,126 @@ class NotificationService:
                         gate_status=gate_status,
                         content_sha256=content_sha256,
                         recipient_user_ids=notified_ids,
+                    )
+                ]
+            )
+        return records
+
+    async def notify_budget(
+        self,
+        *,
+        project_id: str,
+        scope: str,
+        level: str,
+        spent_cny: float,
+        budget_cents: int,
+        run: BidRunRecord | None = None,
+        project_name: str | None = None,
+    ) -> list[NotificationRecord]:
+        if level not in {"warning", "exceeded"}:
+            return []
+        if scope not in {"run", "project"}:
+            return []
+        if scope == "run" and run is None:
+            return []
+        repo = self._repo()
+        recipients = await repo.list_project_recipients(
+            project_id, ("manager",)
+        )
+        if not recipients:
+            return []
+        now = datetime.now(timezone.utc)
+        spent = max(0.0, float(spent_cny or 0.0))
+        budget = max(0, int(budget_cents))
+        label = (
+            (run.project_name or run.doc_id)
+            if run is not None
+            else (project_name or project_id)
+        )
+        if scope == "run":
+            assert run is not None
+            kind = (
+                RUN_BUDGET_EXCEEDED
+                if level == "exceeded"
+                else RUN_BUDGET_WARNING
+            )
+            event_name = f"budget.run_{level}"
+            title = (
+                f"Run 预算{'超限' if level == 'exceeded' else '预警'}：{label}"
+            )
+            dedupe = (
+                f"run:{run.run_id}:budget:{level}:{budget}"
+            )
+            run_id: str | None = run.run_id
+            doc_id: str | None = run.doc_id
+        else:
+            kind = (
+                PROJECT_BUDGET_EXCEEDED
+                if level == "exceeded"
+                else PROJECT_BUDGET_WARNING
+            )
+            event_name = f"budget.project_{level}"
+            title = (
+                f"项目月度预算{'超限' if level == 'exceeded' else '预警'}："
+                f"{label}"
+            )
+            dedupe = (
+                f"project:{project_id}:budget:"
+                f"{now.strftime('%Y-%m')}:{level}:{budget}"
+            )
+            run_id = None
+            doc_id = None
+        body = (
+            f"已花费 ¥{spent:.2f} / 预算 ¥{budget / 100:.2f}"
+            + ("（80% 预警）" if level == "warning" else "（已超限）")
+        )
+        rows = []
+        for recipient in recipients:
+            rows.append(
+                {
+                    "id": str(uuid4()),
+                    "project_id": project_id,
+                    "user_id": recipient.user_id,
+                    "kind": kind,
+                    "title": title[:200],
+                    "body": body,
+                    "resource_type": "bid_run" if run_id else "project",
+                    "resource_id": run_id or project_id,
+                    "run_id": run_id,
+                    "doc_id": doc_id,
+                    "actor_id": None,
+                    "actor_name": None,
+                    "dedupe_key": dedupe[:160],
+                }
+            )
+        try:
+            records = await repo.add_notifications(rows)
+        except Exception:  # noqa: BLE001 - alerts must not break generation
+            logger.warning("could not persist budget notifications", exc_info=True)
+            return []
+        recipient_ids = tuple(
+            record.user_id
+            for record in records
+            if any(
+                recipient.user_id == record.user_id
+                for recipient in recipients
+            )
+        )
+        if recipient_ids:
+            self._schedule(
+                [
+                    NotificationEvent(
+                        event=event_name,
+                        occurred_at=now,
+                        project_id=project_id,
+                        title=title,
+                        run_id=run_id,
+                        doc_id=doc_id,
+                        budget_scope=scope,
+                        budget_level=level,
+                        budget_cents=budget,
+                        spent_cny=round(spent, 2),
+                        recipient_user_ids=recipient_ids,
                     )
                 ]
             )
