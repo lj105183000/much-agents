@@ -65,21 +65,22 @@ facts as checkboxes. Reviewers should edit the labels and set
 
 ## L2 judge and calibration
 
-The judge is blinded and uncalibrated by default. Run it on one section:
+The judge is blinded and uncalibrated by default. The workbook flow is:
 
 ```bash
-uv run python -m scripts.eval_judge --input section.json --output judge.json
+uv run python -m scripts.eval_l2 export --run-dir upload/bids/<doc>/<run>
+# fill eval-data/l2/<run>/human.csv (verdict + optional 1-5 scores)
+uv run python -m scripts.eval_l2 judge --dir eval-data/l2/<run> --limit 20
+uv run python -m scripts.eval_l2 import --dir eval-data/l2/<run> \
+  --min-samples 20 --min-agreement 0.8 --min-kappa 0.6 --require-ready
 ```
 
-Compare judge labels with human labels before using it as a release gate:
-
-```bash
-uv run python -m scripts.eval_calibrate --input pairs.json
-```
-
-`pairs.json` is `[["pass","pass"],["revise","pass"],...]` or a list of
-`{"human": "...", "judge": "..."}` objects. Require agreement ≥80% or
-Cohen's kappa ≥0.6 before treating the judge as a gate.
+`export` builds `samples.jsonl` (title/requirements/text/evidence), a blank
+`human.csv`, and a manifest. `judge` writes only rubric scores/verdicts (no
+input text). `import` aligns by `sample_id`, reports agreement, Cohen's kappa,
+per-dimension MAE/±1 and overall MAE, and fails with `--require-ready` until
+sample size and thresholds pass. Single-section `eval_judge` and pair-based
+`eval_calibrate` remain available. See `docs/l2-judge-calibration.md`.
 
 ## Nightly regression
 

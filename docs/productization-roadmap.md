@@ -258,7 +258,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - prompt 变更必须附评测对比；阈值回归阻断合并。
 - 提示词外置为版本化文件/常量，`PROMPT_VERSION` 写入报告。
 
-**已实现**：评测建议脚本、夜间 workflow、prompt registry、L0 基线；L1 CSV 标注流程（`eval_annotate`）与 reviewed points 词面回归评分（`eval_regression --max-l1-drop`、`baseline_metrics`）已落地。仍需 5–10 份脱敏真实标书的人工标注数据与 judge 校准（L2）。
+**已实现**：评测建议脚本、夜间 workflow、prompt registry、L0 基线；L1 CSV 标注流程（`eval_annotate`）与 reviewed points 词面回归评分（`eval_regression --max-l1-drop`、`baseline_metrics`）；L2 盲评工作簿（`eval_l2 export|judge|import`）与一致率/kappa/维度校准门禁。仍需 5–10 份脱敏真实标书的人工标注数据与真实 LLM judge 校准结果。
 
 **P1 关键文件**：`src/bidding/{prompts,checks,retrieval,staged,assemble,gate,compliance,staged_output}.py`、`src/bidding/llm.py`、`src/parsing/extraction/schemas.py`、`api/bid_runs.py`、`frontend/src/components/{BidSectionModal,BidRunWorkspace,BidGatePanel}.tsx`、新增 `citations.json` / `requirements.json` 产物。
 
