@@ -653,12 +653,31 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert snapshot.run_id == run_id
         assert snapshot.gate_status in {"pass", "warn", "block"}
 
+        asyncio.run(
+            repo.add_external_usage(
+                [
+                    {
+                        "project_id": "00000000-0000-0000-0000-000000000001",
+                        "doc_id": "doc-1",
+                        "job_id": "job-1",
+                        "provider": "mineru",
+                        "operation": "parse",
+                        "units": 10,
+                        "unit_type": "page",
+                        "cost_cny": 0.2,
+                        "status": "ok",
+                    }
+                ]
+            )
+        )
         analytics = client.get("/api/analytics/overview?days=30")
         assert analytics.status_code == 200, analytics.text
         payload = analytics.json()
         assert payload["runs"]["total"] == 1
         assert payload["quality"]["snapshots"] == 1
         assert payload["usage"]["llm_calls"] == 0
+        assert payload["external"]["units"] == 10
+        assert payload["external"]["cost_cny"] == 0.2
 
         feedback = client.post(
             f"/api/bid-runs/{run_id}/feedback",

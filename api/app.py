@@ -45,6 +45,10 @@ from .companies import CompanyService
 from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
+from .external_usage import (
+    build_parse_external_usage,
+    persist_external_usage,
+)
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
 from .notifications import (
     NotificationError,
@@ -139,6 +143,12 @@ def create_app(
                     parse_settings=parse_settings,
                     parse_func=parse_func,
                     storage=storage,
+                    external_usage_recorder=lambda current, result: (
+                        persist_external_usage(
+                            bid_run_repo,
+                            build_parse_external_usage(current, result),
+                        )
+                    ),
                 )
 
             dispatcher = LocalDispatcher(runner=parse_runner, executor=execute_parse)

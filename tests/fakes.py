@@ -16,11 +16,13 @@ from api.bid_run_repo import (
     BidApprovalRecord,
     BidCommentRecord,
     BidRunRecord,
+    ExternalUsageRecord,
     FeedbackRecord,
     NotificationRecord,
     NotificationRecipient,
     OutlineSectionRecord,
     QualitySnapshotRecord,
+    RunUsageRecord,
     SectionStateRecord,
     SectionVersionRecord,
 )
@@ -728,8 +730,11 @@ class FakeBidRunRepository:
         ] = {}
         self.feedback_events: list[FeedbackRecord] = []
         self.quality_snapshots: list[QualitySnapshotRecord] = []
+        self.run_usage: dict[str, RunUsageRecord] = {}
+        self.external_usage: list[ExternalUsageRecord] = []
         self._feedback_id = 0
         self._quality_id = 0
+        self._external_id = 0
         self.retrieval_snapshots: list[dict[str, Any]] = []
 
     async def create(
@@ -1139,6 +1144,34 @@ class FakeBidRunRepository:
         self.quality_snapshots.append(record)
         return record
 
+    async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
+        return self.run_usage.get(run_id)
+
+    async def add_external_usage(
+        self, rows: list[dict[str, Any]]
+    ) -> list[ExternalUsageRecord]:
+        records: list[ExternalUsageRecord] = []
+        for row in rows:
+            self._external_id += 1
+            record = ExternalUsageRecord(
+                id=self._external_id,
+                project_id=row.get("project_id"),
+                doc_id=row.get("doc_id"),
+                job_id=row.get("job_id"),
+                provider=str(row.get("provider") or ""),
+                operation=str(row.get("operation") or ""),
+                units=int(row.get("units") or 0),
+                unit_type=str(row.get("unit_type") or "unit"),
+                cost_cny=row.get("cost_cny"),
+                status=str(row.get("status") or "ok"),
+                latency_ms=row.get("latency_ms"),
+                metadata=dict(row.get("metadata") or {}),
+                created_at=datetime.now(timezone.utc),
+            )
+            self.external_usage.append(record)
+            records.append(record)
+        return records
+
     async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
         runs = list(self.runs.values())
         by_status: dict[str, int] = {}
@@ -1173,6 +1206,14 @@ class FakeBidRunRepository:
                 "avg_duration_seconds": None,
             },
             "usage": {},
+            "external": {
+                "records": len(self.external_usage),
+                "units": sum(item.units for item in self.external_usage),
+                "cost_cny": round(
+                    sum(item.cost_cny or 0 for item in self.external_usage), 4
+                ),
+                "by_provider": {},
+            },
             "feedback": {
                 "total": len(self.feedback_events),
                 "by_type": feedback_by_type,

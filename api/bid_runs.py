@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from src.bidding.budget import BudgetDecision, evaluate_budget
 from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.citations import build_citations, strip_citation_markers
 from src.bidding.compliance import evaluate_compliance
@@ -1355,6 +1356,16 @@ class BidRunService:
         except Exception:  # noqa: BLE001
             logger.exception("could not revert bid run %s after enqueue failure", run_id)
 
+    async def _budget_decision(self, run_id: str) -> BudgetDecision:
+        if self.bid_settings.run_budget_cents <= 0:
+            return BudgetDecision(False, False, 0, 0, "")
+        usage = await self._repo().get_run_usage(run_id)
+        return evaluate_budget(
+            budget_cents=self.bid_settings.run_budget_cents,
+            enforcement=self.bid_settings.budget_enforcement,
+            cost_cny=usage.cost_cny if usage is not None else 0.0,
+        )
+
     async def generate(
         self,
         run_id: str,
@@ -1371,6 +1382,9 @@ class BidRunService:
             raise BidRunError(409, f"bid run cannot generate from status {run.status}")
         if run.attempt >= self.max_attempts:
             raise BidRunError(409, "bid run has reached the maximum attempts")
+        budget = await self._budget_decision(run_id)
+        if budget.stop:
+            raise BidRunError(409, budget.message)
 
         if run.status in {"paused", "failed"}:
             await repo.reset_for_resume(run_id)
@@ -1502,6 +1516,9 @@ class BidRunService:
             raise BidRunError(409, "bid run is already queued")
         if run.status not in {"outline_ready", "paused", "failed"}:
             raise BidRunError(409, f"bid run cannot resume from status {run.status}")
+        budget = await self._budget_decision(run_id)
+        if budget.stop:
+            raise BidRunError(409, budget.message)
         await repo.reset_for_resume(run_id)
         return await self.generate(run_id, BidGenerateRequest())
 

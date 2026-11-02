@@ -14,6 +14,10 @@ from .bids import execute_bid_job
 from .celery_app import celery_app
 from .config import ApiSettings
 from .db import Database
+from .external_usage import (
+    build_parse_external_usage,
+    persist_external_usage,
+)
 from .redis_jobs import RedisJobStore
 from .service import execute_parse_job
 from .storage_runtime import build_runtime_storage
@@ -33,13 +37,28 @@ def parse_document_task(job_id: str) -> None:
     bid_settings = BidSettings.from_env()
     store = RedisJobStore.from_settings(api_settings)
     storage = build_runtime_storage(api_settings, parse_settings, bid_settings)
-    execute_parse_job(
-        job_id,
-        store=store,
-        parse_settings=parse_settings,
-        parse_func=parse_document,
-        storage=storage,
+    database = Database(api_settings.database_url)
+    repo = (
+        BidRunRepository(database.session_factory)
+        if database.session_factory is not None
+        else None
     )
+    try:
+        execute_parse_job(
+            job_id,
+            store=store,
+            parse_settings=parse_settings,
+            parse_func=parse_document,
+            storage=storage,
+            external_usage_recorder=lambda current, result: (
+                persist_external_usage(
+                    repo,
+                    build_parse_external_usage(current, result),
+                )
+            ),
+        )
+    finally:
+        asyncio.run(database.close())
 
 
 @celery_app.task(name=BID_TASK_NAME, ignore_result=True)
