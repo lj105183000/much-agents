@@ -15,14 +15,15 @@ export function useDocuments(
   projectId: string | null = null,
 ): DocumentsState {
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
-    setLoading(true)
     setVersion((value) => value + 1)
   }, [])
+
+  const requestKey = `${apiBase}|${projectId ?? ''}|${refreshKey}|${version}`
 
   useEffect(() => {
     let cancelled = false
@@ -33,31 +34,35 @@ export function useDocuments(
         cancelled = true
       }
     }
-    setLoading(true)
+    const key = requestKey
     api
       .listDocuments()
       .then((response) => {
         if (cancelled) return
         setDocuments(response.documents)
         setError(null)
+        setLoadedKey(key)
       })
       .catch((caught: unknown) => {
         if (cancelled) return
         setError(
           caught instanceof ApiError ? caught.message : '文档列表读取失败',
         )
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
+        setLoadedKey(key)
       })
     return () => {
       cancelled = true
     }
-  }, [apiBase, refreshKey, version, projectId])
+  }, [apiBase, refreshKey, version, projectId, requestKey])
 
   if (!projectId) {
-    // Derive the empty state instead of writing it back from the effect.
     return { documents: [], loading: false, error: null, refresh }
   }
-  return { documents, loading, error, refresh }
+  const loading = loadedKey !== requestKey
+  return {
+    documents: loading ? [] : documents,
+    loading,
+    error,
+    refresh,
+  }
 }

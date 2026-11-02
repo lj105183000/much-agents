@@ -59,7 +59,7 @@ export function AuditView() {
   const [applied, setApplied] = useState<AuditFilters>(EMPTY_FILTERS)
   const [page, setPage] = useState(1)
   const [data, setData] = useState<AuditListResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -70,9 +70,12 @@ export function AuditView() {
   const [verifyError, setVerifyError] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
 
+  const requestKey = `${page}|${reloadKey}|${JSON.stringify(applied)}`
+  const loading = loadedKey !== requestKey
+
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    const key = requestKey
     auditApi
       .list(applied, {
         limit: PAGE_SIZE,
@@ -82,19 +85,18 @@ export function AuditView() {
         if (cancelled) return
         setData(response)
         setError(null)
+        setLoadedKey(key)
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
           setError(errorMessage(caught, '审计日志读取失败'))
+          setLoadedKey(key)
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [applied, page, reloadKey])
+  }, [applied, page, reloadKey, requestKey])
 
   const applyFilters = () => {
     setApplied({ ...draft })
