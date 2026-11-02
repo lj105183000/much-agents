@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2563eb" />
+    <title>标书哨兵 · 产品介绍视频</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --blue: #2563eb;
+        --blue-soft: #eff6ff;
+        --ink: #0f172a;
+        --muted: #475569;
+        --line: #dbeafe;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 32px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(circle at 50% 0%, #dbeafe 0%, transparent 42%),
+          linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+      .card {
+        width: min(1180px, 100%);
+        padding: 30px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 30px 90px rgba(37, 99, 235, 0.14);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .logo {
+        width: 54px;
+        height: 54px;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        border-radius: 17px;
+        background: var(--blue);
+        color: #fff;
+        font-size: 27px;
+        font-weight: 700;
+        box-shadow: 0 12px 30px rgba(37, 99, 235, 0.3);
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(22px, 3vw, 32px);
+        letter-spacing: 0.04em;
+      }
+      .subtitle {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      video {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        margin-top: 24px;
+        border-radius: 18px;
+        background: #020617;
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 16px;
+        color: #64748b;
+        font-size: 13px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        font-weight: 600;
+      }
+      a {
+        color: var(--blue);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      @media (max-width: 640px) {
+        body {
+          padding: 16px 10px;
+        }
+        .card {
+          padding: 18px;
+          border-radius: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">哨</div>
+        <div>
+          <h1>标书哨兵 · 产品介绍</h1>
+          <p class="subtitle">多 Agent 标书编写系统 · 从解析、编写到审核交付</p>
+        </div>
+      </div>
+
+      <video
+        controls
+        preload="metadata"
+        playsinline
+        poster="biaoshu-shaobing-product-intro-poster.jpg"
+      >
+        <source
+          src="biaoshu-shaobing-product-intro-1080p.mp4"
+          type="video/mp4"
+        />
+        你的浏览器不支持 HTML5 视频，请
+        <a href="biaoshu-shaobing-product-intro-1080p.mp4">下载 MP4</a>。
+      </video>
+
+      <div class="meta">
+        <span class="badge">1080P · 60 秒 · 中文男声旁白</span>
+        <span>登录 · 文档库 · 编写大纲 · 企业资质 · 检索 · 门禁合规 · 审计</span>
+        <a href="biaoshu-shaobing-product-intro-1080p.mp4" download>下载 MP4</a>
+      </div>
+    </main>
+  </body>
+</html>
