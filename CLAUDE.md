@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 多 Agent 标书编写系统（Much Agents）：解析招标文件 PDF → 结构化抽取 → 入 Chroma 向量库 → 由 LangGraph 多 Agent 生成投标文件（Markdown + Word），前端为 React + Electron 桌面端。技术栈参考 [ZhiBiao](https://github.com/Foulereee/ZhiBiao)。
 
-**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、站内通知/Webhook/SMTP、章节反馈/质量快照/运营看板与 CSV 报表、MinerU/Embedding（含附件）用量账本、run 预算与项目月度配额、DOC/DOCX/PDF 导出与可选 DOCX 模板、企业资质库、Playwright 浏览器 E2E（隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
+**当前状态**：已实现文档解析管线 `src/parsing/`（含附件上传 API/UI、附件证据追加、MinerU OCR 回退与 BOQ 专项检索）、FastAPI 上传/任务接口 `api/`、Celery/Redis 异步任务后端（含 local 内存兜底）、多 Agent 投标文件编写 `src/bidding/`、招标文件片段检索、PostgreSQL 公司库与持久化投标 run/大纲/章节状态、可编辑大纲、章节级续跑与单节编辑/重写、服务端投标历史、评审评论/@提及/指派与 SSE 实时进度、站内通知/Webhook/SMTP、章节反馈/质量快照/运营看板与 CSV 报表、MinerU/Embedding（含附件）用量账本、run 预算与项目月度配额、L1 评测集 CSV 标注流程、DOC/DOCX/PDF 导出与可选 DOCX 模板、企业资质库、Playwright 浏览器 E2E（隔离 PostgreSQL 栈）与只读 HTTP/SSE 压测、独立 21 项合规检查、跨章节一致性台账与安全修复方案、导出前门禁、确定性 AI 配图（组织架构/工艺流程/进度横道/施工总平面并真实嵌入 Markdown/DOCX）、MCP 服务端（stdio + 可选 HTTP）与白名单 MCP 客户端（外部证据/企业资料库/外部绘图）、可选 MinIO 对象存储（`STORAGE_BACKEND=minio|local`，默认 minio；artifact 流式下载与私有 profile）、本地账号/可撤销会话/5 角色 RBAC/管理员用户管理/MCP 服务账号（P0-A）、项目注册表与对象级 ACL（P0-B）、append-only 审计哈希链（P0-C）、React/Electron 前端登录/项目切换/审计/自助改密与角色感知工作台、Nginx 前端托管/API 反向代理、Windows 一键启动/停止脚本、生产 Docker Compose/TLS/CI/备份恢复脚本（P0-D）与测试 `tests/`。生产就绪增强已落地：L0 指标与离线基线 `scripts/baseline_metrics.py`、私有评测集构建 `scripts/eval_dataset.py`、LLM 调用账本与成本计量（`llm_call_log`/`run_usage`）、JSON 日志与 request_id 贯穿 API→Celery、`/api/metrics` 核心指标、Chroma readiness、stale reaper/章节 generation_token/独立心跳/取消终态/DLQ、加密异地备份与 systemd timer、assembled `content_sha256` 导出校验、审批 API 与 `BID_REQUIRE_APPROVAL`、DOCX TOC/页码/DPI 质量检查、MinIO/Chroma/Postgres/Redis digest pin 与 CI Trivy/Syft SBOM、L2 judge/校准工具与可选夜间回归 workflow；迁移 0005→0009、临时库往返与生产 Compose 备份/恢复演练已在本地 Docker Desktop 验证；`monitoring` profile 提供固定 digest 的 Prometheus/Alertmanager/Grafana（Alertmanager 通知渠道为占位配置）；每个章节的检索 query/mode/hit 摘要写入 `retrieval_snapshots`（迁移 `0010`）；prompt 文件哈希与默认模型/温度登记到 `prompt_registry`（迁移 `0011`，`scripts/seed_prompts.py`）；章节版本历史/diff/恢复（迁移 `0012`，`bid_section_versions`；`0013` 增加 outline revision/审查摘要）与经 Headless LibreOffice 的 PDF 导出（`POST /api/bid-runs/{id}/export/pdf`）已实现；需求登记/覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`，生成时标注、确定性校验、导出前剥离标记）也已落地。DOC（97-2003）导出、评论/SSE、文生图与前端 IPC 仍未实现；后续阶段以本文件与代码为准。
 
 ## 常用命令
 
@@ -53,6 +53,10 @@ uv run python -m scripts.baseline_metrics                                    # �
 uv run python -m scripts.eval_dataset build --all                            # 构建私有评测集到 eval-data/（gitignored）
 uv run python -m scripts.eval_dataset validate                               # 校验评测集结构并提示待人工标注项
 uv run python -m scripts.eval_review                                         # 导出人工复核 Markdown 清单到 eval-data/reviews/
+uv run python -m scripts.eval_annotate status                                # L1 标注完成度
+uv run python -m scripts.eval_annotate export --case-id <doc_id>             # 导出可编辑 CSV 标注表
+uv run python -m scripts.eval_annotate import --case-id <doc_id> --mark-reviewed  # 导入并标记 reviewed
+uv run python -m scripts.eval_annotate validate --case-id <doc_id>           # 校验标注交叉引用
 uv run python -m scripts.eval_judge --input section.json                      # 对单节运行盲评 LLM-as-judge
 uv run python -m scripts.eval_calibrate --input pairs.json                    # judge 与人工标签的一致率/kappa
 uv run python -m scripts.eval_generate --dry-run                              # 打印夜间样本生成命令
@@ -329,7 +333,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：前端 IPC（打开本地目录）、多模板库/模板 UI/按项目选择模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与配额历史/预算趋势图、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 人工复核与 L2 judge 校准数据、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
+- **待办**：前端 IPC（打开本地目录）、多模板库/模板 UI/按项目选择模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与配额历史/预算趋势图、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1 实际标注数据与 L2 judge 校准、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI。
 
 ### 配置与数据
 
