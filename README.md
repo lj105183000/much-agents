@@ -35,7 +35,7 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `src/bidding/` | LangGraph 写作、大纲、合规、一致性、修复方案、配图 |
 | `src/storage/` | 本地 / MinIO 对象存储与 hydration |
 | `src/mcp_client/` | 白名单 MCP 客户端 |
-| `migrations/` | Alembic 迁移（`0001`–`0019`） |
+| `migrations/` | Alembic 迁移（`0001`–`0020`） |
 | `frontend/` | React 19 + TypeScript + TailwindCSS 4 + Electron |
 | `deploy/` | Nginx/TLS、生产 Compose 环境模板 |
 | `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测 |

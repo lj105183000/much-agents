@@ -158,6 +158,8 @@ from .schemas import (
     LoginRequest,
     LoginResponse,
     NotificationListResponse,
+    NotificationPreferencesUpdate,
+    NotificationPreferencesView,
     NotificationReadAllResponse,
     NotificationReadResponse,
     NotificationUnreadResponse,
@@ -1397,6 +1399,34 @@ def build_router() -> APIRouter:
                 for record in records
             ],
             unread=unread,
+        )
+
+    @router.get(
+        "/notifications/preferences",
+        response_model=NotificationPreferencesView,
+    )
+    async def get_notification_preferences(
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationPreferencesView:
+        return NotificationPreferencesView(
+            **await notifications.get_preferences(user.id)
+        )
+
+    @router.patch(
+        "/notifications/preferences",
+        response_model=NotificationPreferencesView,
+    )
+    async def update_notification_preferences(
+        payload: NotificationPreferencesUpdate,
+        user: UserContext = Depends(require_user),
+        notifications: NotificationService = Depends(get_notification_service),
+    ) -> NotificationPreferencesView:
+        if not payload.model_fields_set:
+            raise HTTPException(status_code=422, detail="no fields to update")
+        fields = payload.model_dump(exclude_unset=True)
+        return NotificationPreferencesView(
+            **await notifications.update_preferences(user.id, **fields)
         )
 
     @router.get(

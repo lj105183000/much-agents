@@ -55,6 +55,8 @@ import type {
   JobCreatedResponse,
   JobStatusResponse,
   NotificationListResponse,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
   NotificationReadAllResponse,
   NotificationReadResponse,
   NotificationUnreadResponse,
@@ -835,6 +837,25 @@ export const api = {
 
   notificationUnreadCount(): Promise<NotificationUnreadResponse> {
     return request<NotificationUnreadResponse>('/api/notifications/unread')
+  },
+
+  getNotificationPreferences(): Promise<NotificationPreferences> {
+    return request<NotificationPreferences>(
+      '/api/notifications/preferences',
+    )
+  },
+
+  updateNotificationPreferences(
+    payload: NotificationPreferencesUpdate,
+  ): Promise<NotificationPreferences> {
+    return request<NotificationPreferences>(
+      '/api/notifications/preferences',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
   },
 
   markNotificationRead(

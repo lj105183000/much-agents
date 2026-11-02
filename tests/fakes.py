@@ -728,6 +728,7 @@ class FakeBidRunRepository:
         self.notification_recipients: dict[
             str, list[NotificationRecipient]
         ] = {}
+        self.notification_preferences: dict[str, dict[str, bool]] = {}
         self.feedback_events: list[FeedbackRecord] = []
         self.quality_snapshots: list[QualitySnapshotRecord] = []
         self.run_usage: dict[str, RunUsageRecord] = {}
@@ -948,6 +949,38 @@ class FakeBidRunRepository:
         updated = replace(record, **values)
         self.comments[comment_id] = updated
         return updated
+
+    async def get_notification_preferences(
+        self, user_id: str
+    ) -> dict[str, bool]:
+        return dict(
+            self.notification_preferences.get(
+                user_id,
+                {
+                    "comment_enabled": True,
+                    "run_enabled": True,
+                    "budget_enabled": True,
+                },
+            )
+        )
+
+    async def notification_preferences_map(
+        self, user_ids: list[str]
+    ) -> dict[str, dict[str, bool]]:
+        return {
+            user_id: await self.get_notification_preferences(user_id)
+            for user_id in dict.fromkeys(user_ids)
+        }
+
+    async def upsert_notification_preferences(
+        self, user_id: str, **fields: Any
+    ) -> dict[str, bool]:
+        current = await self.get_notification_preferences(user_id)
+        for key in ("comment_enabled", "run_enabled", "budget_enabled"):
+            if fields.get(key) is not None:
+                current[key] = bool(fields[key])
+        self.notification_preferences[user_id] = current
+        return current
 
     async def add_notifications(
         self, rows: list[dict[str, Any]]

@@ -1021,6 +1021,18 @@ export interface NotificationView {
   created_at: string
 }
 
+export interface NotificationPreferences {
+  comment_enabled: boolean
+  run_enabled: boolean
+  budget_enabled: boolean
+}
+
+export interface NotificationPreferencesUpdate {
+  comment_enabled?: boolean
+  run_enabled?: boolean
+  budget_enabled?: boolean
+}
+
 export interface NotificationListResponse {
   notifications: NotificationView[]
   unread: number

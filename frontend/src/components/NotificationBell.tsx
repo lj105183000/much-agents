@@ -5,6 +5,7 @@ import { cn } from '../lib/cn'
 import { formatDate } from '../lib/format'
 import { Badge, Button, Spinner } from './ui'
 import { Icon } from './icons'
+import { NotificationPreferencesDialog } from './NotificationPreferencesDialog'
 
 interface NotificationBellProps {
   apiBase: string
@@ -44,6 +45,7 @@ export function NotificationBell({
   const { items, unread, loading, error, markRead, markAllRead } =
     useNotifications(apiBase, projectId)
   const [open, setOpen] = useState(false)
+  const [preferencesOpen, setPreferencesOpen] = useState(false)
   const container = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -100,16 +102,31 @@ export function NotificationBell({
               </span>
               {unread > 0 ? <Badge tone="cyan">{unread} 未读</Badge> : null}
             </div>
-            {unread > 0 ? (
-              <Button
-                data-testid="notification-mark-all"
-                variant="ghost"
-                size="sm"
-                onClick={() => void markAllRead()}
+            <div className="flex items-center gap-1">
+              {unread > 0 ? (
+                <Button
+                  data-testid="notification-mark-all"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void markAllRead()}
+                >
+                  全部已读
+                </Button>
+              ) : null}
+              <button
+                type="button"
+                data-testid="notification-settings"
+                aria-label="通知设置"
+                title="通知设置"
+                onClick={() => {
+                  setOpen(false)
+                  setPreferencesOpen(true)
+                }}
+                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
               >
-                全部已读
-              </Button>
-            ) : null}
+                <Icon name="settings" className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
           {error ? (
@@ -177,6 +194,11 @@ export function NotificationBell({
           ) : null}
         </div>
       ) : null}
+
+      <NotificationPreferencesDialog
+        open={preferencesOpen}
+        onClose={() => setPreferencesOpen(false)}
+      />
     </div>
   )
 }

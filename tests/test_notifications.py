@@ -413,6 +413,57 @@ def test_budget_alerts_notify_managers_and_dedupe(tmp_path: Path) -> None:
     assert all("¥" in record.body for record in records)
 
 
+def test_notification_preferences_api(tmp_path: Path) -> None:
+    app, repo, _notifier = make_app(tmp_path)
+    with TestClient(app) as client:
+        defaults = client.get("/api/notifications/preferences")
+        assert defaults.status_code == 200
+        assert defaults.json() == {
+            "comment_enabled": True,
+            "run_enabled": True,
+            "budget_enabled": True,
+        }
+        updated = client.patch(
+            "/api/notifications/preferences",
+            json={"budget_enabled": False},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["budget_enabled"] is False
+        persisted = client.get("/api/notifications/preferences").json()
+        assert persisted["budget_enabled"] is False
+        assert repo.notification_preferences["local"]["budget_enabled"] is False
+
+        empty = client.patch("/api/notifications/preferences", json={})
+        assert empty.status_code == 422
+
+
+def test_budget_alert_respects_preferences(tmp_path: Path) -> None:
+    _app, repo, notifier = make_app(tmp_path)
+    repo.notification_recipients[DEFAULT_PROJECT_ID] = [
+        NotificationRecipient("u-manager", "manager", "Manager", "manager")
+    ]
+    repo.notification_preferences["u-manager"] = {
+        "comment_enabled": True,
+        "run_enabled": True,
+        "budget_enabled": False,
+    }
+    run = _paused_run()
+
+    async def exercise() -> None:
+        records = await notifier.notify_budget(
+            project_id=DEFAULT_PROJECT_ID,
+            scope="run",
+            level="exceeded",
+            spent_cny=1.2,
+            budget_cents=100,
+            run=run,
+        )
+        assert records == []
+
+    asyncio.run(exercise())
+    assert repo.notifications == {}
+
+
 def test_webhook_dispatcher_signs_payload_without_comment_body() -> None:
     captured: dict[str, object] = {}
 

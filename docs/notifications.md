@@ -40,7 +40,16 @@ Alembic `0015` 新增 `notifications`：
 
 前端 Header 的通知铃铛每 25 秒轮询一次，并在窗口重新聚焦时刷新；点击通知会标记已读，若带 `run_id` 则直接打开对应标书 run。**未实现**通知 SSE，轮询足以覆盖内网小团队。
 
-## 3. Webhook
+## 3. 通知偏好
+
+迁移 `0020` 新增 `notification_preferences`（`user_id` 主键，`comment_enabled`/`run_enabled`/`budget_enabled`，默认 true）：
+
+- `GET /api/notifications/preferences`、`PATCH /api/notifications/preferences`（当前登录用户；不要求项目头）。
+- 关闭某类后，该类站内通知不再写入，也不会把该用户列入 Webhook/SMTP 的收件人；评论 @/指派、run 完成/门禁/审批、预算告警分别对应 comment/run/budget。
+- 偏好读取失败时 fail-open（继续按默认开启处理），避免数据库抖动导致漏告警。
+- 前端通知铃铛内的齿轮按钮打开「通知设置」，三个开关即时保存。
+
+## 4. Webhook
 
 ```ini
 NOTIFY_WEBHOOK_URL=https://hooks.example.internal/much-agents
@@ -53,7 +62,7 @@ NOTIFY_WEBHOOK_TIMEOUT_SECONDS=5
 - 载荷只包含事件、时间、项目/run/doc/comment/section id、操作人 id/姓名、门禁状态、内容哈希、收件人 id；预算事件额外包含 `budget_scope/budget_level/budget_cents/spent_cny`。**不包含评论正文、profile、招标文件文本、token**。
 - 同步发送放在后台线程（API 请求所在 event loop 用 `asyncio.to_thread`；Celery worker 直接发送），单次超时默认 5 秒；失败只记 warning，不重试、不阻断主流程。
 
-## 4. SMTP
+## 5. SMTP
 
 ```ini
 NOTIFY_EMAIL_ENABLED=true
@@ -72,9 +81,9 @@ NOTIFY_EMAIL_TO=bid-team@example.internal,ops@example.internal
 - 使用 `smtplib`；`SMTP_USE_SSL=true` 时走 `SMTP_SSL`，否则按 `SMTP_STARTTLS` 决定是否 `STARTTLS`。
 - 未配置 `SMTP_HOST`/`SMTP_FROM`/`NOTIFY_EMAIL_TO` 时视为未启用。
 
-## 5. 隐私与边界
+## 6. 隐私与边界
 
 - 出站载荷与审计、日志都不得包含：评论正文（Webhook/SMTP）、投标人资料、身份证号/银行账号/信用代码、token、密码、profile 路径。
 - 站内通知正文可包含评论摘要（最多 200 字），仅当前项目用户可见。
-- 当前没有：通知重试/DLQ、用户级邮件地址、通知偏好设置、Webhook 白名单域名校验、资质到期提醒、项目看板。
+- 当前没有：通知重试/DLQ、用户级邮件地址、Webhook 白名单域名校验、资质到期提醒、项目看板。通知偏好已实现（按类别）。
 - 测试：`tests/test_notifications.py` 覆盖评论提及/指派、run 组装/门禁、预算告警与去重、列表/已读 API、Webhook 签名与载荷、SMTP 元数据；E2E 覆盖铃铛与“全部已读”。

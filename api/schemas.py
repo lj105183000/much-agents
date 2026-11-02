@@ -389,6 +389,20 @@ class NotificationListResponse(BaseModel):
     unread: int = 0
 
 
+class NotificationPreferencesView(BaseModel):
+    comment_enabled: bool = True
+    run_enabled: bool = True
+    budget_enabled: bool = True
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    comment_enabled: bool | None = None
+    run_enabled: bool | None = None
+    budget_enabled: bool | None = None
+
+
 class NotificationUnreadResponse(BaseModel):
     unread: int = 0
 
