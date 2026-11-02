@@ -19,6 +19,11 @@ async function login(page: Page, username: string, password: string) {
   await expect(
     page.getByRole('navigation', { name: '主导航' }),
   ).toBeVisible()
+  // Wait for the project list to settle; NotificationBell is keyed by the
+  // current project and remounts if the test clicks before selection.
+  await expect(
+    page.getByRole('combobox', { name: '当前项目' }),
+  ).toBeEnabled()
 }
 
 async function navigate(page: Page, label: RegExp) {

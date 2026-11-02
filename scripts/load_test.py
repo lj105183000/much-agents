@@ -428,16 +428,27 @@ def main(argv: list[str] | None = None) -> int:
             )
         if summary["errors"]:
             print("errors:", ", ".join(summary["errors"]))
-    failed = summary["error_rate"] > args.max_error_rate
+    reasons: list[str] = []
+    if summary["error_rate"] > args.max_error_rate:
+        reasons.append(
+            f"error_rate {summary['error_rate']} > {args.max_error_rate}"
+        )
     if summary["sse"]["failed_connections"]:
-        failed = True
+        reasons.append(
+            f"SSE failed_connections={summary['sse']['failed_connections']}"
+        )
     if (
         args.max_p95_ms > 0
         and summary["latency_ms"]["p95"] is not None
         and summary["latency_ms"]["p95"] > args.max_p95_ms
     ):
-        failed = True
-    return 1 if failed else 0
+        reasons.append(
+            f"p95 {summary['latency_ms']['p95']}ms > {args.max_p95_ms}ms"
+        )
+    if reasons:
+        print("load probe failed: " + "; ".join(reasons), file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

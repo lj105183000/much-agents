@@ -1,6 +1,6 @@
 # 前端 E2E 与压测
 
-> 状态：已实现（2026-11-02）。浏览器 E2E 使用 Playwright + 隔离 PostgreSQL；压测脚本 `scripts/load_test.py` 只读，覆盖 HTTP 与 SSE。
+> 状态：已实现（2026-11-02）。浏览器 E2E 使用 Playwright + 隔离 PostgreSQL；压测脚本 `scripts/load_test.py` 只读，覆盖 HTTP 与 SSE。CI 的 `e2e` job 会同时运行压测并执行 p95 门禁。
 
 ## 1. 浏览器 E2E
 
@@ -88,7 +88,7 @@ E2E_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
 - HTTP：`health`、`live`、`ready`、`runs`、`comments`、只读 `search`（POST 但无副作用）。
 - SSE：并发打开 `/api/bid-runs/{id}/events`，统计连接失败与 `snapshot` 帧数。
 - 统计：请求数、RPS、错误率、p50/p95/p99/max、按端点拆分、SSE 连接/帧数。
-- 失败判定：错误率超过 `--max-error-rate`（默认 1%）、任一 SSE 连接失败、或 p95 超过 `--max-p95-ms`（默认不启用）。
+- 失败判定：错误率超过 `--max-error-rate`（默认 1%）、任一 SSE 连接失败、或 p95 超过 `--max-p95-ms`（默认不启用）；失败时 stderr 会列出具体触发条件。
 
 ### 2.1 认证
 
@@ -125,7 +125,23 @@ LOAD_TEST_RUN_ID=<run_id> \
 
 在本地 E2E 栈上的冒烟结果（仅作参考）：6 并发、5 秒，health/runs/comments 共 224 请求、0 失败、44 RPS；4 条 SSE 连接全部成功，5 秒内收到 16 帧。
 
-### 2.3 注意
+### 2.3 CI 门禁
+
+`scripts/run_e2e.py --load-test` 会先通过 API 创建一个空的 bid run（用于 `comments` 与 SSE），再用 `scripts.load_test` 压测 `health/live/ready/runs/comments/search` 与 4 条 SSE 连接：
+
+```bash
+uv run python scripts/run_e2e.py \
+  --load-test \
+  --load-duration 10 --load-concurrency 8 \
+  --load-max-p95-ms 2000 \
+  --load-sse-connections 4 --load-sse-seconds 5
+```
+
+- 凭据通过子进程环境变量传入（`LOAD_TEST_USERNAME/PASSWORD/PROJECT_ID/RUN_ID/DOC_ID`），不出现在命令行。
+- 任一请求错误率超过 1%、SSE 连接失败或整体 p95 超过 `--load-max-p95-ms`（默认 1500 ms；CI 使用 2000 ms）都会让 step 失败。
+- `.github/workflows/ci.yml` 的 `e2e` job 已带上述参数运行；Playwright 与压测共用同一套隔离栈。
+
+### 2.4 注意
 
 - 生成/解析/导出会消耗 LLM 配额或 CPU，不在压测范围内；只测读路径与 SSE。
 - 生产压测应通过内网入口并配合 Prometheus 指标；不要把真实 token 写进脚本、URL 或日志。
