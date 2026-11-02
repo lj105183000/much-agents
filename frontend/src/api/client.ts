@@ -44,6 +44,9 @@ import type {
   BidSectionVersionDetail,
   BidSectionVersionDiffResponse,
   BidSectionVersionListResponse,
+  BidTemplateListResponse,
+  BidTemplateUpdateInput,
+  BidTemplateView,
   CompanyDetail,
   CompanyListResponse,
   CompanyQualification,
@@ -801,6 +804,53 @@ export const api = {
   getBidGate(runId: string): Promise<BidGateResponse> {
     return request<BidGateResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/gate`,
+    )
+  },
+
+  listBidTemplates(): Promise<BidTemplateListResponse> {
+    return request<BidTemplateListResponse>('/api/templates')
+  },
+
+  uploadBidTemplate(
+    file: File,
+    input: { name?: string; description?: string } = {},
+  ): Promise<BidTemplateView> {
+    const body = new FormData()
+    body.append('file', file)
+    const name = input.name?.trim()
+    const description = input.description?.trim()
+    if (name) body.append('name', name)
+    if (description) body.append('description', description)
+    return request<BidTemplateView>('/api/templates', {
+      method: 'POST',
+      body,
+    })
+  },
+
+  updateBidTemplate(
+    templateId: string,
+    input: BidTemplateUpdateInput,
+  ): Promise<BidTemplateView> {
+    return request<BidTemplateView>(
+      `/api/templates/${encodeURIComponent(templateId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  deleteBidTemplate(templateId: string): Promise<void> {
+    return request<void>(
+      `/api/templates/${encodeURIComponent(templateId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  downloadBidTemplate(templateId: string): Promise<Blob> {
+    return requestBlob(
+      `/api/templates/${encodeURIComponent(templateId)}/download`,
     )
   },
 

@@ -22,6 +22,7 @@ import { BidOutlineEditor } from '../components/BidOutlineEditor'
 import { BidRunWorkspace } from '../components/BidRunWorkspace'
 import { BidUsagePanel } from '../components/BidUsagePanel'
 import { BidSectionModal } from '../components/BidSectionModal'
+import { BidTemplatesPanel } from '../components/BidTemplatesPanel'
 import { ProfileEditor } from '../components/ProfileEditor'
 import { ArtifactPanel } from '../components/ArtifactPanel'
 import { Icon } from '../components/icons'
@@ -128,7 +129,7 @@ export function BidView({
   const [sectionActionError, setSectionActionError] = useState<string | null>(
     null,
   )
-  const { canWrite } = usePermissions()
+  const { canManage, canWrite } = usePermissions()
   const companies = useCompanies(apiBase)
   const bidRun = useBidRun(runId, apiBase)
   const run = bidRun.run
@@ -759,6 +760,8 @@ export function BidView({
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
+      <BidTemplatesPanel canManage={canManage} />
+
       {!runId ? (
         <>
           <Card className="p-5">

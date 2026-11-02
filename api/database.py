@@ -196,6 +196,53 @@ class ProjectMemberRow(Base):
     )
 
 
+class BidTemplateRow(Base):
+    __tablename__ = "bid_templates"
+    __table_args__ = (
+        Index("ix_bid_templates_project_created", "project_id", "created_at"),
+        Index(
+            "uq_bid_templates_active_project",
+            "project_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(
+        String(512), nullable=False, server_default=text("''")
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger(), nullable=False, server_default=text("0")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(36))
+    created_by_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class DocumentRow(Base):
     __tablename__ = "documents"
     __table_args__ = (

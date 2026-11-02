@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import shutil
+import tempfile
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -96,6 +97,7 @@ from .bid_run_repo import (
     BidCommentRecord,
     BidRunRecord,
     BidRunRepository,
+    BidTemplateRecord,
     FeedbackRecord,
     OutlineSectionRecord,
     SectionStateRecord,
@@ -143,6 +145,9 @@ from .schemas import (
     BidRunSummary,
     BidSectionDetail,
     BidSectionUpdateRequest,
+    BidTemplateListResponse,
+    BidTemplateUpdateRequest,
+    BidTemplateView,
 )
 
 logger = logging.getLogger(__name__)
@@ -2463,6 +2468,167 @@ class BidRunService:
             actor_name=actor_name,
         )
 
+    # ---- project DOCX template library ---------------------------------
+
+    @staticmethod
+    def _template_payload(record: BidTemplateRecord) -> BidTemplateView:
+        return BidTemplateView(
+            id=record.id,
+            name=record.name,
+            description=record.description,
+            filename=record.filename,
+            sha256=record.sha256,
+            size_bytes=record.size_bytes,
+            is_active=record.is_active,
+            version=record.version,
+            created_by_name=record.created_by_name,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            download_url=f"/api/templates/{record.id}/download",
+        )
+
+    async def list_templates(
+        self, project_id: str
+    ) -> BidTemplateListResponse:
+        records = await self._repo().list_templates(project_id)
+        return BidTemplateListResponse(
+            templates=[self._template_payload(record) for record in records]
+        )
+
+    async def get_template(
+        self, project_id: str, template_id: str
+    ) -> BidTemplateRecord:
+        record = await self._repo().get_template(project_id, template_id)
+        if record is None:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        return record
+
+    async def create_template(
+        self,
+        project_id: str,
+        *,
+        source_path: Path,
+        filename: str,
+        name: str,
+        description: str,
+        sha256: str,
+        size_bytes: int,
+        created_by: str | None,
+        created_by_name: str | None,
+    ) -> BidTemplateView:
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        template_id = uuid4().hex
+        object_key = f"private/templates/{project_id}/{template_id}.docx"
+        try:
+            await asyncio.to_thread(
+                self.storage.put_file,
+                object_key,
+                source_path,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        try:
+            record = await self._repo().create_template(
+                template_id=template_id,
+                project_id=project_id,
+                name=name.strip()[:128],
+                description=description.strip()[:512],
+                filename=filename[:255],
+                object_key=object_key,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                is_active=False,
+                created_by=created_by,
+                created_by_name=created_by_name,
+            )
+        except Exception:
+            try:
+                await asyncio.to_thread(self.storage.delete, object_key)
+            except StorageError:
+                logger.warning(
+                    "could not roll back template object %s",
+                    object_key,
+                    exc_info=True,
+                )
+            raise
+        return self._template_payload(record)
+
+    async def update_template(
+        self,
+        project_id: str,
+        template_id: str,
+        payload: BidTemplateUpdateRequest,
+    ) -> BidTemplateView:
+        fields = payload.model_fields_set
+        if not fields:
+            raise BidRunError(422, "no template fields to update")
+        name = (payload.name or "").strip() if "name" in fields else None
+        if "name" in fields and not name:
+            raise BidRunError(422, "template name must not be blank")
+        record = await self._repo().update_template(
+            project_id,
+            template_id,
+            name=name,
+            description=(
+                payload.description.strip()
+                if "description" in fields and payload.description is not None
+                else None
+            ),
+            is_active=payload.is_active if "is_active" in fields else None,
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        return self._template_payload(record)
+
+    async def delete_template(
+        self, project_id: str, template_id: str
+    ) -> None:
+        record = await self.get_template(project_id, template_id)
+        deleted = await self._repo().delete_template(project_id, template_id)
+        if not deleted:
+            raise BidRunError(404, f"unknown template: {template_id}")
+        if self.storage is not None:
+            try:
+                await asyncio.to_thread(self.storage.delete, record.object_key)
+            except StorageError:
+                logger.warning(
+                    "could not delete template object %s",
+                    record.object_key,
+                    exc_info=True,
+                )
+
+    async def _resolve_docx_template(
+        self, run: BidRunRecord
+    ) -> tuple[Path | None, tempfile.TemporaryDirectory[str] | None]:
+        active = await self._repo().get_active_template(run.project_id)
+        if active is None:
+            configured = (self.bid_settings.docx_template or "").strip()
+            return (Path(configured) if configured else None), None
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        tempdir = tempfile.TemporaryDirectory(prefix="much-agents-template-")
+        target = Path(tempdir.name) / "template.docx"
+        try:
+            await asyncio.to_thread(
+                self.storage.download_file, active.object_key, target
+            )
+        except StorageObjectNotFound as exc:
+            tempdir.cleanup()
+            raise BidRunError(
+                409, "the active DOCX template file is missing"
+            ) from exc
+        except StorageError as exc:
+            tempdir.cleanup()
+            raise BidRunError(
+                503, "object storage is unavailable"
+            ) from exc
+        return target, tempdir
+
     @staticmethod
     def _gate_response(run: BidRunRecord) -> BidGateResponse:
         gate = run.gate or {}
@@ -2514,6 +2680,7 @@ class BidRunService:
         )
         outputs = outputs_from_states(states)
         allowed = build_allowed(context, profile, outline)
+        template_path, template_temp = await self._resolve_docx_template(run)
         try:
             base = assemble_staged_bid(
                 context=context,
@@ -2634,7 +2801,11 @@ class BidRunService:
                 requirements=requirements,
                 citations=citations,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
-                docx_template=self.bid_settings.docx_template,
+                docx_template=(
+                    str(template_path)
+                    if template_path is not None
+                    else self.bid_settings.docx_template
+                ),
             )
             if isinstance(result.get("report", {}).get("docx_quality"), dict):
                 gate = evaluate_gate(
@@ -2656,6 +2827,9 @@ class BidRunService:
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)
             raise BidRunError(500, "bid assembly failed") from exc
+        finally:
+            if template_temp is not None:
+                template_temp.cleanup()
 
         await self._sync_run_derived(run)
 

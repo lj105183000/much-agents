@@ -21,6 +21,7 @@ from .database import (
     BidRunRow,
     BidSectionStateRow,
     BidSectionVersionRow,
+    BidTemplateRow,
     ExternalUsageRow,
     FeedbackEventRow,
     LlmCallLogRow,
@@ -37,6 +38,15 @@ from .database import (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _lock_template_activation(session: Any, project_id: str) -> None:
+    """Serialize per-project template activation to avoid bulk-update races."""
+
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:project_id, 0))"),
+        {"project_id": project_id},
+    )
 
 
 def _review_summary(review: Any, issues: Any) -> str | None:
@@ -177,6 +187,24 @@ class SectionVersionRecord:
     created_by: str | None
     created_by_name: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class BidTemplateRecord:
+    id: str
+    project_id: str
+    name: str
+    description: str
+    filename: str
+    object_key: str
+    sha256: str
+    size_bytes: int
+    is_active: bool
+    version: int
+    created_by: str | None
+    created_by_name: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +488,25 @@ def _notification_record(row: NotificationRow) -> NotificationRecord:
         dedupe_key=row.dedupe_key,
         read_at=row.read_at,
         created_at=row.created_at,
+    )
+
+
+def _template_record(row: BidTemplateRow) -> BidTemplateRecord:
+    return BidTemplateRecord(
+        id=row.id,
+        project_id=row.project_id,
+        name=row.name,
+        description=row.description or "",
+        filename=row.filename,
+        object_key=row.object_key,
+        sha256=row.sha256,
+        size_bytes=int(row.size_bytes or 0),
+        is_active=bool(row.is_active),
+        version=int(row.version or 1),
+        created_by=row.created_by,
+        created_by_name=row.created_by_name,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -1856,6 +1903,132 @@ class BidRunRepository:
             for member, user in rows
         ]
 
+    async def list_templates(self, project_id: str) -> list[BidTemplateRecord]:
+        statement = (
+            select(BidTemplateRow)
+            .where(BidTemplateRow.project_id == project_id)
+            .order_by(
+                BidTemplateRow.is_active.desc(),
+                BidTemplateRow.created_at.desc(),
+            )
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_template_record(row) for row in rows]
+
+    async def get_template(
+        self, project_id: str, template_id: str
+    ) -> BidTemplateRecord | None:
+        async with self._session_factory() as session:
+            row = await session.get(BidTemplateRow, template_id)
+        if row is None or row.project_id != project_id:
+            return None
+        return _template_record(row)
+
+    async def get_active_template(
+        self, project_id: str
+    ) -> BidTemplateRecord | None:
+        statement = select(BidTemplateRow).where(
+            BidTemplateRow.project_id == project_id,
+            BidTemplateRow.is_active.is_(True),
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+        return _template_record(row) if row is not None else None
+
+    async def create_template(
+        self,
+        *,
+        template_id: str,
+        project_id: str,
+        name: str,
+        description: str,
+        filename: str,
+        object_key: str,
+        sha256: str,
+        size_bytes: int,
+        is_active: bool,
+        created_by: str | None,
+        created_by_name: str | None,
+    ) -> BidTemplateRecord:
+        now = _now()
+        row = BidTemplateRow(
+            id=template_id,
+            project_id=project_id,
+            name=name,
+            description=description,
+            filename=filename,
+            object_key=object_key,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            is_active=is_active,
+            version=1,
+            created_by=created_by,
+            created_by_name=created_by_name,
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                if is_active:
+                    await _lock_template_activation(session, project_id)
+                    await session.execute(
+                        update(BidTemplateRow)
+                        .where(BidTemplateRow.project_id == project_id)
+                        .values(is_active=False)
+                    )
+                session.add(row)
+                await session.flush()
+                record = _template_record(row)
+        return record
+
+    async def update_template(
+        self,
+        project_id: str,
+        template_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+    ) -> BidTemplateRecord | None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                if is_active:
+                    await _lock_template_activation(session, project_id)
+                row = await session.get(BidTemplateRow, template_id)
+                if row is None or row.project_id != project_id:
+                    return None
+                if name is not None:
+                    row.name = name
+                if description is not None:
+                    row.description = description
+                if is_active is not None:
+                    if is_active:
+                        await session.execute(
+                            update(BidTemplateRow)
+                            .where(
+                                BidTemplateRow.project_id == project_id,
+                                BidTemplateRow.id != template_id,
+                            )
+                            .values(is_active=False)
+                        )
+                    row.is_active = is_active
+                row.updated_at = _now()
+                await session.flush()
+                record = _template_record(row)
+        return record
+
+    async def delete_template(
+        self, project_id: str, template_id: str
+    ) -> bool:
+        statement = delete(BidTemplateRow).where(
+            BidTemplateRow.id == template_id,
+            BidTemplateRow.project_id == project_id,
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
 
     async def add_feedback(
         self,
@@ -2588,6 +2761,7 @@ __all__ = [
     "BidCommentRecord",
     "BidRunRecord",
     "BidRunRepository",
+    "BidTemplateRecord",
     "ExternalUsageRecord",
     "FeedbackRecord",
     "NotificationRecord",

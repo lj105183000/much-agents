@@ -16,6 +16,7 @@ from api.bid_run_repo import (
     BidApprovalRecord,
     BidCommentRecord,
     BidRunRecord,
+    BidTemplateRecord,
     ExternalUsageRecord,
     FeedbackRecord,
     NotificationRecord,
@@ -735,6 +736,7 @@ class FakeBidRunRepository:
         self.external_usage: list[ExternalUsageRecord] = []
         self.project_monthly_budgets: dict[str, int | None] = {}
         self.project_month_costs: dict[str, float] = {}
+        self.templates: dict[str, BidTemplateRecord] = {}
         self._feedback_id = 0
         self._quality_id = 0
         self._external_id = 0
@@ -1181,6 +1183,108 @@ class FakeBidRunRepository:
 
     async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
         return self.run_usage.get(run_id)
+
+    async def list_templates(self, project_id: str) -> list[BidTemplateRecord]:
+        rows = [
+            record
+            for record in self.templates.values()
+            if record.project_id == project_id
+        ]
+        rows.sort(
+            key=lambda record: (record.is_active, record.created_at),
+            reverse=True,
+        )
+        return rows
+
+    async def get_template(
+        self, project_id: str, template_id: str
+    ) -> BidTemplateRecord | None:
+        record = self.templates.get(template_id)
+        if record is None or record.project_id != project_id:
+            return None
+        return record
+
+    async def get_active_template(
+        self, project_id: str
+    ) -> BidTemplateRecord | None:
+        return next(
+            (
+                record
+                for record in self.templates.values()
+                if record.project_id == project_id and record.is_active
+            ),
+            None,
+        )
+
+    async def create_template(self, **fields: Any) -> BidTemplateRecord:
+        now = datetime.now(timezone.utc)
+        record = BidTemplateRecord(
+            id=fields["template_id"],
+            project_id=fields["project_id"],
+            name=fields["name"],
+            description=fields.get("description") or "",
+            filename=fields["filename"],
+            object_key=fields["object_key"],
+            sha256=fields["sha256"],
+            size_bytes=int(fields.get("size_bytes") or 0),
+            is_active=bool(fields.get("is_active")),
+            version=1,
+            created_by=fields.get("created_by"),
+            created_by_name=fields.get("created_by_name"),
+            created_at=now,
+            updated_at=now,
+        )
+        if record.is_active:
+            for key, existing in list(self.templates.items()):
+                if existing.project_id == record.project_id:
+                    self.templates[key] = replace(
+                        existing, is_active=False
+                    )
+        self.templates[record.id] = record
+        return record
+
+    async def update_template(
+        self,
+        project_id: str,
+        template_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+    ) -> BidTemplateRecord | None:
+        record = await self.get_template(project_id, template_id)
+        if record is None:
+            return None
+        if is_active:
+            for key, existing in list(self.templates.items()):
+                if existing.project_id == project_id:
+                    self.templates[key] = replace(
+                        existing, is_active=False
+                    )
+        updated = replace(
+            record,
+            name=name if name is not None else record.name,
+            description=(
+                description
+                if description is not None
+                else record.description
+            ),
+            is_active=(
+                is_active if is_active is not None else record.is_active
+            ),
+            updated_at=datetime.now(timezone.utc),
+        )
+        self.templates[template_id] = updated
+        return updated
+
+    async def delete_template(
+        self, project_id: str, template_id: str
+    ) -> bool:
+        record = await self.get_template(project_id, template_id)
+        if record is None:
+            return False
+        del self.templates[template_id]
+        return True
 
     async def get_project_monthly_budget(
         self, project_id: str
