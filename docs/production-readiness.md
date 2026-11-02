@@ -21,7 +21,7 @@
 - DOCX 质量：导出补 TOC 域、页脚 PAGE 域、表格重复表头；门禁消费 TOC/页码/字体/表格/DPI 检查。
 - 供应链：MinIO/Chroma/Postgres/Redis 使用 M1 验收报告记录的 digest；新增 `scripts/check_image_pins.py` 与 CI Trivy/Syft SBOM。
 - L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
-- 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单；`scripts/eval_annotate.py` 提供 CSV 导出/导入/校验/完成度状态，`--mark-reviewed` 同步 manifest。详见 `docs/eval-annotation.md`。
+- 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单；`scripts/eval_annotate.py` 提供 CSV 导出/导入/校验/完成度状态，`--mark-reviewed` 同步 manifest；`scripts/eval_regression.py` 消费 reviewed points/facts 计算词面点召回、加权召回、事实覆盖、需求/引用覆盖并与基线比较（`--max-l1-drop`），`baseline_metrics` 同步记录 L1。详见 `docs/eval-annotation.md`。
 - 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Alertmanager + Grafana、5 条告警规则、Grafana 数据源与 `Much Agents Overview` 看板；Grafana 仅绑定 `127.0.0.1:3000`，看板已实测加载（HTTP 200）。Prometheus 已识别 `alertmanager:9093`；Alertmanager 当前使用占位 webhook，需替换为实际通知渠道。
 - 检索快照：每个章节的 query、mode、top_k、命中 chunk/score/页码/文本哈希写入 `retrieval_snapshots`（迁移 `0010`），不保存证据原文。
 - Prompt registry：`prompt_registry`（迁移 `0011`）记录 prompt 文件哈希、默认模型/温度与 git sha，`scripts/seed_prompts.py` 可重复 upsert。

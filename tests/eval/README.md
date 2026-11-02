@@ -89,6 +89,15 @@ Cohen's kappa ≥0.6 before treating the judge as a gate.
 It runs `scripts.eval_generate` (one section per case), then
 `scripts.eval_regression` against the baseline.
 
+Reviewed labels feed L1 scoring: must-cover points are matched against
+`bid.md`/`sections/*.md` with deterministic 2-gram coverage, facts by value
+substring, plus requirements/citation summaries. `eval_regression` compares
+`avg_point_recall`, `avg_weighted_point_recall`, `avg_fact_coverage`,
+`avg_requirement_coverage` and `avg_citation_coverage` with
+`--max-l1-drop`. `scripts.baseline_metrics` records the same L1 metrics. This
+is a lexical proxy, not semantic judgment; keep L2/human review as the
+authority. See `docs/eval-annotation.md`.
+
 ## Privacy rules
 
 - Never commit `profile.json`, real company names, phone numbers, certificate
