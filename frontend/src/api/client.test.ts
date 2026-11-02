@@ -60,6 +60,15 @@ describe('project DOCX templates', () => {
         if (url.endsWith('/download')) {
           return new Response(new Blob(['PK']), { status: 200 })
         }
+        if (url.includes('/preview?')) {
+          return new Response(new Blob(['PNG']), {
+            status: 200,
+            headers: {
+              'X-Template-Preview-Page': '1',
+              'X-Template-Preview-Pages': '3',
+            },
+          })
+        }
         if (init?.method === 'DELETE') {
           return new Response(null, { status: 204 })
         }
@@ -88,6 +97,7 @@ describe('project DOCX templates', () => {
     })
     await api.updateBidTemplate('template-1', { is_active: true })
     const blob = await api.downloadBidTemplate('template-1')
+    const preview = await api.previewBidTemplate('template-1', 1)
     await api.deleteBidTemplate('template-1')
 
     const calls = fetchMock.mock.calls as unknown as Array<
@@ -106,9 +116,15 @@ describe('project DOCX templates', () => {
     expect(calls[2][1].method).toBe('PATCH')
     expect(JSON.parse(String(calls[2][1].body))).toEqual({ is_active: true })
     expect(String(calls[3][0])).toContain('/api/templates/template-1/download')
-    expect(String(calls[4][0])).toContain('/api/templates/template-1')
-    expect(calls[4][1].method).toBe('DELETE')
+    expect(String(calls[4][0])).toContain(
+      '/api/templates/template-1/preview?page=1',
+    )
+    expect(String(calls[5][0])).toContain('/api/templates/template-1')
+    expect(calls[5][1].method).toBe('DELETE')
     expect(await blob.text()).toBe('PK')
+    expect(await preview.blob.text()).toBe('PNG')
+    expect(preview.page).toBe(1)
+    expect(preview.pages).toBe(3)
     expect(headers.every((header) => header.get('X-Project-Id') === PROJECT_ID))
       .toBe(true)
   })

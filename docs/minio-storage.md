@@ -20,6 +20,7 @@ Much Agents 支持两种存储后端，由 `STORAGE_BACKEND` 选择：
 | `bids/<doc_id>/<run_id>/...` | `<BIDS_DIR>/<doc_id>/<run_id>/...` | 投标产物、配图、报告 |
 | `private/profiles/<doc_id>/<run_id>.json` | `<UPLOAD_DIR>/private/profiles/...`（仅本地副本） | 投标人 profile 快照，**私有对象** |
 | `private/templates/<project_id>/<template_id>.docx` | `<UPLOAD_DIR>/private/templates/...`（仅本地副本） | 项目 DOCX 模板；仅通过模板 API 访问，不在 artifact allowlist |
+| `private/template-previews/<project_id>/<template_id>/<sha>.pdf` | `<UPLOAD_DIR>/private/template-previews/...`（仅本地副本） | 模板预览 PDF 缓存；模板删除时清理 |
 
 `profile.json` 永远不会出现在 `bids/` 前缀、artifact allowlist、MCP 工具输出、Redis/Celery payload 或任何下载 URL 中；它只存为上述私有 key，用于跨机器继续编辑/组装。
 

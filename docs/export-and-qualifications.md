@@ -1,6 +1,6 @@
 # 交付物、DOCX 模板与企业资质库
 
-> 状态：已实现（2026-11-02）。DOC 导出复用 Headless LibreOffice；DOCX 支持全局默认模板与项目级模板库；资质库提供公司级证书 CRUD 与到期状态展示。
+> 状态：已实现（2026-11-02）。DOC 导出复用 Headless LibreOffice；DOCX 支持全局默认模板、项目级模板库与分页预览；资质库提供公司级证书 CRUD 与到期状态展示。
 
 ## 1. Word 97-2003（.doc）导出
 
@@ -46,6 +46,7 @@ BID_DOCX_TEMPLATE=/opt/much-agents/templates/corporate-bid.docx
 | `PATCH` | `/api/templates/{template_id}` | 项目 `manager`（`name`、`description`、`is_active`） |
 | `DELETE` | `/api/templates/{template_id}` | 项目 `manager` |
 | `GET` | `/api/templates/{template_id}/download` | 项目只读 |
+| `GET` | `/api/templates/{template_id}/preview?page=N` | 项目只读 |
 
 模板接口均需 `X-Project-Id`，只能访问当前项目内的模板。
 
@@ -54,9 +55,10 @@ BID_DOCX_TEMPLATE=/opt/much-agents/templates/corporate-bid.docx
 - 启用模板优先于 `BID_DOCX_TEMPLATE`；停用或删除后回退全局模板/内置版式。
 - 组装时把启用模板下载到临时目录，`markdown_to_docx` 使用后立即清理；启用模板文件丢失返回 409，不静默回退。
 - 模板切换只影响**下一次组装**；已组装 run 的 `bid.docx` 不会自动重建。人工编辑、章节重写、大纲失效等仍按原规则清空派生产物。
+- 模板预览：`GET /api/templates/{template_id}/preview?page=N`。首次请求下载 DOCX，经 Headless LibreOffice 转 PDF（与 PDF 导出共用进程内信号量），PDF 缓存在 `private/template-previews/<project_id>/<template_id>/<sha256前16位>.pdf`；再用 PyMuPDF 渲染指定页为 PNG。响应头 `X-Template-Preview-Page` / `X-Template-Preview-Pages` 给出页码/总页数（CORS 已暴露），页越界返回 400，LibreOffice 不可用返回 503，模板文件丢失返回 409。删除模板会清理预览缓存。
 - 审计：`template.create`（名称/SHA-256/大小）、`template.update`（变更字段）、`template.delete`。
-- 前端「编写标书」顶部的「DOCX 模板」面板支持查看、下载、上传、启用/停用与删除；只有项目管理员看到写操作，只读角色可查看与下载。
-- 当前边界：没有模板变量/封面占位符、未知变量阻断、模板预览、公司级/组织级模板、模板版本历史或整本文档模板；legacy `POST /api/bids` 与 CLI 不读取项目模板库。
+- 前端「编写标书」顶部的「DOCX 模板」面板支持查看、预览（分页 PNG）、下载、上传、启用/停用与删除；只有项目管理员看到写操作，只读角色可查看、预览与下载。LibreOffice 不可用时隐藏预览按钮并提示。
+- 当前边界：没有模板变量/封面占位符、未知变量阻断、公司级/组织级模板、模板版本历史或整本文档模板；legacy `POST /api/bids` 与 CLI 不读取项目模板库。
 
 ## 3. 企业资质库
 
@@ -105,13 +107,13 @@ Alembic `0016` 新增 `company_qualifications`：
 - `tests/test_doc_export.py`：LibreOffice 缺失、DOCX 缺失、magic 校验、原子写入。
 - `tests/test_bid_run_api.py`：DOC 导出成功/失败、文件失效、权限与审计路径（复用 gate 测试）。
 - `tests/test_docx_template.py`：模板页边距/页脚保留、示例正文清除、缺失模板报错。
-- `tests/test_bid_template_api.py`：上传校验、CRUD/启停/下载、项目隔离、启用模板进入组装、模板对象丢失阻断组装。
+- `tests/test_bid_template_api.py`：上传校验、CRUD/启停/下载、项目隔离、启用模板进入组装、模板对象丢失阻断组装，以及预览渲染/缓存/分页越界/LibreOffice 不可用。
 - `tests/test_company_api.py`：资质 CRUD、日期校验、未知公司与未知证书。
 - Playwright：公司库资质弹窗展示种子证书。
 
 ## 5. 尚未实现
 
-- 模板变量/封面占位符、未知变量阻断、模板预览、公司级/组织级模板、模板版本历史与整本文档模板。
+- 模板变量/封面占位符、未知变量阻断、公司级/组织级模板、模板版本历史与整本文档模板。
 - legacy `POST /api/bids` 与 CLI 不支持项目模板库（仍只用全局模板）。
 - 资质扫描件对象存储、OCR 识别、到期提醒（站内/Webhook/SMTP）与投标文件自动引用。
 - DOC 复杂排版与内置模板的像素级一致性仍需人工抽查。

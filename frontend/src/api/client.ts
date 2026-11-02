@@ -45,6 +45,7 @@ import type {
   BidSectionVersionDiffResponse,
   BidSectionVersionListResponse,
   BidTemplateListResponse,
+  BidTemplatePreview,
   BidTemplateUpdateInput,
   BidTemplateView,
   CompanyDetail,
@@ -314,11 +315,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
-export async function requestBlob(
+async function requestBlobResponse(
   path: string,
   init?: RequestInit,
   timeoutMs = ARTIFACT_TIMEOUT_MS,
-): Promise<Blob> {
+): Promise<Response> {
   assertTrustedAbsoluteTarget(path)
   const generation = tokenGeneration
   const response = await fetchWithTimeout(path, init, timeoutMs)
@@ -333,6 +334,15 @@ export async function requestBlob(
     }
     throw new ApiError(response.status, formatDetail(detail) || response.statusText)
   }
+  return response
+}
+
+export async function requestBlob(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = ARTIFACT_TIMEOUT_MS,
+): Promise<Blob> {
+  const response = await requestBlobResponse(path, init, timeoutMs)
   return response.blob()
 }
 
@@ -852,6 +862,31 @@ export const api = {
     return requestBlob(
       `/api/templates/${encodeURIComponent(templateId)}/download`,
     )
+  },
+
+  async previewBidTemplate(
+    templateId: string,
+    page = 1,
+  ): Promise<BidTemplatePreview> {
+    const response = await requestBlobResponse(
+      `/api/templates/${encodeURIComponent(templateId)}/preview?page=${page}`,
+    )
+    const blob = await response.blob()
+    const currentPage = Number(
+      response.headers.get('X-Template-Preview-Page') ?? page,
+    )
+    const pageCount = Number(
+      response.headers.get('X-Template-Preview-Pages') ?? currentPage,
+    )
+    return {
+      blob,
+      page:
+        Number.isFinite(currentPage) && currentPage > 0 ? currentPage : page,
+      pages:
+        Number.isFinite(pageCount) && pageCount > 0
+          ? pageCount
+          : Math.max(1, currentPage || page),
+    }
   },
 
   getBidApproval(runId: string): Promise<BidApprovalResponse> {

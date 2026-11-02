@@ -1337,6 +1337,26 @@ def build_router() -> APIRouter:
             required=True,
         )
 
+    @router.get("/templates/{template_id}/preview")
+    async def preview_template(
+        template_id: str,
+        page: int = Query(default=1, ge=1, le=1000),
+        context: ProjectContext = Depends(require_project_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        _record, png, pages = await service.preview_template(
+            context.project_id, template_id, page
+        )
+        return Response(
+            content=png,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Template-Preview-Page": str(page),
+                "X-Template-Preview-Pages": str(pages),
+            },
+        )
+
     @router.get("/templates/{template_id}/download")
     async def download_template(
         template_id: str,

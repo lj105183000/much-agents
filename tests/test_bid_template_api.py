@@ -7,6 +7,7 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 
+import pymupdf
 import pytest
 from docx import Document
 from fastapi.testclient import TestClient
@@ -18,6 +19,11 @@ from api.runner import InlineRunner
 from src.bidding.docx_template import (
     DocxTemplateError,
     validate_docx_template,
+)
+from src.bidding.errors import PdfExportError
+from src.bidding.template_preview import (
+    TemplatePreviewError,
+    render_pdf_page_png,
 )
 from tests.fakes import (
     FakeBidRunRepository,
@@ -42,6 +48,16 @@ def make_docx(footer: str = "企业模板页脚") -> bytes:
     document.add_paragraph("模板示例正文")
     document.save(buffer)
     return buffer.getvalue()
+
+
+def make_preview_pdf(pages: int = 2) -> bytes:
+    document = pymupdf.open()
+    for index in range(pages):
+        page = document.new_page()
+        page.insert_text((72, 72), f"Template page {index + 1}")
+    data = document.tobytes()
+    document.close()
+    return data
 
 
 def mark_section_final(
@@ -234,6 +250,102 @@ def test_template_upload_list_activate_download_and_delete(
             f"/api/templates/{first['id']}", json={}
         )
         assert empty.status_code == 422
+
+
+def test_template_preview_renders_pages_and_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_convert(docx_path, pdf_path, **_kwargs):
+        calls.append((Path(docx_path), Path(pdf_path)))
+        Path(pdf_path).write_bytes(make_preview_pdf(2))
+        return Path(pdf_path)
+
+    monkeypatch.setattr(
+        "api.bid_runs.convert_docx_to_pdf", fake_convert
+    )
+    app, repo, storage, _service = make_template_app(tmp_path)
+    with TestClient(app) as client:
+        created = upload_template(client)
+        assert created.status_code == 201, created.text
+        template_id = created.json()["id"]
+        project_id = repo.templates[template_id].project_id
+
+        first = client.get(
+            f"/api/templates/{template_id}/preview?page=1",
+            headers={"Origin": "null"},
+        )
+        assert first.status_code == 200, first.text
+        assert first.headers["content-type"].startswith("image/png")
+        assert first.headers["x-template-preview-page"] == "1"
+        assert first.headers["x-template-preview-pages"] == "2"
+        exposed = first.headers["access-control-expose-headers"]
+        assert "X-Template-Preview-Page" in exposed
+        assert "X-Template-Preview-Pages" in exposed
+        assert first.content.startswith(b"\x89PNG")
+        assert len(calls) == 1
+
+        cached = client.get(f"/api/templates/{template_id}/preview?page=1")
+        assert cached.status_code == 200
+        assert calls and len(calls) == 1
+
+        second = client.get(f"/api/templates/{template_id}/preview?page=2")
+        assert second.status_code == 200
+        assert second.headers["x-template-preview-page"] == "2"
+        assert second.headers["x-template-preview-pages"] == "2"
+
+        out_of_range = client.get(
+            f"/api/templates/{template_id}/preview?page=3"
+        )
+        assert out_of_range.status_code == 400
+        assert "out of range" in out_of_range.json()["detail"]
+
+        prefix = f"private/template-previews/{project_id}/{template_id}"
+        assert any(key.startswith(prefix) for key in storage.objects)
+
+        deleted = client.delete(f"/api/templates/{template_id}")
+        assert deleted.status_code == 204
+        assert not any(key.startswith(prefix) for key in storage.objects)
+
+
+def test_template_preview_reports_unavailable_converter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_convert(*_args, **_kwargs):
+        raise PdfExportError("PDF export requires LibreOffice/soffice")
+
+    monkeypatch.setattr(
+        "api.bid_runs.convert_docx_to_pdf", failing_convert
+    )
+    app, _repo, _storage, _service = make_template_app(tmp_path)
+    with TestClient(app) as client:
+        created = upload_template(client)
+        template_id = created.json()["id"]
+        preview = client.get(f"/api/templates/{template_id}/preview")
+        assert preview.status_code == 503
+        assert "LibreOffice" in preview.json()["detail"]
+
+
+def test_template_preview_requires_template_file(tmp_path: Path) -> None:
+    app, repo, storage, _service = make_template_app(tmp_path)
+    with TestClient(app) as client:
+        created = upload_template(client)
+        template_id = created.json()["id"]
+        storage.delete(repo.templates[template_id].object_key)
+        preview = client.get(f"/api/templates/{template_id}/preview")
+        assert preview.status_code == 409
+        assert "template" in preview.json()["detail"]
+
+
+def test_render_pdf_page_png_validates_page(tmp_path: Path) -> None:
+    png, pages = render_pdf_page_png(make_preview_pdf(1), 1)
+    assert pages == 1
+    assert png.startswith(b"\x89PNG")
+    with pytest.raises(TemplatePreviewError):
+        render_pdf_page_png(make_preview_pdf(1), 2)
+    with pytest.raises(TemplatePreviewError):
+        render_pdf_page_png(b"not a pdf", 1)
 
 
 def test_template_upload_validation(tmp_path: Path) -> None:

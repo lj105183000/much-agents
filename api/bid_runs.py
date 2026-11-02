@@ -52,6 +52,11 @@ from src.bidding.gate import evaluate_gate
 from src.bidding.llm import DeepSeekChatClient
 from src.bidding.models import BidOutline
 from src.bidding.pdf_export import PdfExportError, convert_docx_to_pdf
+from src.bidding.template_preview import (
+    MAX_PREVIEW_PDF_BYTES,
+    TemplatePreviewError,
+    render_pdf_page_png,
+)
 from src.bidding.plan import build_content_plan, plan_bid
 from src.bidding.profile import BidderProfile
 from src.bidding.provenance import build_provenance
@@ -76,7 +81,11 @@ from src.mcp_client.manager import (
 )
 from src.parsing.artifacts import atomic_write_json, ensure_dir, read_json
 from src.storage.base import Storage
-from src.storage.errors import StorageError, StorageObjectNotFound
+from src.storage.errors import (
+    StorageError,
+    StorageObjectNotFound,
+    StoragePathError,
+)
 from src.storage.hydration import (
     delete_run_derived,
     ensure_document_cached,
@@ -2595,12 +2604,112 @@ class BidRunService:
         if self.storage is not None:
             try:
                 await asyncio.to_thread(self.storage.delete, record.object_key)
+                await asyncio.to_thread(
+                    self.storage.delete_prefix,
+                    f"private/template-previews/{project_id}/{template_id}",
+                )
             except StorageError:
                 logger.warning(
-                    "could not delete template object %s",
-                    record.object_key,
+                    "could not delete template objects for %s",
+                    template_id,
                     exc_info=True,
                 )
+
+    @staticmethod
+    def _template_preview_key(record: BidTemplateRecord) -> str:
+        return (
+            f"private/template-previews/{record.project_id}/{record.id}/"
+            f"{record.sha256[:16]}.pdf"
+        )
+
+    async def _template_preview_pdf(self, record: BidTemplateRecord) -> bytes:
+        if self.storage is None:
+            raise BidRunError(503, "object storage is unavailable")
+        cache_key = self._template_preview_key(record)
+        try:
+            return await asyncio.to_thread(
+                self.storage.get_bytes,
+                cache_key,
+                max_bytes=MAX_PREVIEW_PDF_BYTES,
+            )
+        except (StorageObjectNotFound, StoragePathError):
+            pass
+        except StorageError as exc:
+            raise BidRunError(503, "object storage is unavailable") from exc
+        async with self._pdf_semaphore:
+            try:
+                return await asyncio.to_thread(
+                    self.storage.get_bytes,
+                    cache_key,
+                    max_bytes=MAX_PREVIEW_PDF_BYTES,
+                )
+            except (StorageObjectNotFound, StoragePathError):
+                pass
+            except StorageError as exc:
+                raise BidRunError(
+                    503, "object storage is unavailable"
+                ) from exc
+            with tempfile.TemporaryDirectory(
+                prefix="much-agents-template-preview-"
+            ) as temp_name:
+                docx_path = Path(temp_name) / "template.docx"
+                pdf_path = Path(temp_name) / "template.pdf"
+                try:
+                    await asyncio.to_thread(
+                        self.storage.download_file,
+                        record.object_key,
+                        docx_path,
+                    )
+                except StorageObjectNotFound as exc:
+                    raise BidRunError(
+                        409, "the DOCX template file is missing"
+                    ) from exc
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+                try:
+                    await asyncio.to_thread(
+                        convert_docx_to_pdf, docx_path, pdf_path
+                    )
+                except PdfExportError as exc:
+                    raise BidRunError(503, str(exc)) from exc
+                data = await asyncio.to_thread(pdf_path.read_bytes)
+            if len(data) <= MAX_PREVIEW_PDF_BYTES:
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_bytes,
+                        cache_key,
+                        data,
+                        content_type="application/pdf",
+                    )
+                except StorageError:
+                    logger.warning(
+                        "could not cache template preview PDF",
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "template preview PDF is too large to cache: %s",
+                    cache_key,
+                )
+            return data
+
+    async def preview_template(
+        self,
+        project_id: str,
+        template_id: str,
+        page: int = 1,
+    ) -> tuple[BidTemplateRecord, bytes, int]:
+        record = await self.get_template(project_id, template_id)
+        pdf_bytes = await self._template_preview_pdf(record)
+        try:
+            png, pages = await asyncio.to_thread(
+                render_pdf_page_png, pdf_bytes, int(page)
+            )
+        except TemplatePreviewError as exc:
+            raise BidRunError(400, str(exc)) from exc
+        return record, png, pages
 
     async def _resolve_docx_template(
         self, run: BidRunRecord

@@ -760,7 +760,10 @@ export function BidView({
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
-      <BidTemplatesPanel canManage={canManage} />
+      <BidTemplatesPanel
+        canManage={canManage}
+        previewAvailable={pdfExportAvailable}
+      />
 
       {!runId ? (
         <>
