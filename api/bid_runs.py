@@ -23,6 +23,10 @@ from src.bidding.checks import build_allowed, deterministic_review
 from src.bidding.citations import build_citations, strip_citation_markers
 from src.bidding.compliance import evaluate_compliance
 from src.bidding.config import BidSettings
+from src.bidding.doc_export import (
+    DocExportError,
+    convert_docx_to_doc,
+)
 from src.bidding.content_hash import (
     compute_run_content_sha256,
     compute_section_content_sha256,
@@ -53,6 +57,8 @@ from src.bidding.staged_output import (
 )
 from src.observability.logging import get_request_id
 from src.observability.metrics import (
+    DOC_EXPORTS,
+    DOC_EXPORT_DURATION,
     GATE_STATUS,
     PDF_EXPORTS,
     PDF_EXPORT_DURATION,
@@ -532,6 +538,7 @@ class BidRunService:
             "requirements.json",
             "citations.json",
             "bid.pdf",
+            "bid.doc",
         ):
             try:
                 (run_dir / name).unlink()
@@ -2311,6 +2318,7 @@ class BidRunService:
                 requirements=requirements,
                 citations=citations,
                 image_width_cm=self.bid_settings.figure_image_width_cm,
+                docx_template=self.bid_settings.docx_template,
             )
             if isinstance(result.get("report", {}).get("docx_quality"), dict):
                 gate = evaluate_gate(
@@ -2850,6 +2858,85 @@ class BidRunService:
         if not pdf_path.is_file():
             raise BidRunError(409, "bid.pdf is not available")
         return ExportTarget(path=pdf_path, key=f"{prefix}/bid.pdf")
+
+    async def export_doc(
+        self,
+        run_id: str,
+        *,
+        force: bool = False,
+    ) -> ExportTarget:
+        """Export the assembled DOCX as legacy Word 97-2003 through LibreOffice."""
+
+        docx_target = await self.export(run_id, force=force)
+        run_dir = docx_target.path.parent
+        prefix = docx_target.key.rsplit("/", 1)[0]
+        doc_path = run_dir / "bid.doc"
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                await asyncio.to_thread(
+                    self.storage.ensure_files,
+                    prefix,
+                    run_dir,
+                    ("bid.doc",),
+                    required=False,
+                )
+            except StorageError as exc:
+                raise BidRunError(503, "object storage is unavailable") from exc
+        needs_conversion = True
+        if doc_path.is_file():
+            try:
+                valid = False
+                with doc_path.open("rb") as handle:
+                    valid = handle.read(8) == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+                needs_conversion = (
+                    not valid
+                    or doc_path.stat().st_mtime
+                    <= docx_target.path.stat().st_mtime
+                )
+            except OSError:
+                needs_conversion = True
+        if needs_conversion:
+            started = time.perf_counter()
+            try:
+                async with self._pdf_semaphore:
+                    await asyncio.to_thread(
+                        convert_docx_to_doc,
+                        docx_target.path,
+                        doc_path,
+                    )
+            except DocExportError as exc:
+                result = (
+                    "unavailable"
+                    if "LibreOffice" in str(exc)
+                    else "failed"
+                )
+                DOC_EXPORTS.inc(result=result)
+                DOC_EXPORT_DURATION.observe(
+                    time.perf_counter() - started, result=result
+                )
+                raise BidRunError(503, str(exc)) from exc
+            DOC_EXPORTS.inc(result="converted")
+            DOC_EXPORT_DURATION.observe(
+                time.perf_counter() - started, result="converted"
+            )
+            if is_remote(self.storage):
+                assert self.storage is not None
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/bid.doc",
+                        doc_path,
+                    )
+                except StorageError as exc:
+                    raise BidRunError(
+                        503, "object storage is unavailable"
+                    ) from exc
+        else:
+            DOC_EXPORTS.inc(result="cache")
+        if not doc_path.is_file():
+            raise BidRunError(409, "bid.doc is not available")
+        return ExportTarget(path=doc_path, key=f"{prefix}/bid.doc")
 
 
 __all__ = [

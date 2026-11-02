@@ -83,6 +83,7 @@ class BidSettings:
     figure_image_width_cm: float = 15.5
     figure_page_estimate: float = 0.5
     figures_external: bool = False
+    docx_template: str = ""
 
     @property
     def parsed_dir(self) -> Path:
@@ -148,6 +149,7 @@ class BidSettings:
                 env, "BID_FIGURES_PAGE_ESTIMATE", 0.5, minimum=0.0
             ),
             figures_external=_bool(env, "BID_FIGURES_EXTERNAL", False),
+            docx_template=_str(env, "BID_DOCX_TEMPLATE", "").strip(),
         )
 
 

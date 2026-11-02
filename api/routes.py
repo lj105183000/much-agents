@@ -63,7 +63,12 @@ from .auth import (
 )
 from .bid_runs import BidRunService
 from .bids import BidService
-from .companies import CompanyError, CompanyRecord, CompanyService
+from .companies import (
+    CompanyError,
+    CompanyQualificationRecord,
+    CompanyRecord,
+    CompanyService,
+)
 from .documents import list_documents
 from .jobs import JobStoreError
 from .notifications import (
@@ -132,6 +137,10 @@ from .schemas import (
     BidSectionVersionListResponse,
     CompanyDetail,
     CompanyListResponse,
+    CompanyQualificationInput,
+    CompanyQualificationListResponse,
+    CompanyQualificationUpdate,
+    CompanyQualificationView,
     CompanySummary,
     CompanyUpsertRequest,
     ChangePasswordRequest,
@@ -249,6 +258,25 @@ def _company_detail(
         updated_at=record.updated_at,
         created_at=record.created_at,
         profile=record.profile if include_private else {},
+    )
+
+
+def _qualification_view(
+    record: CompanyQualificationRecord,
+) -> CompanyQualificationView:
+    return CompanyQualificationView(
+        id=record.id,
+        company_id=record.company_id,
+        name=record.name,
+        qualification_type=record.qualification_type,
+        certificate_no=record.certificate_no,
+        issuer=record.issuer,
+        issued_at=record.issued_at,
+        expires_at=record.expires_at,
+        notes=record.notes,
+        created_by=record.created_by,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -571,6 +599,7 @@ def build_router() -> APIRouter:
             storage_backend=storage_backend,
             storage_ok=storage_ok,
             pdf_export_available=pdf_export_available,
+            doc_export_available=pdf_export_available,
         )
 
     @public_router.post("/auth/login", response_model=LoginResponse)
@@ -2042,6 +2071,83 @@ def build_router() -> APIRouter:
             return _artifact_response(target.path)
         return stored_artifact_response(request, storage, info)
 
+    @router.post("/bid-runs/{run_id}/export/doc")
+    async def export_bid_run_doc(
+        run_id: str,
+        request: Request,
+        force: bool = Query(False),
+        reason: str | None = Query(default=None, max_length=500),
+        user: UserContext = Depends(require_user),
+        context: ProjectContext = Depends(require_run_read),
+        projects: ProjectService = Depends(get_project_service),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        if force:
+            if user.is_service or user.role != "admin":
+                raise HTTPException(
+                    status_code=403,
+                    detail="only an administrator can force export",
+                )
+            if not (reason or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="force export requires a reason",
+                )
+        else:
+            if not (user.is_service or can_manage(user)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="export requires bid manager permission",
+                )
+            if not projects.has_permission(context, "manage"):
+                raise HTTPException(status_code=403, detail="permission denied")
+        target = await service.export_doc(run_id, force=force)
+        if force:
+            try:
+                await service.record_force_override(
+                    run_id,
+                    reason=(reason or "").strip(),
+                    actor_id=user.id,
+                    actor_name=user.display_name or user.username,
+                )
+            except Exception:  # noqa: BLE001 - export already succeeded
+                logger.warning(
+                    "could not record forced DOC export override",
+                    exc_info=True,
+                )
+        storage = _remote_storage(request)
+        info = None
+        if storage is not None:
+            info = await asyncio.to_thread(storage.stat, target.key)
+            if info is None:
+                raise HTTPException(
+                    status_code=404, detail="artifact is unavailable"
+                )
+        await _audit(
+            request,
+            "bid_run.export_doc",
+            context=context,
+            actor=user,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={"force": force},
+            required=True,
+        )
+        if force:
+            await _audit(
+                request,
+                "bid_run.export_doc.force",
+                context=context,
+                actor=user,
+                resource_type="bid_run",
+                resource_id=run_id,
+                detail={"reason": (reason or "").strip()},
+                required=True,
+            )
+        if storage is None:
+            return _artifact_response(target.path)
+        return stored_artifact_response(request, storage, info)
+
     @router.get(
         "/bid-runs/{run_id}/sections/{section_id}",
         response_model=BidSectionDetail,
@@ -2335,6 +2441,144 @@ def build_router() -> APIRouter:
             resource_type="company",
             resource_id=company_id,
             required=True,
+        )
+
+    @router.get(
+        "/companies/{company_id}/qualifications",
+        response_model=CompanyQualificationListResponse,
+    )
+    async def list_company_qualifications(
+        company_id: str,
+        user: UserContext = Depends(require_user),
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyQualificationListResponse:
+        try:
+            records = await service.list_qualifications(company_id)
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        return CompanyQualificationListResponse(
+            company_id=company_id,
+            qualifications=[
+                _qualification_view(record) for record in records
+            ],
+        )
+
+    @router.post(
+        "/companies/{company_id}/qualifications",
+        status_code=status.HTTP_201_CREATED,
+        response_model=CompanyQualificationView,
+        dependencies=[Depends(require_manage)],
+    )
+    async def create_company_qualification(
+        company_id: str,
+        payload: CompanyQualificationInput,
+        request: Request,
+        user: UserContext = Depends(require_user),
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyQualificationView:
+        try:
+            record = await service.create_qualification(
+                company_id,
+                name=payload.name,
+                qualification_type=payload.qualification_type,
+                certificate_no=payload.certificate_no,
+                issuer=payload.issuer,
+                issued_at=payload.issued_at,
+                expires_at=payload.expires_at,
+                notes=payload.notes,
+                created_by=user.id,
+            )
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        await _audit(
+            request,
+            "company.qualification.create",
+            resource_type="company",
+            resource_id=company_id,
+            detail={
+                "qualification_id": record.id,
+                "qualification_type": record.qualification_type,
+                "expires_at": record.expires_at.isoformat()
+                if record.expires_at
+                else None,
+            },
+        )
+        return _qualification_view(record)
+
+    @router.patch(
+        "/companies/{company_id}/qualifications/{qualification_id}",
+        response_model=CompanyQualificationView,
+        dependencies=[Depends(require_manage)],
+    )
+    async def update_company_qualification(
+        company_id: str,
+        qualification_id: str,
+        payload: CompanyQualificationUpdate,
+        request: Request,
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyQualificationView:
+        if not payload.model_fields_set:
+            raise HTTPException(status_code=422, detail="no fields to update")
+        fields = payload.model_dump(exclude_unset=True)
+        try:
+            record = await service.update_qualification(
+                company_id, qualification_id, fields=fields
+            )
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"unknown qualification: {qualification_id}",
+            )
+        await _audit(
+            request,
+            "company.qualification.update",
+            resource_type="company",
+            resource_id=company_id,
+            detail={
+                "qualification_id": record.id,
+                "changed_fields": sorted(payload.model_fields_set),
+            },
+        )
+        return _qualification_view(record)
+
+    @router.delete(
+        "/companies/{company_id}/qualifications/{qualification_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(require_manage)],
+    )
+    async def delete_company_qualification(
+        company_id: str,
+        qualification_id: str,
+        request: Request,
+        service: CompanyService = Depends(get_company_service),
+    ) -> None:
+        try:
+            deleted = await service.delete_qualification(
+                company_id, qualification_id
+            )
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"unknown qualification: {qualification_id}",
+            )
+        await _audit(
+            request,
+            "company.qualification.delete",
+            resource_type="company",
+            resource_id=company_id,
+            detail={"qualification_id": qualification_id},
         )
 
     @router.get("/documents", response_model=DocumentListResponse)

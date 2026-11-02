@@ -23,10 +23,13 @@ interface BidGatePanelProps {
   onReject: (reason: string) => void
   exporting: boolean
   exportingPdf: boolean
+  exportingDoc: boolean
   pdfAvailable: boolean
+  docAvailable: boolean
   exportError: string | null
   onExport: (force: boolean) => void
   onExportPdf: (force: boolean) => void
+  onExportDoc: (force: boolean) => void
 }
 
 const GATE_TONE = {
@@ -93,10 +96,13 @@ export function BidGatePanel({
   onReject,
   exporting,
   exportingPdf,
+  exportingDoc,
   pdfAvailable,
+  docAvailable,
   exportError,
   onExport,
   onExportPdf,
+  onExportDoc,
 }: BidGatePanelProps) {
   const { canManage, canReview, isAdmin } = usePermissions()
   const [reason, setReason] = useState('')
@@ -426,6 +432,21 @@ export function BidGatePanel({
                     <Icon name="alert" className="h-3.5 w-3.5" />
                     强制导出 PDF
                   </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={exportingDoc}
+                    disabled={!docAvailable}
+                    title={
+                      docAvailable
+                        ? undefined
+                        : '服务器未安装 LibreOffice，DOC 导出不可用'
+                    }
+                    onClick={() => onExportDoc(true)}
+                  >
+                    <Icon name="alert" className="h-3.5 w-3.5" />
+                    强制导出 DOC
+                  </Button>
                 </>
               ) : (
                 <p className="text-[11px] text-amber-200/80">
@@ -457,12 +478,27 @@ export function BidGatePanel({
                   <Icon name="download" className="h-3.5 w-3.5" />
                   导出 PDF
                 </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={exportingDoc}
+                  disabled={!docAvailable}
+                  title={
+                    docAvailable
+                      ? undefined
+                      : '服务器未安装 LibreOffice，DOC 导出不可用'
+                  }
+                  onClick={() => onExportDoc(false)}
+                >
+                  <Icon name="download" className="h-3.5 w-3.5" />
+                  导出 DOC
+                </Button>
               </>
             )}
           </div>
-          {!pdfAvailable && canManage ? (
+          {!docAvailable && canManage ? (
             <p className="text-right text-[11px] text-amber-200/80">
-              服务器未安装 LibreOffice，PDF 导出不可用；DOCX 导出不受影响。
+              服务器未安装 LibreOffice，PDF/DOC 导出不可用；DOCX 导出不受影响。
             </p>
           ) : null}
         </div>

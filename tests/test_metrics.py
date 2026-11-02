@@ -71,6 +71,7 @@ def test_metrics_endpoint_is_public_and_records_requests(tmp_path: Path) -> None
         assert "much_agents_http_requests_total" in response.text
         assert "much_agents_llm_calls_total" in response.text
         assert "much_agents_pdf_exports_total" in response.text
+        assert "much_agents_doc_exports_total" in response.text
 
         client.get("/api/live")
         ready = client.get("/api/ready")

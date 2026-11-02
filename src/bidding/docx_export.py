@@ -307,6 +307,16 @@ def _add_page_number_footer(document) -> None:
     _add_field(paragraph, "PAGE", "1")
 
 
+def _clear_document_body(document) -> None:
+    """Keep section properties while removing the template's sample content."""
+
+    body = document.element.body
+    for child in list(body):
+        if child.tag == qn("w:sectPr"):
+            continue
+        body.remove(child)
+
+
 def _configure_document(document) -> None:
     section = document.sections[0]
     section.top_margin = Cm(2.54)
@@ -331,9 +341,16 @@ def markdown_to_docx(
     title: str | None = None,
     asset_dir: str | Path | None = None,
     image_width_cm: float = 15.5,
+    template_path: str | Path | None = None,
 ) -> DocxResult:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    template = Path(template_path) if template_path else None
+    if template is not None:
+        if template.suffix.lower() != ".docx" or not template.is_file():
+            raise BidExportError(
+                f"DOCX template is not available: {template}"
+            )
     assets = (
         _ImageAssets(
             root=Path(asset_dir),
@@ -343,9 +360,13 @@ def markdown_to_docx(
         else None
     )
     try:
-        document = Document()
-        _configure_document(document)
-        _add_page_number_footer(document)
+        if template is not None:
+            document = Document(str(template))
+            _clear_document_body(document)
+        else:
+            document = Document()
+            _configure_document(document)
+            _add_page_number_footer(document)
         if title:
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER

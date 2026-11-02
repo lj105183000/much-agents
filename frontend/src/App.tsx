@@ -222,6 +222,11 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                     pdfExportAvailable={
                       health.health?.pdf_export_available ?? true
                     }
+                    docExportAvailable={
+                      health.health?.doc_export_available ??
+                      health.health?.pdf_export_available ??
+                      true
+                    }
                     onRunChange={setSelectedRunId}
                     onNavigate={navigate}
                     onActiveJobChange={setActiveJobId}

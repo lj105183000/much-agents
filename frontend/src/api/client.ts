@@ -40,6 +40,10 @@ import type {
   BidSectionVersionListResponse,
   CompanyDetail,
   CompanyListResponse,
+  CompanyQualification,
+  CompanyQualificationInput,
+  CompanyQualificationListResponse,
+  CompanyQualificationUpdate,
   CompanyUpsertRequest,
   DocumentListResponse,
   HealthResponse,
@@ -573,6 +577,53 @@ export const api = {
     )
   },
 
+  listCompanyQualifications(
+    companyId: string,
+  ): Promise<CompanyQualificationListResponse> {
+    return request<CompanyQualificationListResponse>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications`,
+    )
+  },
+
+  createCompanyQualification(
+    companyId: string,
+    input: CompanyQualificationInput,
+  ): Promise<CompanyQualification> {
+    return request<CompanyQualification>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  updateCompanyQualification(
+    companyId: string,
+    qualificationId: string,
+    input: CompanyQualificationUpdate,
+  ): Promise<CompanyQualification> {
+    return request<CompanyQualification>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+  },
+
+  deleteCompanyQualification(
+    companyId: string,
+    qualificationId: string,
+  ): Promise<void> {
+    return request<void>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
   createBidRun(payload: BidRequest): Promise<BidRunCreatedResponse> {
     return request<BidRunCreatedResponse>('/api/bid-runs', {
       method: 'POST',
@@ -956,6 +1007,14 @@ export const api = {
     const query = force ? '?force=true' : ''
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export/pdf${query}`,
+      { method: 'POST' },
+    )
+  },
+
+  exportBidRunDoc(runId: string, force = false): Promise<Blob> {
+    const query = force ? '?force=true' : ''
+    return requestBlob(
+      `/api/bid-runs/${encodeURIComponent(runId)}/export/doc${query}`,
       { method: 'POST' },
     )
   },

@@ -277,6 +277,16 @@ PDF_EXPORT_AVAILABLE = REGISTRY.gauge(
     "Whether headless LibreOffice is available (1=yes, 0=no).",
     (),
 )
+DOC_EXPORTS = REGISTRY.counter(
+    "much_agents_doc_exports_total",
+    "DOC export attempts by result (cache/converted/unavailable/failed).",
+    ("result",),
+)
+DOC_EXPORT_DURATION = REGISTRY.histogram(
+    "much_agents_doc_export_duration_seconds",
+    "DOC conversion duration in seconds.",
+    ("result",),
+)
 READY_CHECKS = REGISTRY.gauge(
     "much_agents_ready_checks",
     "Readiness component status (1=ready, 0=failed).",
