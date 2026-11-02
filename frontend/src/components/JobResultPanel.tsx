@@ -1,5 +1,10 @@
+import { useState } from 'react'
 import type { ArtifactSource, JobStatusResponse } from '../api/types'
 import { isBidSummary, isParseSummary } from '../api/types'
+import {
+  canOpenLocalDirectory,
+  openLocalDirectory,
+} from '../lib/desktop'
 import { formatDuration } from '../lib/format'
 import { ArtifactPanel } from './ArtifactPanel'
 import { Badge, Button, Card, Stat } from './ui'
@@ -33,7 +38,28 @@ export function JobResultPanel({
   artifactSource,
   onWriteBid,
 }: JobResultPanelProps) {
+  const [openError, setOpenError] = useState<{
+    jobId: string
+    message: string
+  } | null>(null)
+  const canOpenDirectory = canOpenLocalDirectory()
   const result = job.result
+  const openErrorMessage =
+    openError?.jobId === job.job_id ? openError.message : null
+
+  const openOutputDirectory = async (path: string) => {
+    setOpenError(null)
+    try {
+      await openLocalDirectory(path)
+    } catch (caught) {
+      setOpenError({
+        jobId: job.job_id,
+        message:
+          caught instanceof Error ? caught.message : '无法打开本地目录',
+      })
+    }
+  }
+
   if (!result) {
     return (
       <Card className="p-5">
@@ -58,13 +84,30 @@ export function JobResultPanel({
               </Badge>
               <span className="text-xs text-slate-500">{result.doc_id}</span>
             </div>
-            {onWriteBid && canWrite ? (
-              <Button size="sm" onClick={() => onWriteBid(result.doc_id)}>
-                <Icon name="sparkles" className="h-4 w-4" />
-                用此文档编写标书
-              </Button>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {canOpenDirectory ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void openOutputDirectory(result.output_dir)}
+                  title={result.output_dir}
+                >
+                  <Icon name="folder" className="h-4 w-4" />
+                  打开产物目录
+                </Button>
+              ) : null}
+              {onWriteBid && canWrite ? (
+                <Button size="sm" onClick={() => onWriteBid(result.doc_id)}>
+                  <Icon name="sparkles" className="h-4 w-4" />
+                  用此文档编写标书
+                </Button>
+              ) : null}
+            </div>
           </div>
+
+          {openErrorMessage ? (
+            <p className="mt-2 text-[11px] text-red-300">{openErrorMessage}</p>
+          ) : null}
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="页数" value={result.page_count} />
@@ -117,15 +160,32 @@ export function JobResultPanel({
                 run {result.run_id.slice(0, 8)}
               </span>
             </div>
-            <span className="text-[11px] text-slate-500">
-              耗时 {formatDuration(
-                Object.values(result.timings_seconds).reduce(
-                  (total, value) => total + value,
-                  0,
-                ),
-              )}
-            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              {canOpenDirectory ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void openOutputDirectory(result.output_dir)}
+                  title={result.output_dir}
+                >
+                  <Icon name="folder" className="h-4 w-4" />
+                  打开产物目录
+                </Button>
+              ) : null}
+              <span className="text-[11px] text-slate-500">
+                耗时 {formatDuration(
+                  Object.values(result.timings_seconds).reduce(
+                    (total, value) => total + value,
+                    0,
+                  ),
+                )}
+              </span>
+            </div>
           </div>
+
+          {openErrorMessage ? (
+            <p className="mt-2 text-[11px] text-red-300">{openErrorMessage}</p>
+          ) : null}
 
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
