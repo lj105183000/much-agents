@@ -6,6 +6,7 @@ import asyncio
 import csv
 import io
 import logging
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -25,7 +27,13 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from src.bidding.docx_template import (
+    MAX_TEMPLATE_BYTES,
+    DocxTemplateError,
+    validate_docx_template,
+)
 from src.bidding.pdf_export import find_soffice
+from src.storage.errors import StorageError, StorageObjectNotFound
 from src.parsing.artifacts import read_json
 
 from src.observability.metrics import (
@@ -90,6 +98,7 @@ from .projects import (
     get_project_service,
     require_document_read,
     require_document_write,
+    require_project_manage,
     require_project_read,
     require_project_write,
     require_run_document_read,
@@ -143,6 +152,9 @@ from .schemas import (
     BidSectionVersionDetail,
     BidSectionVersionDiffResponse,
     BidSectionVersionListResponse,
+    BidTemplateListResponse,
+    BidTemplateUpdateRequest,
+    BidTemplateView,
     CompanyDetail,
     CompanyListResponse,
     CompanyQualificationInput,
@@ -185,7 +197,7 @@ from .schemas import (
 from .search import SearchError, SearchService
 from .service import AttachmentService, ParseService
 from .sse import bid_run_event_stream
-from .streaming import stored_artifact_response
+from .streaming import content_disposition, stored_artifact_response
 
 logger = logging.getLogger(__name__)
 
@@ -1196,6 +1208,172 @@ def build_router() -> APIRouter:
             detail={"doc_id": payload.doc_id},
         )
         return created
+
+    @router.get("/templates", response_model=BidTemplateListResponse)
+    async def list_templates(
+        context: ProjectContext = Depends(require_project_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidTemplateListResponse:
+        return await service.list_templates(context.project_id)
+
+    @router.post(
+        "/templates",
+        status_code=status.HTTP_201_CREATED,
+        response_model=BidTemplateView,
+    )
+    async def upload_template(
+        request: Request,
+        file: UploadFile = File(...),
+        name: str | None = Form(default=None, max_length=128),
+        description: str = Form(default="", max_length=512),
+        context: ProjectContext = Depends(require_project_manage),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidTemplateView:
+        filename = Path(file.filename or "").name.strip()
+        if not filename.lower().endswith(".docx"):
+            raise HTTPException(
+                status_code=415, detail="only .docx templates are accepted"
+            )
+        data = await file.read(MAX_TEMPLATE_BYTES + 1)
+        if len(data) > MAX_TEMPLATE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"template is too large; limit is {MAX_TEMPLATE_BYTES} bytes",
+            )
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=".docx"
+            ) as handle:
+                handle.write(data)
+                temp_path = Path(handle.name)
+            try:
+                metadata = validate_docx_template(
+                    temp_path, max_bytes=MAX_TEMPLATE_BYTES
+                )
+            except DocxTemplateError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            label = (name or "").strip() or Path(filename).stem.strip()
+            if not label:
+                raise HTTPException(
+                    status_code=422, detail="template name must not be blank"
+                )
+            record = await service.create_template(
+                context.project_id,
+                source_path=temp_path,
+                filename=filename,
+                name=label,
+                description=(description or "").strip(),
+                sha256=str(metadata["sha256"]),
+                size_bytes=int(metadata["size_bytes"]),
+                created_by=context.user.id,
+                created_by_name=(
+                    context.user.display_name or context.user.username
+                ),
+            )
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+        await _audit(
+            request,
+            "template.create",
+            context=context,
+            resource_type="template",
+            resource_id=record.id,
+            detail={
+                "name": record.name,
+                "sha256": record.sha256,
+                "size_bytes": record.size_bytes,
+            },
+            required=True,
+        )
+        return record
+
+    @router.patch(
+        "/templates/{template_id}",
+        response_model=BidTemplateView,
+    )
+    async def update_template(
+        template_id: str,
+        payload: BidTemplateUpdateRequest,
+        request: Request,
+        context: ProjectContext = Depends(require_project_manage),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidTemplateView:
+        record = await service.update_template(
+            context.project_id, template_id, payload
+        )
+        await _audit(
+            request,
+            "template.update",
+            context=context,
+            resource_type="template",
+            resource_id=record.id,
+            detail={"changed_fields": sorted(payload.model_fields_set)},
+            required=True,
+        )
+        return record
+
+    @router.delete(
+        "/templates/{template_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_template(
+        template_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_project_manage),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> None:
+        await service.delete_template(context.project_id, template_id)
+        await _audit(
+            request,
+            "template.delete",
+            context=context,
+            resource_type="template",
+            resource_id=template_id,
+            required=True,
+        )
+
+    @router.get("/templates/{template_id}/download")
+    async def download_template(
+        template_id: str,
+        context: ProjectContext = Depends(require_project_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        record = await service.get_template(context.project_id, template_id)
+        storage = service.storage
+        if storage is None:
+            raise HTTPException(
+                status_code=503, detail="object storage is unavailable"
+            )
+        try:
+            data = await asyncio.to_thread(
+                storage.get_bytes,
+                record.object_key,
+                max_bytes=MAX_TEMPLATE_BYTES,
+            )
+        except StorageObjectNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail="template file is missing"
+            ) from exc
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503, detail="object storage is unavailable"
+            ) from exc
+        return Response(
+            content=data,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            headers={
+                "Content-Disposition": content_disposition(record.filename),
+                "Cache-Control": "no-store",
+            },
+        )
 
     @router.get("/bid-runs", response_model=BidRunListResponse)
     async def list_bid_runs(

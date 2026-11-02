@@ -427,6 +427,33 @@ class BidFeedbackCreate(BaseModel):
     )
 
 
+class BidTemplateView(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    filename: str
+    sha256: str
+    size_bytes: int = 0
+    is_active: bool = False
+    version: int = 1
+    created_by_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    download_url: str
+
+
+class BidTemplateListResponse(BaseModel):
+    templates: list[BidTemplateView] = Field(default_factory=list)
+
+
+class BidTemplateUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    is_active: bool | None = None
+
+
 class BidExternalUsageView(BaseModel):
     id: int
     provider: str

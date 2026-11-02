@@ -1142,6 +1142,31 @@ export interface BidFigureRegenerateRequest {
   force?: boolean
 }
 
+export interface BidTemplateView {
+  id: string
+  name: string
+  description: string
+  filename: string
+  sha256: string
+  size_bytes: number
+  is_active: boolean
+  version: number
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+  download_url: string
+}
+
+export interface BidTemplateListResponse {
+  templates: BidTemplateView[]
+}
+
+export interface BidTemplateUpdateInput {
+  name?: string
+  description?: string
+  is_active?: boolean
+}
+
 export type ProjectRole = 'manager' | 'writer' | 'reviewer' | 'viewer'
 
 export interface ProjectSummary {
