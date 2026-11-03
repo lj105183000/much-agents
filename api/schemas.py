@@ -400,6 +400,7 @@ class NotificationPreferencesView(BaseModel):
     comment_enabled: bool = True
     run_enabled: bool = True
     budget_enabled: bool = True
+    qualification_enabled: bool = True
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -408,6 +409,7 @@ class NotificationPreferencesUpdate(BaseModel):
     comment_enabled: bool | None = None
     run_enabled: bool | None = None
     budget_enabled: bool | None = None
+    qualification_enabled: bool | None = None
 
 
 class NotificationUnreadResponse(BaseModel):
@@ -1213,6 +1215,11 @@ class CompanyQualificationView(BaseModel):
     issued_at: date | None = None
     expires_at: date | None = None
     notes: str = ""
+    file_name: str | None = None
+    file_sha256: str | None = None
+    file_size: int | None = None
+    ocr_status: str = ""
+    ocr_updated_at: datetime | None = None
     created_by: str | None = None
     created_at: datetime
     updated_at: datetime

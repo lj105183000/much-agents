@@ -468,11 +468,13 @@ def _notification_preferences(
             "comment_enabled": True,
             "run_enabled": True,
             "budget_enabled": True,
+            "qualification_enabled": True,
         }
     return {
         "comment_enabled": bool(row.comment_enabled),
         "run_enabled": bool(row.run_enabled),
         "budget_enabled": bool(row.budget_enabled),
+        "qualification_enabled": bool(row.qualification_enabled),
     }
 
 
@@ -1931,7 +1933,12 @@ class BidRunRepository:
     async def upsert_notification_preferences(
         self, user_id: str, **fields: Any
     ) -> dict[str, bool]:
-        allowed = {"comment_enabled", "run_enabled", "budget_enabled"}
+        allowed = {
+            "comment_enabled",
+            "run_enabled",
+            "budget_enabled",
+            "qualification_enabled",
+        }
         provided = {
             key: bool(value)
             for key, value in fields.items()
@@ -2789,6 +2796,16 @@ class BidRunRepository:
                 await session.flush()
                 records = [_external_usage_record(row) for row in objects]
         return records
+
+    async def projects_using_company(self, company_id: str) -> list[str]:
+        statement = (
+            select(BidRunRow.project_id)
+            .where(BidRunRow.company_id == company_id)
+            .distinct()
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return sorted({str(value) for value in rows if value})
 
     async def analytics_overview(self, *, days: int = 30) -> dict[str, Any]:
         window = max(1, min(int(days), 365))

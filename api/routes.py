@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
@@ -297,6 +298,11 @@ def _qualification_view(
         issued_at=record.issued_at,
         expires_at=record.expires_at,
         notes=record.notes,
+        file_name=record.file_name,
+        file_sha256=record.file_sha256,
+        file_size=record.file_size,
+        ocr_status=record.ocr_status,
+        ocr_updated_at=record.ocr_updated_at,
         created_by=record.created_by,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -3051,6 +3057,86 @@ def build_router() -> APIRouter:
             required=True,
         )
         return _qualification_view(record)
+
+    @router.post(
+        "/companies/{company_id}/qualifications/{qualification_id}/file",
+        response_model=CompanyQualificationView,
+        dependencies=[Depends(require_manage)],
+    )
+    async def upload_company_qualification_file(
+        company_id: str,
+        qualification_id: str,
+        request: Request,
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(..., description="Qualification scan PDF"),
+        service: CompanyService = Depends(get_company_service),
+    ) -> CompanyQualificationView:
+        limit = service.scan_max_bytes
+        data = await file.read(limit + 1)
+        if len(data) > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"资质扫描件不能超过 {limit // (1024 * 1024)}MB",
+            )
+        try:
+            record = await service.attach_qualification_file(
+                company_id,
+                qualification_id,
+                filename=file.filename or "qualification.pdf",
+                data=data,
+            )
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        background_tasks.add_task(
+            service.ocr_qualification_file,
+            company_id,
+            qualification_id,
+            expected_sha256=record.file_sha256,
+        )
+        await _audit(
+            request,
+            "company.qualification.file",
+            resource_type="company",
+            resource_id=company_id,
+            detail={
+                "qualification_id": qualification_id,
+                "file_name": record.file_name,
+                "file_sha256": record.file_sha256,
+                "file_size": record.file_size,
+            },
+            required=True,
+        )
+        return _qualification_view(record)
+
+    @router.get(
+        "/companies/{company_id}/qualifications/{qualification_id}/file",
+        dependencies=[Depends(require_user)],
+    )
+    async def download_company_qualification_file(
+        company_id: str,
+        qualification_id: str,
+        service: CompanyService = Depends(get_company_service),
+    ) -> Response:
+        try:
+            data, filename = await service.qualification_file(
+                company_id, qualification_id
+            )
+        except CompanyError as exc:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.detail
+            ) from exc
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=\"qualification.pdf\"; "
+                    f"filename*=UTF-8''{quote(filename)}"
+                )
+            },
+        )
 
     @router.patch(
         "/companies/{company_id}/qualifications/{qualification_id}",

@@ -422,6 +422,7 @@ def test_notification_preferences_api(tmp_path: Path) -> None:
             "comment_enabled": True,
             "run_enabled": True,
             "budget_enabled": True,
+            "qualification_enabled": True,
         }
         updated = client.patch(
             "/api/notifications/preferences",

@@ -676,6 +676,29 @@ export const api = {
     )
   },
 
+  uploadCompanyQualificationFile(
+    companyId: string,
+    qualificationId: string,
+    file: File,
+  ): Promise<CompanyQualification> {
+    const body = new FormData()
+    body.append('file', file)
+    return request<CompanyQualification>(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}/file`,
+      { method: 'POST', body },
+      UPLOAD_TIMEOUT_MS,
+    )
+  },
+
+  downloadCompanyQualificationFile(
+    companyId: string,
+    qualificationId: string,
+  ): Promise<Blob> {
+    return requestBlob(
+      `/api/companies/${encodeURIComponent(companyId)}/qualifications/${encodeURIComponent(qualificationId)}/file`,
+    )
+  },
+
   createBidRun(payload: BidRequest): Promise<BidRunCreatedResponse> {
     return request<BidRunCreatedResponse>('/api/bid-runs', {
       method: 'POST',

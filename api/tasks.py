@@ -12,8 +12,10 @@ from src.parsing.pipeline import parse_document
 from .bid_run_repo import BidRunRepository
 from .bids import execute_bid_job
 from .celery_app import celery_app
+from .companies import CompanyService
 from .config import ApiSettings
 from .db import Database
+from .notifications import NotificationService, NotificationSettings
 from .external_usage import (
     build_external_usage,
     persist_external_usage,
@@ -26,6 +28,7 @@ from .task_names import (
     BID_TASK_NAME,
     MAINTENANCE_TASK_NAME,
     PARSE_TASK_NAME,
+    QUALIFICATION_EXPIRY_TASK_NAME,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,3 +139,57 @@ def reap_stale_bid_runs_task() -> None:
     reaped = asyncio.run(run())
     if reaped:
         logger.info("reaped stale bid runs: %s", ",".join(reaped))
+
+
+@celery_app.task(name=QUALIFICATION_EXPIRY_TASK_NAME, ignore_result=True)
+def check_qualification_expiry_task() -> None:
+    api_settings = ApiSettings.from_env()
+    database = Database(api_settings.database_url)
+    if not database.enabled or database.session_factory is None:
+        return
+
+    async def run() -> int:
+        try:
+            repo = BidRunRepository(database.session_factory)
+            service = CompanyService(
+                api_settings.database_url,
+                engine=database.engine,
+                session_factory=database.session_factory,
+            )
+            notifications = NotificationService(
+                repo,
+                NotificationSettings.from_env(),
+                dispatch_inline=True,
+            )
+            rows = await service.expiring_qualifications(
+                api_settings.qualification_expiry_days
+            )
+            sent = 0
+            for item in rows:
+                qualification = item["qualification"]
+                project_ids = await repo.projects_using_company(
+                    qualification.company_id
+                )
+                if not project_ids or qualification.expires_at is None:
+                    continue
+                records = await notifications.notify_qualification_expiry(
+                    company_id=qualification.company_id,
+                    company_name=str(item.get("company_name") or ""),
+                    qualification_id=qualification.id,
+                    qualification_name=qualification.name,
+                    expires_at=qualification.expires_at.isoformat(),
+                    project_ids=project_ids,
+                    days_left=int(item.get("days_left") or 0),
+                )
+                sent += len(records)
+            return sent
+        finally:
+            await database.close()
+
+    try:
+        sent = asyncio.run(run())
+    except Exception:  # noqa: BLE001 - maintenance must not crash the worker
+        logger.exception("qualification expiry check failed")
+        return
+    if sent:
+        logger.info("sent %d qualification expiry notifications", sent)

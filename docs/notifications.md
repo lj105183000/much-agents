@@ -15,6 +15,7 @@
 | Run 预算超限 | `run_budget_exceeded` | 累计成本达到 run 预算 100% | 项目 manager |
 | 项目月度预算预警 | `project_budget_warning` | 当前自然月成本达到项目月度配额 80% | 项目 manager |
 | 项目月度预算超限 | `project_budget_exceeded` | 当前自然月成本达到项目月度配额 100% | 项目 manager |
+| 资质即将到期 | `qualification_expiring` | 每日扫描 `QUALIFICATION_EXPIRY_DAYS` 内到期的资质 | 使用该公司的项目的 manager |
 
 - 只通知启用中的项目成员；admin 若非项目成员不会收到 run 级通知（仍可在 UI 查看）。
 - 评论和 run 通知都有 `dedupe_key`（唯一约束 `(user_id, dedupe_key)`）。同一评论的同一提及/指派、同一内容哈希的同一 run 事件不会重复创建；重复 assemble 不会刷屏。
@@ -42,12 +43,12 @@ Alembic `0015` 新增 `notifications`：
 
 ## 3. 通知偏好
 
-迁移 `0020` 新增 `notification_preferences`（`user_id` 主键，`comment_enabled`/`run_enabled`/`budget_enabled`，默认 true）：
+迁移 `0020` 新增 `notification_preferences`（`user_id` 主键，`comment_enabled`/`run_enabled`/`budget_enabled`，默认 true）；迁移 `0024` 增加 `qualification_enabled`：
 
 - `GET /api/notifications/preferences`、`PATCH /api/notifications/preferences`（当前登录用户；不要求项目头）。
-- 关闭某类后，该类站内通知不再写入，也不会把该用户列入 Webhook/SMTP 的收件人；评论 @/指派、run 完成/门禁/审批、预算告警分别对应 comment/run/budget。
+- 关闭某类后，该类站内通知不再写入，也不会把该用户列入 Webhook/SMTP 的收件人；评论 @/指派、run 完成/门禁/审批、预算告警、资质到期分别对应 comment/run/budget/qualification。
 - 偏好读取失败时 fail-open（继续按默认开启处理），避免数据库抖动导致漏告警。
-- 前端通知铃铛内的齿轮按钮打开「通知设置」，三个开关即时保存。
+- 前端通知铃铛内的齿轮按钮打开「通知设置」，四个开关即时保存。
 
 ## 4. Webhook
 
@@ -57,9 +58,9 @@ NOTIFY_WEBHOOK_SECRET=change-me
 NOTIFY_WEBHOOK_TIMEOUT_SECONDS=5
 ```
 
-- `POST` JSON，`Content-Type: application/json`，`X-Much-Agents-Event: comment.mention | comment.assigned | run.assembled | run.gate_blocked | approval.pending | budget.run_warning | budget.run_exceeded | budget.project_warning | budget.project_exceeded`。
+- `POST` JSON，`Content-Type: application/json`，`X-Much-Agents-Event: comment.mention | comment.assigned | run.assembled | run.gate_blocked | approval.pending | budget.run_warning | budget.run_exceeded | budget.project_warning | budget.project_exceeded | qualification.expiring`。
 - 设置 secret 时附带 `X-Much-Agents-Signature: sha256=<hex(HMAC-SHA256(secret, raw_body))>`；接收方必须用原始字节验签。
-- 载荷只包含事件、时间、项目/run/doc/comment/section id、操作人 id/姓名、门禁状态、内容哈希、收件人 id；预算事件额外包含 `budget_scope/budget_level/budget_cents/spent_cny`。**不包含评论正文、profile、招标文件文本、token**。
+- 载荷只包含事件、时间、项目/run/doc/comment/section id、操作人 id/姓名、门禁状态、内容哈希、收件人 id；预算事件额外包含 `budget_scope/budget_level/budget_cents/spent_cny`，资质事件额外包含 `company_id/qualification_id/days_left`。**不包含评论正文、profile、招标文件文本、token**。
 - 同步发送放在后台线程（API 请求所在 event loop 用 `asyncio.to_thread`；Celery worker 直接发送），单次超时默认 5 秒；失败只记 warning，不重试、不阻断主流程。
 
 ## 5. SMTP
@@ -85,5 +86,5 @@ NOTIFY_EMAIL_TO=bid-team@example.internal,ops@example.internal
 
 - 出站载荷与审计、日志都不得包含：评论正文（Webhook/SMTP）、投标人资料、身份证号/银行账号/信用代码、token、密码、profile 路径。
 - 站内通知正文可包含评论摘要（最多 200 字），仅当前项目用户可见。
-- 当前没有：通知重试/DLQ、用户级邮件地址、Webhook 白名单域名校验、资质到期提醒、项目看板。通知偏好已实现（按类别）。
+- 当前没有：通知重试/DLQ、用户级邮件地址、Webhook 白名单域名校验、项目看板。资质到期提醒与通知偏好已实现。
 - 测试：`tests/test_notifications.py` 覆盖评论提及/指派、run 组装/门禁、预算告警与去重、列表/已读 API、Webhook 签名与载荷、SMTP 元数据；E2E 覆盖铃铛与“全部已读”。

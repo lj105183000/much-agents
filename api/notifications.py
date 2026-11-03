@@ -40,6 +40,7 @@ RUN_BUDGET_WARNING = "run_budget_warning"
 RUN_BUDGET_EXCEEDED = "run_budget_exceeded"
 PROJECT_BUDGET_WARNING = "project_budget_warning"
 PROJECT_BUDGET_EXCEEDED = "project_budget_exceeded"
+QUALIFICATION_EXPIRING = "qualification_expiring"
 
 
 class NotificationError(Exception):
@@ -151,6 +152,9 @@ class NotificationEvent:
     budget_level: str | None = None
     budget_cents: int | None = None
     spent_cny: float | None = None
+    company_id: str | None = None
+    qualification_id: str | None = None
+    days_left: int | None = None
     recipient_user_ids: tuple[str, ...] = ()
 
     def public_payload(self) -> dict[str, Any]:
@@ -171,6 +175,9 @@ class NotificationEvent:
             "budget_level": self.budget_level,
             "budget_cents": self.budget_cents,
             "spent_cny": self.spent_cny,
+            "company_id": self.company_id,
+            "qualification_id": self.qualification_id,
+            "days_left": self.days_left,
             "recipient_user_ids": list(self.recipient_user_ids),
         }
 
@@ -722,6 +729,90 @@ class NotificationService:
                     )
                 ]
             )
+        return records
+
+    async def notify_qualification_expiry(
+        self,
+        *,
+        company_id: str,
+        company_name: str,
+        qualification_id: str,
+        qualification_name: str,
+        expires_at: str,
+        project_ids: list[str],
+        days_left: int,
+    ) -> list[NotificationRecord]:
+        if not project_ids:
+            return []
+        repo = self._repo()
+        now = datetime.now(timezone.utc)
+        title = f"资质即将到期：{company_name} - {qualification_name}"
+        body = (
+            f"证书：{qualification_name}\n"
+            f"到期日期：{expires_at}\n"
+            f"剩余 {days_left} 天"
+        )
+        rows: list[dict[str, Any]] = []
+        events: list[NotificationEvent] = []
+        for project_id in dict.fromkeys(project_ids):
+            recipients = await repo.list_project_recipients(
+                project_id, ("manager",)
+            )
+            allowed = set(
+                await self._allowed_recipients(
+                    [recipient.user_id for recipient in recipients],
+                    "qualification",
+                )
+            )
+            project_rows: list[dict[str, Any]] = []
+            for recipient in recipients:
+                if recipient.user_id not in allowed:
+                    continue
+                dedupe = (
+                    f"qualification:{qualification_id}:{expires_at}:"
+                    f"{days_left}:{recipient.user_id}"
+                )
+                project_rows.append(
+                    {
+                        "id": str(uuid4()),
+                        "project_id": project_id,
+                        "user_id": recipient.user_id,
+                        "kind": QUALIFICATION_EXPIRING,
+                        "title": title[:200],
+                        "body": body,
+                        "resource_type": "company_qualification",
+                        "resource_id": qualification_id,
+                        "actor_id": None,
+                        "actor_name": None,
+                        "dedupe_key": dedupe[:160],
+                    }
+                )
+            rows.extend(project_rows)
+            if project_rows:
+                events.append(
+                    NotificationEvent(
+                        event="qualification.expiring",
+                        occurred_at=now,
+                        project_id=project_id,
+                        title=title,
+                        company_id=company_id,
+                        qualification_id=qualification_id,
+                        days_left=days_left,
+                        recipient_user_ids=tuple(
+                            row["user_id"] for row in project_rows
+                        ),
+                    )
+                )
+        if not rows:
+            return []
+        try:
+            records = await repo.add_notifications(rows)
+        except Exception:  # noqa: BLE001 - reminders must not break maintenance
+            logger.warning(
+                "could not persist qualification reminders", exc_info=True
+            )
+            return []
+        self._schedule(events)
         return records
 
     def _schedule(self, events: list[NotificationEvent]) -> None:

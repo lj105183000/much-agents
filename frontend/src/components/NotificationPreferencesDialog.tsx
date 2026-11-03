@@ -31,6 +31,11 @@ const ROWS: Array<{
     label: '预算通知',
     hint: 'Run/项目月度预算 80% 预警与 100% 超限',
   },
+  {
+    key: 'qualification_enabled',
+    label: '资质到期通知',
+    hint: '公司资质证书即将到期提醒',
+  },
 ]
 
 export function NotificationPreferencesDialog({

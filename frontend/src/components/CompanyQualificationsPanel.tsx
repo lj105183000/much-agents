@@ -64,6 +64,31 @@ function errorMessage(caught: unknown, fallback: string): string {
   return caught instanceof ApiError ? caught.message : fallback
 }
 
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function ocrLabel(status: string): { label: string; tone: 'neutral' | 'amber' | 'green' | 'red' } {
+  switch (status) {
+    case 'text':
+    case 'ocr':
+      return { label: '已提取文本', tone: 'green' }
+    case 'pending':
+      return { label: 'OCR 处理中', tone: 'amber' }
+    case 'failed':
+      return { label: 'OCR 失败', tone: 'red' }
+    case 'unavailable':
+      return { label: '未配置 OCR', tone: 'neutral' }
+    default:
+      return { label: '无扫描件', tone: 'neutral' }
+  }
+}
+
 export function CompanyQualificationsPanel({
   open,
   companyId,
@@ -78,6 +103,7 @@ export function CompanyQualificationsPanel({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [fileBusyId, setFileBusyId] = useState<string | null>(null)
 
   const load = async () => {
     if (!companyId) return
@@ -171,6 +197,44 @@ export function CompanyQualificationsPanel({
       setError(errorMessage(caught, '资质删除失败'))
     } finally {
       setBusyId(null)
+    }
+  }
+
+  const uploadFile = async (
+    item: CompanyQualification,
+    file: File | undefined,
+  ) => {
+    if (!companyId || !file) return
+    setFileBusyId(item.id)
+    setError(null)
+    try {
+      await api.uploadCompanyQualificationFile(
+        companyId,
+        item.id,
+        file,
+      )
+      await load()
+    } catch (caught) {
+      setError(errorMessage(caught, '扫描件上传失败'))
+    } finally {
+      setFileBusyId(null)
+    }
+  }
+
+  const downloadFile = async (item: CompanyQualification) => {
+    if (!companyId) return
+    setFileBusyId(item.id)
+    setError(null)
+    try {
+      const blob = await api.downloadCompanyQualificationFile(
+        companyId,
+        item.id,
+      )
+      downloadBlob(blob, item.file_name || `${item.name}.pdf`)
+    } catch (caught) {
+      setError(errorMessage(caught, '扫描件下载失败'))
+    } finally {
+      setFileBusyId(null)
     }
   }
 
@@ -366,6 +430,9 @@ export function CompanyQualificationsPanel({
                           </Badge>
                         ) : null}
                         <Badge tone={expiry.tone}>{expiry.label}</Badge>
+                        <Badge tone={ocrLabel(item.ocr_status).tone}>
+                          {ocrLabel(item.ocr_status).label}
+                        </Badge>
                       </div>
                       <p className="mt-1 text-[11px] text-slate-500">
                         {[
@@ -379,6 +446,9 @@ export function CompanyQualificationsPanel({
                           item.expires_at
                             ? `到期 ${formatDate(item.expires_at)}`
                             : null,
+                          item.file_name
+                            ? `扫描件 ${item.file_name}`
+                            : null,
                         ]
                           .filter(Boolean)
                           .join(' · ') || '未填写证书信息'}
@@ -389,25 +459,61 @@ export function CompanyQualificationsPanel({
                         </p>
                       ) : null}
                     </div>
-                    {canManage ? (
-                      <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
+                      {item.file_name ? (
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => startEdit(item)}
+                          loading={fileBusyId === item.id}
+                          onClick={() => void downloadFile(item)}
                         >
-                          编辑
+                          下载扫描件
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          loading={busyId === item.id}
-                          onClick={() => void remove(item)}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    ) : null}
+                      ) : null}
+                      {canManage ? (
+                        <>
+                          <label
+                            className={cn(
+                              'cursor-pointer rounded-lg border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800',
+                              fileBusyId === item.id &&
+                                'pointer-events-none opacity-50',
+                            )}
+                          >
+                            {fileBusyId === item.id
+                              ? '上传中…'
+                              : '上传扫描件'}
+                            <input
+                              type="file"
+                              accept="application/pdf,.pdf"
+                              className="hidden"
+                              disabled={fileBusyId === item.id}
+                              onChange={(event) => {
+                                void uploadFile(
+                                  item,
+                                  event.target.files?.[0],
+                                )
+                                event.target.value = ''
+                              }}
+                            />
+                          </label>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => startEdit(item)}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            loading={busyId === item.id}
+                            onClick={() => void remove(item)}
+                          >
+                            删除
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
                 </article>
               )

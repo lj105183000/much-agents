@@ -267,6 +267,11 @@ export interface CompanyQualification {
   issued_at: string | null
   expires_at: string | null
   notes: string
+  file_name: string | null
+  file_sha256: string | null
+  file_size: number | null
+  ocr_status: string
+  ocr_updated_at: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -1272,12 +1277,14 @@ export interface NotificationPreferences {
   comment_enabled: boolean
   run_enabled: boolean
   budget_enabled: boolean
+  qualification_enabled: boolean
 }
 
 export interface NotificationPreferencesUpdate {
   comment_enabled?: boolean
   run_enabled?: boolean
   budget_enabled?: boolean
+  qualification_enabled?: boolean
 }
 
 export interface NotificationListResponse {

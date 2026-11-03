@@ -94,6 +94,7 @@ class ApiSettings:
     bid_require_approval: bool = False
     bid_run_stale_seconds: int = 900
     bid_queue_timeout_seconds: int = 1800
+    qualification_expiry_days: int = 30
     readiness_strict: bool = False
     metrics_enabled: bool = True
     metrics_token: str = ""
@@ -304,6 +305,9 @@ class ApiSettings:
             bid_require_approval=_bool(env, "BID_REQUIRE_APPROVAL", False),
             bid_run_stale_seconds=bid_run_stale_seconds,
             bid_queue_timeout_seconds=bid_queue_timeout_seconds,
+            qualification_expiry_days=_int(
+                env, "QUALIFICATION_EXPIRY_DAYS", 30, minimum=1
+            ),
             readiness_strict=_bool(
                 env,
                 "READINESS_STRICT",

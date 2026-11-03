@@ -80,6 +80,17 @@ class CompanyQualificationRow(Base):
     notes: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("''")
     )
+    file_key: Mapped[str | None] = mapped_column(String(255))
+    file_name: Mapped[str | None] = mapped_column(String(255))
+    file_sha256: Mapped[str | None] = mapped_column(String(64))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
+    ocr_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("''")
+    )
+    ocr_text: Mapped[str | None] = mapped_column(Text)
+    ocr_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_by: Mapped[str | None] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -830,6 +841,9 @@ class NotificationPreferenceRow(Base):
         Boolean, nullable=False, server_default=text("true")
     )
     budget_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    qualification_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
     updated_at: Mapped[datetime] = mapped_column(

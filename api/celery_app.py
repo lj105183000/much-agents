@@ -17,7 +17,12 @@ from src.parsing.logging_utils import configure_stdio
 
 from .config import ApiSettings
 from .redis_jobs import RedisJobStore
-from .task_names import MAINTENANCE_QUEUE, MAINTENANCE_TASK_NAME, PARSE_QUEUE
+from .task_names import (
+    MAINTENANCE_QUEUE,
+    MAINTENANCE_TASK_NAME,
+    PARSE_QUEUE,
+    QUALIFICATION_EXPIRY_TASK_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +98,12 @@ def create_celery_app(settings: ApiSettings) -> Celery:
                 "task": MAINTENANCE_TASK_NAME,
                 "schedule": 60.0,
                 "options": {"queue": MAINTENANCE_QUEUE},
-            }
+            },
+            "check-qualification-expiry": {
+                "task": QUALIFICATION_EXPIRY_TASK_NAME,
+                "schedule": 86400.0,
+                "options": {"queue": MAINTENANCE_QUEUE},
+            },
         },
     )
     return app

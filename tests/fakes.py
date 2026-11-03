@@ -787,6 +787,15 @@ class FakeBidRunRepository:
         self.sections[run.run_id] = list(sections)
         self.states[run.run_id] = list(states)
 
+    async def projects_using_company(self, company_id: str) -> list[str]:
+        return sorted(
+            {
+                run.project_id
+                for run in self.runs.values()
+                if getattr(run, "company_id", None) == company_id
+            }
+        )
+
     async def list_runs(
         self,
         *,
@@ -997,6 +1006,7 @@ class FakeBidRunRepository:
                     "comment_enabled": True,
                     "run_enabled": True,
                     "budget_enabled": True,
+                    "qualification_enabled": True,
                 },
             )
         )
@@ -1013,7 +1023,12 @@ class FakeBidRunRepository:
         self, user_id: str, **fields: Any
     ) -> dict[str, bool]:
         current = await self.get_notification_preferences(user_id)
-        for key in ("comment_enabled", "run_enabled", "budget_enabled"):
+        for key in (
+            "comment_enabled",
+            "run_enabled",
+            "budget_enabled",
+            "qualification_enabled",
+        ):
             if fields.get(key) is not None:
                 current[key] = bool(fields[key])
         self.notification_preferences[user_id] = current
@@ -2662,6 +2677,8 @@ class FakeCompanyService:
     def __init__(self) -> None:
         self.records: dict[str, CompanyRecord] = {}
         self.qualifications: dict[str, CompanyQualificationRecord] = {}
+        self.qualification_files: dict[str, tuple[bytes, str]] = {}
+        self.scan_max_bytes = 10 * 1024 * 1024
 
     async def init(self) -> None:
         return None
@@ -2790,12 +2807,102 @@ class FakeCompanyService:
             issued_at=issued_at,
             expires_at=expires_at,
             notes=(notes or "").strip(),
+            file_key=None,
+            file_name=None,
+            file_sha256=None,
+            file_size=None,
+            ocr_status="",
+            ocr_text=None,
+            ocr_updated_at=None,
             created_by=created_by,
             created_at=now,
             updated_at=now,
         )
         self.qualifications[record.id] = record
         return record
+
+    async def attach_qualification_file(
+        self,
+        company_id: str,
+        qualification_id: str,
+        *,
+        filename: str,
+        data: bytes,
+    ) -> CompanyQualificationRecord:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            raise CompanyError(404, "资质不存在")
+        if not filename.lower().endswith(".pdf"):
+            raise CompanyError(415, "资质扫描件必须是 PDF")
+        if not data.startswith(b"%PDF-"):
+            raise CompanyError(400, "资质扫描件不是有效的 PDF")
+        digest = __import__("hashlib").sha256(data).hexdigest()
+        self.qualification_files[qualification_id] = (data, filename)
+        updated = replace(
+            existing,
+            file_key=f"private/qualifications/{company_id}/{qualification_id}.pdf",
+            file_name=filename,
+            file_sha256=digest,
+            file_size=len(data),
+            ocr_status="pending",
+            ocr_text=None,
+            ocr_updated_at=None,
+        )
+        self.qualifications[qualification_id] = updated
+        return updated
+
+    async def qualification_file(
+        self, company_id: str, qualification_id: str
+    ) -> tuple[bytes, str]:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            raise CompanyError(404, "资质不存在")
+        item = self.qualification_files.get(qualification_id)
+        if item is None:
+            raise CompanyError(404, "该资质没有扫描件")
+        return item
+
+    async def ocr_qualification_file(
+        self,
+        company_id: str,
+        qualification_id: str,
+        *,
+        expected_sha256: str | None = None,
+    ) -> None:
+        existing = self.qualifications.get(qualification_id)
+        if existing is None or existing.company_id != company_id:
+            return
+        if expected_sha256 and existing.file_sha256 != expected_sha256:
+            return
+        self.qualifications[qualification_id] = replace(
+            existing,
+            ocr_status="text",
+            ocr_text="扫描件 OCR 文本",
+            ocr_updated_at=datetime.now(timezone.utc),
+        )
+
+    async def expiring_qualifications(
+        self, days_ahead: int = 30
+    ) -> list[dict[str, Any]]:
+        today = datetime.now(timezone.utc).date()
+        deadline = today + timedelta(days=max(1, days_ahead))
+        rows = []
+        for record in self.qualifications.values():
+            if (
+                record.expires_at is None
+                or record.expires_at < today
+                or record.expires_at > deadline
+            ):
+                continue
+            company = self.records.get(record.company_id)
+            rows.append(
+                {
+                    "qualification": record,
+                    "company_name": company.company_name if company else "",
+                    "days_left": (record.expires_at - today).days,
+                }
+            )
+        return rows
 
     async def update_qualification(
         self,

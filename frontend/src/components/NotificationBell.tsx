@@ -26,6 +26,7 @@ const KIND_META: Record<
   run_budget_exceeded: { label: 'Run 预算超限', tone: 'red' },
   project_budget_warning: { label: '月度预算预警', tone: 'amber' },
   project_budget_exceeded: { label: '月度预算超限', tone: 'red' },
+  qualification_expiring: { label: '资质到期', tone: 'amber' },
 }
 
 function notificationMeta(notification: NotificationView) {

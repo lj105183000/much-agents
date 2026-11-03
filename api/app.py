@@ -244,6 +244,8 @@ def create_app(
         profile_max_mb=bid_settings.profile_max_mb,
         engine=database.engine,
         session_factory=database.session_factory,
+        storage=storage,
+        parse_settings=parse_settings,
     )
     notification_service = notification_service or NotificationService(
         bid_run_repo,

@@ -75,7 +75,7 @@ BID_DOCX_TEMPLATE=/opt/much-agents/templates/corporate-bid.docx
 
 ### 3.1 数据
 
-Alembic `0016` 新增 `company_qualifications`：
+Alembic `0016` 新增 `company_qualifications`，`0023` 增加扫描件/OCR 字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -85,6 +85,8 @@ Alembic `0016` 新增 `company_qualifications`：
 | `certificate_no` / `issuer` | 证书编号、发证机关 |
 | `issued_at` / `expires_at` | 日期；到期日可空 |
 | `notes` | 备注 |
+| `file_key` / `file_name` / `file_sha256` / `file_size` | 私有扫描件对象元数据 |
+| `ocr_status` / `ocr_text` / `ocr_updated_at` | `pending/text/ocr/unavailable/failed` 与提取文本 |
 | `created_by` / `created_at` / `updated_at` | 审计快照 |
 
 索引 `(company_id, expires_at)`，列表按到期日升序（未填到期日排最后）。
@@ -99,10 +101,15 @@ Alembic `0016` 新增 `company_qualifications`：
 | `POST` | `/api/companies/{company_id}/qualifications` | `require_manage`（admin/bid_manager） |
 | `PATCH` | `/api/companies/{company_id}/qualifications/{qualification_id}` | `require_manage` |
 | `DELETE` | `/api/companies/{company_id}/qualifications/{qualification_id}` | `require_manage` |
+| `POST` | `.../qualifications/{qualification_id}/file` | `require_manage`（multipart `file`，PDF ≤10MB） |
+| `GET` | `.../qualifications/{qualification_id}/file` | 登录用户 |
 
 - 名称必填、去首尾空白；到期日不得早于发证日（422）。
-- 审计：`company.qualification.create/update/delete`，只记录 id、类型、到期日与变更字段。
+- 扫描件仅接受 PDF（1–200 页、无加密），保存到私有对象 `private/qualifications/<company_id>/<qualification_id>.pdf`；删除资质时同步删除对象。
+- 上传后异步 OCR：优先 PyMuPDF 文本层；无文本且配置 `MINERU_API_KEY` 时走 MinerU OCR；否则 `ocr_status=unavailable`。OCR 失败只更新状态，不删除扫描件。
+- 审计：`company.qualification.create/update/delete/file`，只记录 id、类型、到期日、文件名/哈希/大小与变更字段。
 - 公司不存在返回 404；证书不属于该公司返回 404。
+- 到期提醒：Celery 每日扫描 `QUALIFICATION_EXPIRY_DAYS`（默认 30）内到期的资质，通知使用该公司的项目的 `manager`；同一证书/到期日/剩余天数去重，受用户「资质到期通知」偏好控制。
 
 ### 3.3 前端
 
@@ -110,8 +117,9 @@ Alembic `0016` 新增 `company_qualifications`：
 
 - 列表展示名称、类型、证书号、发证机关、发证/到期日、备注与状态徽章。
 - 状态：已过期（红）、30 天内到期（黄）、有效（绿）、未填到期日（灰）。
-- 有管理权限时可新增/编辑/删除；只读角色只能查看。
-- 当前没有证书扫描件上传、到期站内通知/邮件提醒、资质与 profile 字段自动合并。
+- 有管理权限时可新增/编辑/删除，并上传/替换扫描件；只读角色可查看与下载扫描件。
+- 展示 OCR 状态（已提取/处理中/失败/未配置）与扫描件文件名。
+- 到期提醒走站内通知与可选 Webhook/SMTP；当前没有资质与 profile 字段自动合并。
 
 ## 4. 测试
 
@@ -120,11 +128,13 @@ Alembic `0016` 新增 `company_qualifications`：
 - `tests/test_docx_template.py`：模板页边距/页脚保留、示例正文清除、缺失模板报错。
 - `tests/test_bid_template_api.py`：上传校验、CRUD/启停/下载、项目隔离、启用模板进入组装、模板对象丢失阻断组装，以及预览渲染/缓存/分页越界/LibreOffice 不可用。
 - `tests/test_company_api.py`：资质 CRUD、日期校验、未知公司与未知证书。
+- `tests/test_qualification_scan_api.py`：扫描件上传/下载、非 PDF 拒绝、OCR 状态。
+- `tests/test_qualification_expiry.py`：到期通知、去重与偏好关闭。
 - Playwright：公司库资质弹窗展示种子证书。
 
 ## 5. 尚未实现
 
 - 模板变量/封面占位符、未知变量阻断、公司级/组织级模板、模板版本历史与整本文档模板。
 - legacy `POST /api/bids` 与 CLI 不支持项目模板库（仍只用全局模板）。
-- 资质扫描件对象存储、OCR 识别、到期提醒（站内/Webhook/SMTP）与投标文件自动引用。
+- 资质与 profile 字段自动合并、扫描件与投标文件自动引用、证书扫描件图片格式（当前仅 PDF）。
 - DOC 复杂排版与内置模板的像素级一致性仍需人工抽查。
