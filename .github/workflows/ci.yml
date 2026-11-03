@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.12"
+          version: "0.13.4"
           enable-cache: true
           cache-suffix: ${{ github.job }}
       - run: uv sync --frozen
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.12"
+          version: "0.13.4"
           enable-cache: true
           cache-suffix: ${{ github.job }}
       - run: uv sync --frozen
@@ -112,7 +112,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.12"
+          version: "0.13.4"
           enable-cache: true
           cache-suffix: ${{ github.job }}
       - uses: actions/setup-node@v5
@@ -241,7 +241,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.12.12"
+          version: "0.13.4"
           enable-cache: true
           cache-suffix: ${{ github.job }}
       - name: Python dependency audit

@@ -33,7 +33,7 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
 # from internal networks; pass --build-arg PIP_INDEX_URL=<mirror> if needed.
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir --disable-pip-version-check \
-    --root-user-action=ignore --index-url "$PIP_INDEX_URL" uv==0.12.12
+    --root-user-action=ignore --index-url "$PIP_INDEX_URL" uv==0.13.4
 
 WORKDIR /app
 
