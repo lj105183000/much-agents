@@ -148,6 +148,35 @@ test('admin opens the analytics dashboard', async ({ page }) => {
   await logout(page)
 })
 
+test('admin opens the evaluation console', async ({ page }) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await navigate(page, /评测控制台/)
+  await expect(
+    page.getByRole('heading', {
+      name: '评测控制台',
+      exact: true,
+      level: 1,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: '评测用例', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: '运行 L1 评测' }),
+  ).toBeVisible()
+  await logout(page)
+})
+
+test('viewer cannot see the evaluation console', async ({ page }) => {
+  await login(page, VIEWER_USERNAME, VIEWER_PASSWORD)
+  await expect(
+    page
+      .getByRole('navigation', { name: '主导航' })
+      .getByRole('button', { name: /评测控制台/ }),
+  ).toHaveCount(0)
+  await logout(page)
+})
+
 test('admin can update notification preferences', async ({ page }) => {
   await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
   await page.getByTestId('notification-bell').click()

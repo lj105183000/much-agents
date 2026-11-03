@@ -133,7 +133,9 @@ def _api_env(seed: dict[str, str], root: Path, api_port: int, web_port: int) -> 
     upload_dir = root / "upload"
     parsed_dir = root / "parsed"
     bids_dir = root / "bids"
-    for path in (upload_dir, parsed_dir, bids_dir):
+    eval_data_dir = root / "eval-data"
+    eval_reports_dir = root / "eval-reports"
+    for path in (upload_dir, parsed_dir, bids_dir, eval_data_dir, eval_reports_dir):
         path.mkdir(parents=True, exist_ok=True)
     env = _base_env()
     env.update(
@@ -152,6 +154,10 @@ def _api_env(seed: dict[str, str], root: Path, api_port: int, web_port: int) -> 
             "UPLOAD_DIR": str(upload_dir),
             "PARSED_DIR": str(parsed_dir),
             "BIDS_DIR": str(bids_dir),
+            "EVAL_DATA_DIR": str(eval_data_dir),
+            "EVAL_BIDS_DIR": str(bids_dir),
+            "EVAL_BASELINE": str(root / "baseline.json"),
+            "EVAL_REPORTS_DIR": str(eval_reports_dir),
             "BID_USE_CHROMA": "false",
             "BID_FIGURES_ENABLED": "false",
             "BID_FIGURES_EXTERNAL": "false",

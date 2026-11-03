@@ -12,6 +12,7 @@ export type ViewKey =
   | 'analytics'
   | 'audit'
   | 'users'
+  | 'evaluation'
 
 export type UserRole =
   | 'admin'
@@ -1012,6 +1013,186 @@ export interface AnalyticsOverview {
   projects: AnalyticsProject[]
   daily: AnalyticsDaily[]
   budget_alerts: AnalyticsBudgetAlert[]
+}
+
+export interface EvalCaseCounts {
+  factors: number
+  factors_reviewed: number
+  factors_with_points: number
+  points: number
+  points_reviewed: number
+  facts: number
+  facts_reviewed: number
+}
+
+export interface EvalL1Summary {
+  status: string | null
+  run_id: string | null
+  point_recall: number | null
+  weighted_point_recall: number | null
+  fact_coverage: number | null
+  requirement_coverage: number | null
+  citation_coverage: number | null
+  invalid_citations: number | null
+}
+
+export interface EvalCaseSummary {
+  case_id: string
+  doc_id: string
+  label_status: string
+  ready: boolean
+  counts: EvalCaseCounts
+  validation_ok: boolean | null
+  warnings: string[]
+  l1: EvalL1Summary | null
+  weighted_coverage: number | null
+  placeholder_density: number | null
+}
+
+export interface EvalFactorView {
+  id: string
+  category: string
+  factor: string
+  max_score: number | null
+  scoring_criteria: string
+  source_page: number | null
+  source_section: string
+  status: string
+}
+
+export interface EvalPointView {
+  id: string
+  factor_id: string
+  text: string
+  status: string
+  source: string
+}
+
+export interface EvalFactView {
+  id: string
+  key: string
+  label: string
+  value: string
+  source_page: number | null
+  source_section: string
+  status: string
+}
+
+export interface EvalCaseDetail extends EvalCaseSummary {
+  factors: EvalFactorView[]
+  points: EvalPointView[]
+  facts: EvalFactView[]
+  manifest: Record<string, unknown>
+  validation: {
+    ok: boolean | null
+    error_count: number
+    warning_count: number
+  }
+}
+
+export interface EvalCaseListResponse {
+  available: boolean
+  message: string | null
+  cases: EvalCaseSummary[]
+}
+
+export interface EvalBaselineSummary {
+  available: boolean
+  valid: boolean
+  generated_at: string | null
+  summary: Record<string, unknown>
+  message: string | null
+}
+
+export interface EvalOverviewMetrics {
+  cases: number
+  ready: number
+  runs_found: number
+  l1_cases_ready: number
+  avg_weighted_coverage: number | null
+  avg_placeholder_density: number | null
+  avg_point_recall: number | null
+  avg_weighted_point_recall: number | null
+  avg_fact_coverage: number | null
+  avg_requirement_coverage: number | null
+  avg_citation_coverage: number | null
+}
+
+export interface EvalRunSummary {
+  id: string
+  created_at: string
+  created_by: string
+  ok: boolean | null
+  baseline_ready: boolean
+  updated_baseline: boolean
+  summary: Record<string, unknown>
+  failed_checks: number
+}
+
+export interface EvalCheck {
+  id: string
+  ok: boolean
+  baseline?: unknown
+  current?: unknown
+  delta?: number | null
+  increase?: number | null
+  threshold?: unknown
+}
+
+export interface EvalRunCase {
+  case_id: string
+  doc_id: string
+  status: string
+  weighted_coverage: number | null
+  narrative_ratio: number | null
+  placeholder_density: number | null
+  issues_per_section: number | null
+  l1: EvalL1Summary | null
+}
+
+export interface EvalRunReport extends EvalRunSummary {
+  cases: EvalRunCase[]
+  checks: EvalCheck[]
+  warnings: string[]
+}
+
+export interface EvalRunListResponse {
+  runs: EvalRunSummary[]
+}
+
+export interface EvalRunRequest {
+  update_baseline?: boolean
+  confirm?: boolean
+  l1_threshold?: number
+}
+
+export interface EvalL2Summary {
+  run_id: string
+  doc_id: string
+  n: number
+  agreement: number | null
+  cohens_kappa: number | null
+  ready: boolean
+  generated_at: string | null
+  thresholds: Record<string, unknown>
+  dimensions: Record<string, unknown>
+  overall: Record<string, unknown>
+}
+
+export interface EvalL2ListResponse {
+  calibrations: EvalL2Summary[]
+}
+
+export interface EvalOverview {
+  available: boolean
+  message: string | null
+  data_dir_ready: boolean
+  bids_dir_ready: boolean
+  cases: EvalOverviewMetrics
+  baseline: EvalBaselineSummary
+  last_run: EvalRunSummary | null
+  l2: EvalL2Summary[]
+  generated_at: string
 }
 
 export type NotificationKind =

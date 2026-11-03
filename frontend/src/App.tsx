@@ -22,6 +22,7 @@ import { AnalyticsView } from './views/AnalyticsView'
 import { AuditView } from './views/AuditView'
 import { BidView } from './views/BidView'
 import { CompaniesView } from './views/CompaniesView'
+import { EvaluationView } from './views/EvaluationView'
 import { HistoryView } from './views/HistoryView'
 import { LibraryView } from './views/LibraryView'
 import { LoginView } from './views/LoginView'
@@ -77,7 +78,8 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
     view !== 'analytics' &&
     view !== 'audit' &&
     view !== 'users' &&
-    view !== 'companies'
+    view !== 'companies' &&
+    view !== 'evaluation'
 
   const navigate = (target: ViewKey) => {
     setView(target)
@@ -288,6 +290,15 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                   ) : (
                     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-4 py-6 text-xs text-slate-400">
                       运营看板仅对管理员开放。
+                    </div>
+                  )
+                ) : null}
+                {view === 'evaluation' ? (
+                  user.role === 'admin' ? (
+                    <EvaluationView apiBase={apiBase} />
+                  ) : (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 px-4 py-6 text-xs text-slate-400">
+                      评测控制台仅对管理员开放。
                     </div>
                   )
                 ) : null}

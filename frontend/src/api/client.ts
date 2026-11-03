@@ -97,6 +97,7 @@ const PROJECT_EXEMPT_PREFIXES = [
   '/api/live',
   '/api/ready',
   '/api/analytics',
+  '/api/evaluations',
 ]
 
 export function setAuthToken(token: string | null): void {

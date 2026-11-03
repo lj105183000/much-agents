@@ -60,6 +60,13 @@ export const NAV_ITEMS: NavItem[] = [
     adminOnly: true,
   },
   {
+    key: 'evaluation',
+    label: '评测控制台',
+    description: '评测用例、L1 回归与基线',
+    icon: 'check',
+    adminOnly: true,
+  },
+  {
     key: 'audit',
     label: '审计日志',
     description: '不可篡改的操作记录与链校验',
@@ -110,6 +117,10 @@ export const VIEW_META: Record<
   analytics: {
     title: '运营看板',
     subtitle: '生成质量、成本、反馈与项目用量趋势（仅管理员）',
+  },
+  evaluation: {
+    title: '评测控制台',
+    subtitle: '查看评测用例、运行 L1 回归、维护基线并查看 L2 校准（仅管理员）',
   },
   audit: {
     title: '审计日志',
