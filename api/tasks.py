@@ -89,8 +89,12 @@ async def _reap_stale_runs(
     repo: BidRunRepository,
     store: RedisJobStore,
     stale_seconds: int,
+    queue_timeout_seconds: int,
 ) -> list[str]:
-    run_ids = await repo.reap_stale(stale_seconds=stale_seconds)
+    run_ids = await repo.reap_stale(
+        stale_seconds=stale_seconds,
+        queue_timeout_seconds=queue_timeout_seconds,
+    )
     for run_id in run_ids:
         run = await repo.get_run(run_id)
         if run is None or not run.job_id:
@@ -122,6 +126,9 @@ def reap_stale_bid_runs_task() -> None:
                 repo=BidRunRepository(database.session_factory),
                 store=store,
                 stale_seconds=api_settings.bid_run_stale_seconds,
+                queue_timeout_seconds=(
+                    api_settings.bid_queue_timeout_seconds
+                ),
             )
         finally:
             await database.close()

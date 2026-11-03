@@ -14,6 +14,7 @@ from api.bid_runs import BidRunService
 from api.jobs import JobStore
 from api.projects import DEFAULT_PROJECT_ID, ProjectService
 from api.runner import InlineRunner
+from src.parsing.attachments import attach_evidence
 from tests.fakes import (
     FakeAuthRepository,
     FakeBidRunRepository,
@@ -665,3 +666,72 @@ def test_project_role_never_escalates_global_role(tmp_path: Path) -> None:
             client.get(f"/api/bid-runs/{run_a}", headers=vince).status_code
             == 200
         )
+
+
+def test_attachment_evidence_is_project_scoped(tmp_path: Path) -> None:
+    harness = build_harness(tmp_path)
+    settings = make_parse_settings(tmp_path)
+    asyncio.run(
+        harness.project_repo.register_document(
+            PROJECT_B, "doc-1", "tender-a.pdf", harness.user_id("bob")
+        )
+    )
+    csv_path = tmp_path / "boq.csv"
+    csv_path.write_text(
+        "项目编码,项目名称,计量单位,工程量\n"
+        "010101001,沟槽土方开挖,m3,1200\n",
+        encoding="utf-8",
+    )
+    attach_evidence(
+        "doc-1",
+        csv_path,
+        settings,
+        project_id=PROJECT_A,
+        ingest=False,
+        sync_storage=False,
+    )
+    attach_evidence(
+        "doc-1",
+        csv_path,
+        settings,
+        project_id=PROJECT_B,
+        ingest=False,
+        sync_storage=False,
+    )
+
+    with TestClient(harness.app) as client:
+        alice = harness.login_headers(client, "alice", PROJECT_A)
+        bob = harness.login_headers(client, "bob", PROJECT_B)
+
+        project_a = client.get(
+            "/api/documents/doc-1/attachments", headers=alice
+        )
+        project_b = client.get(
+            "/api/documents/doc-1/attachments", headers=bob
+        )
+        assert project_a.status_code == 200, project_a.text
+        assert project_b.status_code == 200, project_b.text
+        assert [
+            item["project_id"] for item in project_a.json()["attachments"]
+        ] == [PROJECT_A]
+        assert [
+            item["project_id"] for item in project_b.json()["attachments"]
+        ] == [PROJECT_B]
+
+        attachment_id = project_a.json()["attachments"][0]["attachment_id"]
+        deleted = client.delete(
+            f"/api/documents/doc-1/attachments/{attachment_id}",
+            headers=alice,
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert (
+            client.get(
+                "/api/documents/doc-1/attachments", headers=alice
+            ).json()["attachments"]
+            == []
+        )
+        remaining = client.get(
+            "/api/documents/doc-1/attachments", headers=bob
+        ).json()["attachments"]
+        assert len(remaining) == 1
+        assert remaining[0]["project_id"] == PROJECT_B

@@ -17,6 +17,7 @@ Alembic `0004_projects_acl.py` 新增三张表，并给 `bid_runs` 增加 `proje
 - 迁移会创建默认项目，把现有用户按全局角色加入默认项目，把 `bid_runs` 中出现的 `doc_id` 回填到 `documents`，再把 `bid_runs.project_id` 置为非空。
 - 删除项目时，成员与文档注册表级联删除；仍有 `queued/generating/assembling` 的 run 时返回 409。默认项目不能删除。
 - 解析产物仍按内容寻址共享：`upload/parsed/<doc_id>/`（或 MinIO `parsed/<doc_id>/`）不因项目复制。同一份 PDF 出现在两个项目时只共享缓存，读取权限仍按项目判定。
+- 附件证据按项目隔离：manifest 存 `parsed/<doc_id>/attachments/<project_id>.json`，附件 chunk metadata 带 `project_id`，关键词/语义检索只返回主文档与当前项目附件；legacy `attachments.json` 只读兼容，需运行 `scripts.migrate_attachments` 分配到项目后才能删除。
 
 ## 2. 项目角色
 

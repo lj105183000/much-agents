@@ -212,9 +212,15 @@ class SearchService:
             return "未配置 ZHIPU_API_KEY"
         return None
 
-    def _semantic(self) -> CandidateRetriever:
-        if self._semantic_retriever is None:
-            self._semantic_retriever = ChromaTenderRetriever(self.bid_settings)
+    def _semantic(self, project_id: str | None = None) -> CandidateRetriever:
+        if self._semantic_retriever is None or (
+            isinstance(self._semantic_retriever, ChromaTenderRetriever)
+            and self._semantic_retriever.project_id != project_id
+        ):
+            self._semantic_retriever = ChromaTenderRetriever(
+                self.bid_settings,
+                project_id=project_id,
+            )
         return self._semantic_retriever
 
     def _catalog_names(
@@ -311,6 +317,7 @@ class SearchService:
         self,
         doc_id: str | None,
         allowed_doc_ids: set[str] | None = None,
+        project_id: str | None = None,
     ) -> tuple[list[ChunkRecord], set[str], list[str]]:
         storage = self._remote_storage
         assert storage is not None
@@ -341,6 +348,13 @@ class SearchService:
             except StorageObjectNotFound:
                 doc_chunks, doc_skipped = [], 1
             skipped += doc_skipped
+            if project_id:
+                doc_chunks = [
+                    chunk
+                    for chunk in doc_chunks
+                    if not chunk.metadata.get("project_id")
+                    or chunk.metadata.get("project_id") == project_id
+                ]
             if doc_chunks:
                 searchable.add(current)
                 chunks.extend(doc_chunks)
@@ -356,9 +370,12 @@ class SearchService:
         self,
         doc_id: str | None,
         allowed_doc_ids: set[str] | None = None,
+        project_id: str | None = None,
     ) -> tuple[list[ChunkRecord], set[str], list[str]]:
         if self._remote_storage is not None:
-            return self._load_remote_chunks(doc_id, allowed_doc_ids)
+            return self._load_remote_chunks(
+                doc_id, allowed_doc_ids, project_id
+            )
         warnings: list[str] = []
         chunks: list[ChunkRecord] = []
         searchable: set[str] = set()
@@ -382,6 +399,13 @@ class SearchService:
                 directory.name,
             )
             skipped += doc_skipped
+            if project_id:
+                doc_chunks = [
+                    chunk
+                    for chunk in doc_chunks
+                    if not chunk.metadata.get("project_id")
+                    or chunk.metadata.get("project_id") == project_id
+                ]
             if doc_chunks:
                 searchable.add(directory.name)
                 chunks.extend(doc_chunks)
@@ -442,6 +466,7 @@ class SearchService:
         request: SearchRequest,
         *,
         allowed_doc_ids: set[str] | None = None,
+        project_id: str | None = None,
     ) -> SearchResponse:
         started = time.perf_counter()
         query = request.query.strip()
@@ -472,7 +497,7 @@ class SearchService:
             else:
                 self._safe_doc_dir(doc_id)
         chunks, searchable, warnings = self._load_keyword_chunks(
-            doc_id, allowed_doc_ids
+            doc_id, allowed_doc_ids, project_id
         )
         names, catalog_warning = self._catalog_names(allowed_doc_ids)
         if catalog_warning:
@@ -496,7 +521,9 @@ class SearchService:
                             _MAX_SEMANTIC_CANDIDATES,
                         )
                     )
-                    candidates = self._semantic().fetch(query, doc_id, fetch_k)
+                    candidates = self._semantic(project_id).fetch(
+                        query, doc_id, fetch_k
+                    )
                     mode_used = "semantic"
                     if doc_id is None:
                         filtered = [

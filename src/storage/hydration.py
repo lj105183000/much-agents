@@ -26,6 +26,7 @@ PARSED_CACHE_FILES: tuple[str, ...] = (
     "toc.json",
     "extraction.json",
     "chunks.jsonl",
+    "attachments.json",
 )
 RUN_CACHE_FILES: tuple[str, ...] = ("outline.json",)
 DERIVED_SUBDIRS: tuple[str, ...] = ("figures", "sections")
@@ -104,6 +105,42 @@ def upload_private_profile(
     ):
         return
     storage.put_file(key, profile_path, content_type="application/json")
+
+
+def ensure_run_hash_inputs(
+    storage: Storage | None,
+    layout: StorageLayout,
+    doc_id: str,
+    run_id: str,
+) -> set[str]:
+    """Hydrate files used by ``compute_run_content_sha256`` before export.
+
+    MinIO is authoritative, but the local run cache may only contain
+    ``outline.json``.  Missing ``bid.md`` or section files would otherwise make
+    the content hash differ and reject a valid export with 409.
+    """
+
+    run_dir = layout.bids_dir / doc_id / run_id
+    if not is_remote(storage):
+        return set()
+    assert storage is not None
+    prefix = run_prefix(doc_id, run_id)
+    wanted = ["bid.md", "figures/manifest.json"]
+    try:
+        objects = storage.list(prefix)
+    except StorageError:
+        raise
+    for info in objects:
+        key = str(getattr(info, "key", "") or "")
+        relative = key[len(prefix) :].lstrip("/") if key.startswith(prefix) else ""
+        if relative.startswith("sections/") and relative.endswith(".md"):
+            wanted.append(relative)
+    return storage.ensure_files(
+        prefix,
+        run_dir,
+        tuple(dict.fromkeys(wanted)),
+        required=False,
+    )
 
 
 def ensure_run_cached(
@@ -240,6 +277,7 @@ __all__ = [
     "ensure_document_cached",
     "ensure_private_profile",
     "ensure_run_cached",
+    "ensure_run_hash_inputs",
     "is_remote",
     "sync_document",
     "sync_run",

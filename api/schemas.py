@@ -39,6 +39,7 @@ class JobCreatedResponse(BaseModel):
 
 class AttachmentSummary(BaseModel):
     attachment_id: str
+    project_id: str | None = None
     file_name: str
     sha256: str
     chunk_count: int = 0
@@ -46,6 +47,7 @@ class AttachmentSummary(BaseModel):
     parser: str = ""
     warnings: list[str] = Field(default_factory=list)
     attached_at: str | None = None
+    legacy_shared: bool = False
 
 
 class AttachmentListResponse(BaseModel):

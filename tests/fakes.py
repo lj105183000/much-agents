@@ -1879,6 +1879,92 @@ class FakeBidRunRepository:
         self.runs[run_id] = replace(run, **fields)
         return True
 
+    async def claim_assembly(
+        self, run_id: str, *, assembly_token: str
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if run is None or run.status not in {
+            "outline_ready",
+            "paused",
+            "failed",
+            "assembled",
+        }:
+            return False
+        self.runs[run_id] = replace(
+            run,
+            status="assembling",
+            stage="assembling",
+            assembly_token=assembly_token,
+        )
+        return True
+
+    async def claim_assembly_for_worker(
+        self,
+        run_id: str,
+        *,
+        generation_token: str,
+        assembly_token: str,
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.status != "generating"
+            or run.generation_token != generation_token
+        ):
+            return False
+        self.runs[run_id] = replace(
+            run,
+            status="assembling",
+            stage="assembling",
+            assembly_token=assembly_token,
+        )
+        return True
+
+    async def heartbeat_assembly(
+        self, run_id: str, *, assembly_token: str
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.status != "assembling"
+            or run.assembly_token != assembly_token
+        ):
+            return False
+        self.runs[run_id] = replace(
+            run, heartbeat_at=datetime.now(timezone.utc)
+        )
+        return True
+
+    async def update_run_owned(
+        self,
+        run_id: str,
+        *,
+        generation_token: str | None = None,
+        assembly_token: str | None = None,
+        allowed_statuses: tuple[str, ...] | None = None,
+        clear_assembly_token: bool = False,
+        **fields: Any,
+    ) -> bool:
+        run = self.runs.get(run_id)
+        if run is None:
+            return False
+        if (
+            generation_token is not None
+            and run.generation_token != generation_token
+        ):
+            return False
+        if (
+            assembly_token is not None
+            and run.assembly_token != assembly_token
+        ):
+            return False
+        if allowed_statuses and run.status not in allowed_statuses:
+            return False
+        if clear_assembly_token:
+            fields["assembly_token"] = None
+        self.runs[run_id] = replace(run, **fields)
+        return True
+
     async def update_section(
         self,
         run_id: str,
@@ -1998,6 +2084,68 @@ class FakeBidRunRepository:
             status="paused",
             stage="paused",
             message="stale generation recovered; ready to resume",
+            generation_token=None,
+            assembly_token=None,
+            heartbeat_at=None,
+        )
+        self.runs[run_id] = updated
+        return updated
+
+    async def reap_stale(
+        self,
+        *,
+        stale_seconds: int,
+        queue_timeout_seconds: int | None = None,
+        limit: int = 100,
+    ) -> list[str]:
+        reaped: list[str] = []
+        for run_id, run in list(self.runs.items())[: max(1, limit)]:
+            if run.status in {"generating", "assembling"}:
+                if (
+                    await self.mark_stale_paused(
+                        run_id, stale_seconds=stale_seconds
+                    )
+                    is not None
+                ):
+                    reaped.append(run_id)
+            elif (
+                run.status == "queued"
+                and queue_timeout_seconds is not None
+                and await self.mark_queued_expired(
+                    run_id,
+                    queue_timeout_seconds=queue_timeout_seconds,
+                )
+                is not None
+            ):
+                reaped.append(run_id)
+        return reaped
+
+    async def mark_queued_expired(
+        self,
+        run_id: str,
+        *,
+        queue_timeout_seconds: int,
+    ) -> BidRunRecord | None:
+        run = self.runs.get(run_id)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=max(1, queue_timeout_seconds)
+        )
+        if (
+            run is None
+            or run.status != "queued"
+            or run.updated_at >= cutoff
+        ):
+            return None
+        updated = replace(
+            run,
+            status="paused",
+            stage="paused",
+            message="queued job expired; ready to resume",
+            error="queued job was not picked up",
+            generation_token=None,
+            assembly_token=None,
+            heartbeat_at=None,
+            updated_at=datetime.now(timezone.utc),
         )
         self.runs[run_id] = updated
         return updated

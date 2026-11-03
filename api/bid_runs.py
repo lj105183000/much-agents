@@ -96,6 +96,7 @@ from src.storage.hydration import (
     delete_run_derived,
     ensure_document_cached,
     ensure_run_cached,
+    ensure_run_hash_inputs,
     is_remote,
     sync_run,
     sync_run_derived,
@@ -521,6 +522,32 @@ class BidRunService:
                     )
         except StorageError as exc:
             raise BidRunError(503, "object storage is unavailable") from exc
+
+    async def _release_assembly(
+        self,
+        run_id: str,
+        assembly_token: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        try:
+            await self._repo().update_run_owned(
+                run_id,
+                assembly_token=assembly_token,
+                allowed_statuses=("assembling",),
+                status="paused",
+                stage="paused",
+                message="assembly failed; ready to resume",
+                error=error,
+                clear_assembly_token=True,
+                finished_at=datetime.now(timezone.utc),
+            )
+        except Exception:  # noqa: BLE001 - release must not mask the failure
+            logger.warning(
+                "could not release assembly lease for %s",
+                run_id,
+                exc_info=True,
+            )
 
     async def _sync_run_derived(self, run: BidRunRecord) -> None:
         if not is_remote(self.storage):
@@ -2059,7 +2086,11 @@ class BidRunService:
         if not profile_path.is_file():
             raise BidRunError(409, "bidder profile snapshot is missing")
         try:
-            context = TenderContext.load(run.doc_id, self.bid_settings)
+            context = TenderContext.load(
+                run.doc_id,
+                self.bid_settings,
+                project_id=run.project_id,
+            )
             profile = BidderProfile.from_file(profile_path)
         except BidContextError as exc:
             raise BidRunError(404, str(exc)) from exc
@@ -2289,7 +2320,11 @@ class BidRunService:
         await self._ensure_document(run.doc_id)
         profile_path = run_dir / "profile.json"
         try:
-            context = TenderContext.load(run.doc_id, self.bid_settings)
+            context = TenderContext.load(
+                run.doc_id,
+                self.bid_settings,
+                project_id=run.project_id,
+            )
             profile = BidderProfile.from_file(profile_path)
         except BidContextError as exc:
             raise BidRunError(404, str(exc)) from exc
@@ -2883,12 +2918,32 @@ class BidRunService:
             consistency_summary=gate.get("consistency_summary"),
         )
 
+    async def _assembly_heartbeat(
+        self, run_id: str, assembly_token: str
+    ) -> None:
+        interval = max(15.0, self.stale_seconds / 3.0)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if not await self._repo().heartbeat_assembly(
+                    run_id, assembly_token=assembly_token
+                ):
+                    return
+            except Exception:  # noqa: BLE001 - heartbeat failure ends the task
+                logger.warning(
+                    "could not heartbeat assembly for %s",
+                    run_id,
+                    exc_info=True,
+                )
+                return
+
     async def assemble(
         self,
         run_id: str,
         *,
         allow_active: bool = False,
         external_renderer: ExternalRenderer | None = None,
+        generation_token: str | None = None,
     ) -> BidGateResponse:
         repo = self._repo()
         assembly_started = datetime.now(timezone.utc)
@@ -2901,7 +2956,11 @@ class BidRunService:
         await self._ensure_document(run.doc_id)
         profile_path = run_dir / "profile.json"
         try:
-            context = TenderContext.load(run.doc_id, self.bid_settings)
+            context = TenderContext.load(
+                run.doc_id,
+                self.bid_settings,
+                project_id=run.project_id,
+            )
             profile = BidderProfile.from_file(profile_path)
         except BidContextError as exc:
             raise BidRunError(404, str(exc)) from exc
@@ -2919,6 +2978,26 @@ class BidRunService:
         outputs = outputs_from_states(states)
         allowed = build_allowed(context, profile, outline)
         template_path, template_temp = await self._resolve_docx_template(run)
+        assembly_token = uuid4().hex
+        if allow_active:
+            if not generation_token:
+                raise BidRunError(
+                    409, "assembly requires the current generation token"
+                )
+            claimed = await repo.claim_assembly_for_worker(
+                run_id,
+                generation_token=generation_token,
+                assembly_token=assembly_token,
+            )
+        else:
+            claimed = await repo.claim_assembly(
+                run_id, assembly_token=assembly_token
+            )
+        if not claimed:
+            raise BidRunError(409, "assembly is already in progress")
+        heartbeat_task = asyncio.create_task(
+            self._assembly_heartbeat(run_id, assembly_token)
+        )
         try:
             base = assemble_staged_bid(
                 context=context,
@@ -3086,35 +3165,85 @@ class BidRunService:
             GATE_STATUS.inc(status=str(gate.get("status") or "warn"))
         except Exception as exc:  # noqa: BLE001 - assembly failures are HTTP errors
             logger.exception("could not assemble bid run %s", run_id)
+            heartbeat_task.cancel()
+            await self._release_assembly(
+                run_id,
+                assembly_token,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             raise BidRunError(500, "bid assembly failed") from exc
         finally:
             if template_temp is not None:
                 template_temp.cleanup()
 
-        await self._sync_run_derived(run)
-
-        content_sha256 = compute_run_content_sha256(
-            run_dir=run_dir,
-            profile_sha256=run.profile_sha256,
-            outline_revision=run.revision,
-            figure_manifest=run_dir / "figures" / "manifest.json",
-        )
-        warnings = list(
-            dict.fromkeys([*assembly.warnings, *(result.get("report", {}).get("warnings") or [])])
-        )
-        await repo.update_run(
-            run_id,
-            status="assembled",
-            stage="assembled",
-            percent=100,
-            message="assembly complete",
-            gate_status=str(gate.get("status") or "warn"),
-            gate=gate,
-            content_sha256=content_sha256,
-            warnings=warnings,
-            error=None,
-            finished_at=_now(),
-        )
+        try:
+            await self._sync_run_derived(run)
+            content_sha256 = compute_run_content_sha256(
+                run_dir=run_dir,
+                profile_sha256=run.profile_sha256,
+                outline_revision=run.revision,
+                figure_manifest=run_dir / "figures" / "manifest.json",
+            )
+            warnings = list(
+                dict.fromkeys(
+                    [
+                        *assembly.warnings,
+                        *(result.get("report", {}).get("warnings") or []),
+                    ]
+                )
+            )
+            latest = await repo.get_run(run_id)
+            if latest is not None and latest.cancel_requested:
+                heartbeat_task.cancel()
+                await repo.update_run_owned(
+                    run_id,
+                    assembly_token=assembly_token,
+                    allowed_statuses=("assembling",),
+                    status="paused",
+                    stage="paused",
+                    percent=65,
+                    message="cancelled by user",
+                    clear_assembly_token=True,
+                    finished_at=_now(),
+                )
+                raise BidRunError(409, "assembly cancelled")
+            updated_ok = await repo.update_run_owned(
+                run_id,
+                assembly_token=assembly_token,
+                allowed_statuses=("assembling",),
+                status="assembled",
+                stage="assembled",
+                percent=100,
+                message="assembly complete",
+                gate_status=str(gate.get("status") or "warn"),
+                gate=gate,
+                content_sha256=content_sha256,
+                warnings=warnings,
+                error=None,
+                clear_assembly_token=True,
+                finished_at=_now(),
+            )
+        except BidRunError as exc:
+            heartbeat_task.cancel()
+            await self._release_assembly(
+                run_id,
+                assembly_token,
+                error=str(exc),
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 - post-assembly failures
+            logger.exception("could not finalize bid run %s", run_id)
+            heartbeat_task.cancel()
+            await self._release_assembly(
+                run_id,
+                assembly_token,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise BidRunError(500, "bid assembly failed") from exc
+        if not updated_ok:
+            heartbeat_task.cancel()
+            raise BidRunError(409, "assembly lease was lost")
+        heartbeat_task.cancel()
         updated = await repo.get_run(run_id)
         if updated is None:
             raise BidRunError(404, f"unknown bid run: {run_id}")
@@ -3531,7 +3660,26 @@ class BidRunService:
                     "export is blocked by the gate; use force=true to override",
                 )
         run_dir = self.bid_settings.bids_dir / run.doc_id / run.run_id
+        missing: set[str] = set()
+        if is_remote(self.storage):
+            assert self.storage is not None
+            try:
+                missing = await asyncio.to_thread(
+                    ensure_run_hash_inputs,
+                    self.storage,
+                    self._layout(),
+                    run.doc_id,
+                    run.run_id,
+                )
+            except StorageError as exc:
+                raise BidRunError(
+                    503, "object storage is unavailable"
+                ) from exc
         if run.content_sha256:
+            if "bid.md" in missing:
+                raise BidRunError(
+                    409, "bid.md is not available; assemble the run first"
+                )
             current_sha256 = compute_run_content_sha256(
                 run_dir=run_dir,
                 profile_sha256=run.profile_sha256,

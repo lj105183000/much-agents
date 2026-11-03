@@ -1120,7 +1120,9 @@ def build_router() -> APIRouter:
         context: ProjectContext = Depends(require_document_read),
         service: AttachmentService = Depends(get_attachment_service),
     ) -> AttachmentListResponse:
-        result = await service.list(doc_id)
+        result = await service.list(
+            doc_id, project_id=context.project_id
+        )
         return AttachmentListResponse(
             doc_id=doc_id,
             attachments=list(result.get("attachments") or []),
@@ -1137,7 +1139,9 @@ def build_router() -> APIRouter:
         context: ProjectContext = Depends(require_document_write),
         service: AttachmentService = Depends(get_attachment_service),
     ) -> AttachmentDeleteResponse:
-        result = await service.detach(doc_id, attachment_id)
+        result = await service.detach(
+            doc_id, attachment_id, project_id=context.project_id
+        )
         await _audit(
             request,
             "attachment.delete",
@@ -3125,6 +3129,7 @@ def build_router() -> APIRouter:
                 service.search,
                 payload,
                 allowed_doc_ids=allowed_docs,
+                project_id=context.project_id,
             )
         except SearchError as exc:
             raise HTTPException(

@@ -144,8 +144,11 @@ def test_assemble_from_storage_and_keep_private_profile(tmp_path: Path) -> None:
         assert detail.status_code == 200
         assert detail.json()["status"] == "assembled"
 
+        # Simulate a cold local cache after assembly; the hash inputs and DOCX
+        # must be hydrated from MinIO before export.
+        shutil.rmtree(tmp_path / "bids" / "doc-1" / run_id)
         exported = client.post(f"/api/bid-runs/{run_id}/export")
-        assert exported.status_code == 200
+        assert exported.status_code == 200, exported.text
         assert exported.content[:2] == b"PK"
 
 

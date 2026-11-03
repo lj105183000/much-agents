@@ -158,13 +158,19 @@ async def _merge_run_mcp_warnings(
     repo: BidRunRepository,
     run_id: str,
     manager: McpClientManager | None,
+    generation_token: str,
 ) -> BidRunRecord | None:
     latest = await repo.get_run(run_id)
     if latest is None or manager is None or not manager.warnings:
         return latest
     merged = list(dict.fromkeys([*latest.warnings, *manager.warnings]))
     if merged != list(latest.warnings):
-        await repo.update_run(run_id, warnings=merged)
+        await repo.update_run_owned(
+            run_id,
+            generation_token=generation_token,
+            allowed_statuses=("generating", "assembling", "assembled", "paused"),
+            warnings=merged,
+        )
         latest = await repo.get_run(run_id) or latest
     return latest
 
@@ -257,7 +263,9 @@ async def execute_staged_bid_job(
         profile_path = run_dir / "profile.json"
         if not profile_path.is_file():
             raise RuntimeError("bidder profile snapshot is missing")
-        context = TenderContext.load(run.doc_id, bid_settings)
+        context = TenderContext.load(
+            run.doc_id, bid_settings, project_id=run.project_id
+        )
         profile = BidderProfile.from_file(profile_path)
         records = await repo.get_outline(run_id)
         if not records:
@@ -379,8 +387,10 @@ async def execute_staged_bid_job(
                 )
 
         await check_budget()
-        await repo.update_run(
+        await repo.update_run_owned(
             run_id,
+            generation_token=generation_token,
+            allowed_statuses=("generating",),
             stage="planning",
             percent=5,
             message="planning sections",
@@ -520,8 +530,10 @@ async def execute_staged_bid_job(
         )
         if budget_stop_message is not None:
             status = "paused"
-            await repo.update_run(
+            await repo.update_run_owned(
                 run_id,
+                generation_token=generation_token,
+                allowed_statuses=("generating",),
                 status=status,
                 stage="paused",
                 percent=65,
@@ -532,8 +544,10 @@ async def execute_staged_bid_job(
             )
         elif cancelled:
             status = "paused"
-            await repo.update_run(
+            await repo.update_run_owned(
                 run_id,
+                generation_token=generation_token,
+                allowed_statuses=("generating",),
                 status=status,
                 stage="paused",
                 percent=65,
@@ -560,16 +574,19 @@ async def execute_staged_bid_job(
                 run_id,
                 allow_active=True,
                 external_renderer=external_renderer,
+                generation_token=generation_token,
             )
             latest_run = await _merge_run_mcp_warnings(
-                repo, run_id, mcp_manager
+                repo, run_id, mcp_manager, generation_token
             )
             status = latest_run.status if latest_run is not None else "assembled"
             warnings = list(latest_run.warnings) if latest_run is not None else warnings
         elif written_count == selected_count:
             status = "paused"
-            await repo.update_run(
+            await repo.update_run_owned(
                 run_id,
+                generation_token=generation_token,
+                allowed_statuses=("generating",),
                 status=status,
                 stage="generated",
                 percent=80,
@@ -580,8 +597,10 @@ async def execute_staged_bid_job(
             )
         else:
             status = "paused"
-            await repo.update_run(
+            await repo.update_run_owned(
                 run_id,
+                generation_token=generation_token,
+                allowed_statuses=("generating",),
                 status=status,
                 stage="paused",
                 percent=65,
@@ -621,8 +640,10 @@ async def execute_staged_bid_job(
         logger.exception("staged bid job %s failed", job.job_id)
         if run is not None:
             try:
-                await repo.update_run(
+                await repo.update_run_owned(
                     run_id,
+                    generation_token=generation_token,
+                    allowed_statuses=("generating", "assembling"),
                     status="failed",
                     stage="failed",
                     message="staged generation failed",

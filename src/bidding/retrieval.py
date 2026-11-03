@@ -79,6 +79,7 @@ class ChromaTenderRetriever:
     settings: BidSettings
     collection: object | None = None
     embedder: object | None = None
+    project_id: str | None = None
 
     def _ensure(self) -> None:
         if self.collection is None:
@@ -114,6 +115,13 @@ class ChromaTenderRetriever:
         seen: set[str] = set()
         for text, metadata, distance in zip(documents, metadatas, distances):
             metadata = metadata or {}
+            chunk_project = str(metadata.get("project_id") or "")
+            if (
+                self.project_id
+                and chunk_project
+                and chunk_project != self.project_id
+            ):
+                continue
             chunk_id = str(metadata.get("chunk_id") or "")
             if chunk_id and chunk_id in seen:
                 continue
@@ -147,6 +155,7 @@ class ChromaTenderRetriever:
 class KeywordTenderRetriever:
     chunks: list[ChunkRecord]
     max_evidence_chars: int = 6000
+    project_id: str | None = None
 
     def _score(self, query: str, chunk: ChunkRecord) -> float:
         tokens = {token.lower() for token in _TOKEN_RE.findall(query)}
@@ -181,6 +190,13 @@ class KeywordTenderRetriever:
                 if chunk.metadata.get("doc_id") in (None, doc_id)
             ]
         )
+        if self.project_id:
+            candidates = [
+                chunk
+                for chunk in candidates
+                if not chunk.metadata.get("project_id")
+                or chunk.metadata.get("project_id") == self.project_id
+            ]
         scored: list[tuple[float, ChunkRecord]] = []
         for chunk in candidates:
             score = self._score(query, chunk)
@@ -243,10 +259,17 @@ class FallbackTenderRetriever:
 
 
 def build_retriever(settings: BidSettings, context: TenderContext) -> FallbackTenderRetriever:
-    keyword = KeywordTenderRetriever(context.chunks, settings.max_evidence_chars)
+    keyword = KeywordTenderRetriever(
+        context.chunks,
+        settings.max_evidence_chars,
+        project_id=context.project_id,
+    )
     if not settings.use_chroma:
         return FallbackTenderRetriever(None, keyword, ["Chroma disabled; used keyword retrieval"])
     return FallbackTenderRetriever(
-        ChromaTenderRetriever(settings),
+        ChromaTenderRetriever(
+            settings,
+            project_id=context.project_id,
+        ),
         keyword,
     )

@@ -93,6 +93,7 @@ class ApiSettings:
     bid_section_max_attempts: int = 2
     bid_require_approval: bool = False
     bid_run_stale_seconds: int = 900
+    bid_queue_timeout_seconds: int = 1800
     readiness_strict: bool = False
     metrics_enabled: bool = True
     metrics_token: str = ""
@@ -263,6 +264,15 @@ class ApiSettings:
         )
         if budget_enforcement not in {"warn", "stop"}:
             budget_enforcement = "warn"
+        bid_run_stale_seconds = _int(
+            env, "BID_RUN_STALE_SECONDS", 900
+        )
+        bid_queue_timeout_seconds = _int(
+            env,
+            "BID_QUEUE_TIMEOUT_SECONDS",
+            max(600, bid_run_stale_seconds * 2),
+            minimum=1,
+        )
 
         return cls(
             project_root=root,
@@ -284,7 +294,8 @@ class ApiSettings:
             bid_run_max_attempts=_int(env, "BID_RUN_MAX_ATTEMPTS", 2),
             bid_section_max_attempts=_int(env, "BID_SECTION_MAX_ATTEMPTS", 2),
             bid_require_approval=_bool(env, "BID_REQUIRE_APPROVAL", False),
-            bid_run_stale_seconds=_int(env, "BID_RUN_STALE_SECONDS", 900),
+            bid_run_stale_seconds=bid_run_stale_seconds,
+            bid_queue_timeout_seconds=bid_queue_timeout_seconds,
             readiness_strict=_bool(
                 env,
                 "READINESS_STRICT",

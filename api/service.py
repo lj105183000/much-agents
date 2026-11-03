@@ -302,6 +302,7 @@ def execute_attach_job(
 
     payload = job.payload or {}
     allow_ocr = bool(payload.get("ocr", True))
+    project_id = str(payload.get("project_id") or "").strip()
     try:
         store.update_progress(job.job_id, "attach", 10, "parsing attachment")
     except JobStoreError:
@@ -313,6 +314,7 @@ def execute_attach_job(
             job.doc_id,
             source_path,
             parse_settings,
+            project_id=project_id,
             ingest=bool(job.ingest),
             sync_storage=is_remote(storage),
             allow_ocr=allow_ocr,
@@ -775,7 +777,9 @@ class AttachmentService:
                             exc_info=True,
                         )
 
-    async def list(self, doc_id: str) -> dict[str, Any]:
+    async def list(
+        self, doc_id: str, *, project_id: str = ""
+    ) -> dict[str, Any]:
         if is_remote(self.storage):
             assert self.storage is not None
             try:
@@ -785,18 +789,31 @@ class AttachmentService:
                     self.parse_settings.parsed_dir,
                     doc_id,
                 )
+                if project_id:
+                    await asyncio.to_thread(
+                        self.storage.ensure_files,
+                        f"parsed/{doc_id}",
+                        self.parse_settings.parsed_dir / doc_id,
+                        (f"attachments/{project_id}.json",),
+                        required=False,
+                    )
             except StorageError as exc:
                 raise UploadError(
                     503, "object storage is unavailable"
                 ) from exc
         return await asyncio.to_thread(
-            list_attachments, doc_id, self.parse_settings
+            list_attachments,
+            doc_id,
+            self.parse_settings,
+            project_id=project_id,
         )
 
     async def detach(
         self,
         doc_id: str,
         attachment_id: str,
+        *,
+        project_id: str = "",
     ) -> dict[str, Any]:
         if not re.fullmatch(r"att-[0-9a-f]{12}", attachment_id):
             raise UploadError(400, "invalid attachment id")
@@ -809,6 +826,14 @@ class AttachmentService:
                     self.parse_settings.parsed_dir,
                     doc_id,
                 )
+                if project_id:
+                    await asyncio.to_thread(
+                        self.storage.ensure_files,
+                        f"parsed/{doc_id}",
+                        self.parse_settings.parsed_dir / doc_id,
+                        (f"attachments/{project_id}.json",),
+                        required=False,
+                    )
             except StorageError as exc:
                 raise UploadError(
                     503, "object storage is unavailable"
@@ -819,7 +844,10 @@ class AttachmentService:
                 doc_id,
                 attachment_id,
                 self.parse_settings,
+                project_id=project_id,
                 sync_storage=is_remote(self.storage),
             )
         except AttachmentError as exc:
-            raise UploadError(404, str(exc)) from exc
+            raise UploadError(
+                409 if exc.status_code == 409 else 404, str(exc)
+            ) from exc

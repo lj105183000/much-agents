@@ -284,6 +284,7 @@ class BidRunRow(Base):
         Index("ix_bid_runs_doc_created", "doc_id", "created_at"),
         Index("ix_bid_runs_project_created", "project_id", "created_at"),
         Index("ix_bid_runs_status", "status"),
+        Index("ix_bid_runs_status_updated", "status", "updated_at"),
         Index("ix_bid_runs_company", "company_id"),
         Index(
             "uq_bid_runs_active_doc",
@@ -329,6 +330,7 @@ class BidRunRow(Base):
     )
     job_id: Mapped[str | None] = mapped_column(String(64))
     generation_token: Mapped[str | None] = mapped_column(String(64))
+    assembly_token: Mapped[str | None] = mapped_column(String(64))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

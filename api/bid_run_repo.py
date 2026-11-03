@@ -119,6 +119,7 @@ class BidRunRecord:
     started_at: datetime | None
     finished_at: datetime | None
     content_sha256: str | None = None
+    assembly_token: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +358,7 @@ def _run_record(row: BidRunRow) -> BidRunRecord:
         started_at=row.started_at,
         finished_at=row.finished_at,
         content_sha256=row.content_sha256,
+        assembly_token=row.assembly_token,
     )
 
 
@@ -1094,6 +1096,7 @@ class BidRunRepository:
             "message",
             "job_id",
             "generation_token",
+            "assembly_token",
             "heartbeat_at",
             "cancel_requested",
             "attempt",
@@ -1113,6 +1116,139 @@ class BidRunRepository:
             update(BidRunRow)
             .where(BidRunRow.id == run_id)
             .values(**values)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def claim_assembly(
+        self,
+        run_id: str,
+        *,
+        assembly_token: str,
+    ) -> bool:
+        """Atomically move a run into ``assembling`` for a manual assemble."""
+
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.status.in_(
+                    ("outline_ready", "paused", "failed", "assembled")
+                ),
+            )
+            .values(
+                status="assembling",
+                stage="assembling",
+                assembly_token=assembly_token,
+                heartbeat_at=now,
+                updated_at=now,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def claim_assembly_for_worker(
+        self,
+        run_id: str,
+        *,
+        generation_token: str,
+        assembly_token: str,
+    ) -> bool:
+        """Claim assembly only while the worker still owns generation."""
+
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.status == "generating",
+                BidRunRow.generation_token == generation_token,
+            )
+            .values(
+                status="assembling",
+                stage="assembling",
+                assembly_token=assembly_token,
+                heartbeat_at=now,
+                updated_at=now,
+            )
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def heartbeat_assembly(
+        self,
+        run_id: str,
+        *,
+        assembly_token: str,
+    ) -> bool:
+        now = _now()
+        statement = (
+            update(BidRunRow)
+            .where(
+                BidRunRow.id == run_id,
+                BidRunRow.status == "assembling",
+                BidRunRow.assembly_token == assembly_token,
+            )
+            .values(heartbeat_at=now, updated_at=now)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(statement)
+                return bool(result.rowcount)
+
+    async def update_run_owned(
+        self,
+        run_id: str,
+        *,
+        generation_token: str | None = None,
+        assembly_token: str | None = None,
+        allowed_statuses: tuple[str, ...] | None = None,
+        clear_assembly_token: bool = False,
+        **fields: Any,
+    ) -> bool:
+        """Update a run only while the caller still owns its lease."""
+
+        allowed = {
+            "status",
+            "stage",
+            "percent",
+            "message",
+            "job_id",
+            "generation_token",
+            "assembly_token",
+            "heartbeat_at",
+            "cancel_requested",
+            "attempt",
+            "gate_status",
+            "gate",
+            "content_sha256",
+            "warnings",
+            "error",
+            "started_at",
+            "finished_at",
+        }
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if clear_assembly_token:
+            values["assembly_token"] = None
+        if not values:
+            return False
+        values["updated_at"] = _now()
+        conditions = [BidRunRow.id == run_id]
+        if generation_token is not None:
+            conditions.append(BidRunRow.generation_token == generation_token)
+        if assembly_token is not None:
+            conditions.append(BidRunRow.assembly_token == assembly_token)
+        if allowed_statuses:
+            conditions.append(BidRunRow.status.in_(allowed_statuses))
+        statement = (
+            update(BidRunRow).where(*conditions).values(**values)
         )
         async with self._session_factory() as session:
             async with session.begin():
@@ -1520,6 +1656,7 @@ class BidRunRepository:
                 run.stage = "paused"
                 run.message = "ready to resume"
                 run.cancel_requested = False
+                run.assembly_token = None
                 run.updated_at = now
                 return _run_record(run)
 
@@ -1527,11 +1664,13 @@ class BidRunRepository:
         self,
         *,
         stale_seconds: int,
+        queue_timeout_seconds: int | None = None,
         limit: int = 100,
     ) -> list[str]:
-        """Pause runs whose heartbeat is older than ``stale_seconds``."""
+        """Pause stale generating/assembling runs and expired queued runs."""
 
-        cutoff = _now() - timedelta(seconds=max(1, int(stale_seconds)))
+        now = _now()
+        cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
         statement = (
             select(BidRunRow.id)
             .where(
@@ -1549,6 +1688,28 @@ class BidRunRepository:
                 run_id, stale_seconds=stale_seconds
             ) is not None:
                 reaped.append(run_id)
+        if queue_timeout_seconds is not None:
+            queue_cutoff = now - timedelta(
+                seconds=max(1, int(queue_timeout_seconds))
+            )
+            queued_statement = (
+                select(BidRunRow.id)
+                .where(
+                    BidRunRow.status == "queued",
+                    BidRunRow.updated_at < queue_cutoff,
+                )
+                .limit(max(1, int(limit)))
+            )
+            async with self._session_factory() as session:
+                queued_rows = (
+                    await session.execute(queued_statement)
+                ).scalars().all()
+            for run_id in queued_rows:
+                if await self.mark_queued_expired(
+                    run_id,
+                    queue_timeout_seconds=queue_timeout_seconds,
+                ) is not None:
+                    reaped.append(run_id)
         return reaped
 
     async def mark_stale_paused(
@@ -1588,6 +1749,39 @@ class BidRunRepository:
                 run.status = "paused"
                 run.stage = "paused"
                 run.message = "stale generation recovered; ready to resume"
+                run.generation_token = None
+                run.assembly_token = None
+                run.heartbeat_at = None
+                run.updated_at = now
+                return _run_record(run)
+
+    async def mark_queued_expired(
+        self,
+        run_id: str,
+        *,
+        queue_timeout_seconds: int,
+    ) -> BidRunRecord | None:
+        now = _now()
+        cutoff = now - timedelta(
+            seconds=max(1, int(queue_timeout_seconds))
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                run = await session.get(BidRunRow, run_id)
+                if (
+                    run is None
+                    or run.status != "queued"
+                    or run.updated_at is None
+                    or run.updated_at >= cutoff
+                ):
+                    return None
+                run.status = "paused"
+                run.stage = "paused"
+                run.message = "queued job expired; ready to resume"
+                run.error = "queued job was not picked up"
+                run.generation_token = None
+                run.assembly_token = None
+                run.heartbeat_at = None
                 run.updated_at = now
                 return _run_record(run)
 

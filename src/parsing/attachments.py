@@ -358,6 +358,7 @@ def build_attachment_chunks(
     doc_id: str,
     path: str | Path,
     *,
+    project_id: str = "",
     project_name: str = "",
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
     overlap: int = _DEFAULT_OVERLAP,
@@ -439,8 +440,13 @@ def build_attachment_chunks(
         )
 
     chunks: list[Chunk] = []
+    prefix = (
+        f"{doc_id}:{project_id}:{attachment_id}"
+        if project_id
+        else f"{doc_id}:{attachment_id}"
+    )
     for index, (text, page_start, page_end, kind) in enumerate(units):
-        chunk_id = f"{doc_id}:{attachment_id}:{index:04d}"
+        chunk_id = f"{prefix}:{index:04d}"
         metadata: dict[str, str | int | float | bool] = {
             "doc_id": doc_id,
             "chunk_id": chunk_id,
@@ -456,6 +462,8 @@ def build_attachment_chunks(
             "attachment": source.name,
             "attachment_sha256": sha256,
         }
+        if project_id:
+            metadata["project_id"] = project_id
         embed_text = (
             f"[项目名] {project_name}\n章节: {section_path}\n\n{text}"
             if project_name
@@ -472,6 +480,7 @@ def build_attachment_chunks(
 
     meta = {
         "attachment_id": attachment_id,
+        "project_id": project_id,
         "file_name": source.name,
         "sha256": sha256,
         "chunk_count": len(chunks),
@@ -498,6 +507,14 @@ def _read_project_name(parsed_dir: Path) -> str:
     return str(overview.get("project_name") or "").strip()
 
 
+def _manifest_path(parsed_dir: Path, project_id: str) -> Path:
+    if not project_id:
+        return parsed_dir / "attachments.json"
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", project_id):
+        raise AttachmentError("invalid project id for attachment storage")
+    return parsed_dir / "attachments" / f"{project_id}.json"
+
+
 def _load_attachments(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
@@ -516,6 +533,7 @@ def _load_attachments(path: Path) -> list[dict[str, Any]]:
 
 
 def _write_attachments(path: Path, items: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(
         json.dumps({"attachments": items}, ensure_ascii=False, indent=2),
@@ -541,8 +559,10 @@ def _sync_parsed_files(
             bids_dir=settings.upload_dir / "bids",
         )
         storage = build_storage(settings.storage, layout)
+        parsed_root = settings.parsed_dir / doc_id
         for path in paths:
-            storage.put_file(f"parsed/{doc_id}/{path.name}", path)
+            relative = path.relative_to(parsed_root).as_posix()
+            storage.put_file(f"parsed/{doc_id}/{relative}", path)
         return True, []
     except Exception as exc:  # noqa: BLE001 - remote sync is best-effort
         return False, [f"storage sync failed: {type(exc).__name__}: {exc}"]
@@ -555,12 +575,17 @@ def append_attachment_chunks(
     attachment_id: str,
     chunks: list[Chunk],
     meta: dict[str, Any],
+    project_id: str = "",
 ) -> dict[str, Any]:
-    """Append chunks idempotently and keep an attachments manifest."""
+    """Append chunks idempotently and keep a project-scoped manifest."""
 
     parsed_dir.mkdir(parents=True, exist_ok=True)
     chunks_path = parsed_dir / "chunks.jsonl"
-    prefix = f"{doc_id}:{attachment_id}:"
+    prefix = (
+        f"{doc_id}:{project_id}:{attachment_id}:"
+        if project_id
+        else f"{doc_id}:{attachment_id}:"
+    )
     kept: list[str] = []
     removed = 0
     if chunks_path.is_file():
@@ -581,7 +606,7 @@ def append_attachment_chunks(
     temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
     temporary.replace(chunks_path)
 
-    attachments_path = parsed_dir / "attachments.json"
+    attachments_path = _manifest_path(parsed_dir, project_id)
     existing = [
         item
         for item in _load_attachments(attachments_path)
@@ -648,6 +673,7 @@ def attach_evidence(
     path: str | Path,
     settings: Settings,
     *,
+    project_id: str = "",
     ingest: bool = True,
     collection: str | None = None,
     sync_storage: bool = True,
@@ -655,6 +681,7 @@ def attach_evidence(
 ) -> dict[str, Any]:
     """Parse an attachment, append its chunks and optionally upsert Chroma."""
 
+    source = Path(path)
     parsed_dir = settings.parsed_dir / doc_id
     chunks_path = parsed_dir / "chunks.jsonl"
     if not chunks_path.is_file():
@@ -676,6 +703,7 @@ def attach_evidence(
     chunks, meta = build_attachment_chunks(
         doc_id,
         path,
+        project_id=project_id,
         project_name=project_name,
         chunk_size=settings.chunk_size,
         overlap=settings.chunk_overlap,
@@ -688,7 +716,17 @@ def attach_evidence(
         attachment_id=str(meta["attachment_id"]),
         chunks=chunks,
         meta=meta,
+        project_id=project_id,
     )
+    stored_source: Path | None = None
+    if project_id:
+        source_dir = parsed_dir / "attachments" / project_id
+        source_dir.mkdir(parents=True, exist_ok=True)
+        stored_source = (
+            source_dir
+            / f"{meta['attachment_id']}{source.suffix.lower()}"
+        )
+        stored_source.write_bytes(source.read_bytes())
     warnings = [*setup_warnings, *list(meta.get("warnings") or [])]
     ingest_summary: dict[str, Any] | None = None
     if ingest:
@@ -726,18 +764,22 @@ def attach_evidence(
         external_usage.append(embedding)
     storage_synced = False
     if sync_storage:
+        sync_paths = [
+            Path(appended["chunks_path"]),
+            Path(appended["attachments_path"]),
+        ]
+        if stored_source is not None:
+            sync_paths.append(stored_source)
         storage_synced, sync_warnings = _sync_parsed_files(
             settings,
             doc_id,
-            [
-                Path(appended["chunks_path"]),
-                Path(appended["attachments_path"]),
-            ],
+            sync_paths,
         )
         warnings.extend(sync_warnings)
     return {
         "ok": True,
         "doc_id": doc_id,
+        "project_id": project_id,
         "file": str(path),
         "attachment_id": meta["attachment_id"],
         "sha256": meta["sha256"],
@@ -757,12 +799,36 @@ def attach_evidence(
     }
 
 
-def list_attachments(doc_id: str, settings: Settings) -> dict[str, Any]:
-    path = settings.parsed_dir / doc_id / "attachments.json"
+def list_attachments(
+    doc_id: str,
+    settings: Settings,
+    *,
+    project_id: str = "",
+) -> dict[str, Any]:
+    parsed_dir = settings.parsed_dir / doc_id
+    path = _manifest_path(parsed_dir, project_id)
+    attachments = _load_attachments(path)
+    if project_id:
+        legacy = [
+            {**item, "legacy_shared": True}
+            for item in _load_attachments(parsed_dir / "attachments.json")
+        ]
+        known = {
+            str(item.get("attachment_id") or "") for item in attachments
+        }
+        attachments = [
+            *attachments,
+            *[
+                item
+                for item in legacy
+                if str(item.get("attachment_id") or "") not in known
+            ],
+        ]
     return {
         "ok": True,
         "doc_id": doc_id,
-        "attachments": _load_attachments(path),
+        "project_id": project_id,
+        "attachments": attachments,
         "attachments_path": str(path),
     }
 
@@ -772,6 +838,7 @@ def detach_evidence(
     attachment_id: str,
     settings: Settings,
     *,
+    project_id: str = "",
     collection: str | None = None,
     sync_storage: bool = True,
     delete_chroma: bool = True,
@@ -785,7 +852,24 @@ def detach_evidence(
         raise AttachmentError(
             f"parsed document {doc_id} not found under {parsed_dir}; parse it first"
         )
-    prefix = f"{doc_id}:{attachment_id}:"
+    attachments_path = _manifest_path(parsed_dir, project_id)
+    project_items = _load_attachments(attachments_path)
+    if project_id and not any(
+        item.get("attachment_id") == attachment_id for item in project_items
+    ):
+        legacy = _load_attachments(parsed_dir / "attachments.json")
+        if any(
+            item.get("attachment_id") == attachment_id for item in legacy
+        ):
+            raise AttachmentError(
+                "legacy attachment is shared and read-only; migrate it first",
+                409,
+            )
+    prefix = (
+        f"{doc_id}:{project_id}:{attachment_id}:"
+        if project_id
+        else f"{doc_id}:{attachment_id}:"
+    )
     kept: list[str] = []
     removed_ids: list[str] = []
     for line in chunks_path.read_text(encoding="utf-8").splitlines():
@@ -797,7 +881,18 @@ def detach_evidence(
             kept.append(line)
             continue
         chunk_id = str(payload.get("id") or "")
-        if chunk_id.startswith(prefix):
+        metadata = (
+            payload.get("metadata")
+            if isinstance(payload.get("metadata"), dict)
+            else {}
+        )
+        matches = chunk_id.startswith(prefix)
+        if project_id and not matches:
+            matches = (
+                str(metadata.get("project_id") or "") == project_id
+                and str(metadata.get("section_id") or "") == attachment_id
+            )
+        if matches:
             removed_ids.append(chunk_id)
             continue
         kept.append(json.dumps(payload, ensure_ascii=False))
@@ -805,13 +900,17 @@ def detach_evidence(
     temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
     temporary.replace(chunks_path)
 
-    attachments_path = parsed_dir / "attachments.json"
     remaining = [
         item
-        for item in _load_attachments(attachments_path)
+        for item in project_items
         if item.get("attachment_id") != attachment_id
     ]
     _write_attachments(attachments_path, remaining)
+    if project_id:
+        source_dir = parsed_dir / "attachments" / project_id
+        if source_dir.is_dir():
+            for candidate in source_dir.glob(f"{attachment_id}.*"):
+                candidate.unlink(missing_ok=True)
 
     warnings: list[str] = []
     chroma_deleted = 0

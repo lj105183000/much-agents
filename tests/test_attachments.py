@@ -150,6 +150,72 @@ def test_detach_removes_attachment_and_keeps_main(
     assert list_attachments(DOC_ID, settings)["attachments"] == []
 
 
+def test_project_attachments_are_isolated(
+    tmp_path: Path, settings: Settings
+) -> None:
+    parsed = _parsed_doc(settings)
+    path = _csv(tmp_path / "boq.csv")
+    attach_evidence(
+        DOC_ID,
+        path,
+        settings,
+        project_id="proj-a",
+        ingest=False,
+        sync_storage=False,
+    )
+    attach_evidence(
+        DOC_ID,
+        path,
+        settings,
+        project_id="proj-b",
+        ingest=False,
+        sync_storage=False,
+    )
+
+    project_a = list_attachments(
+        DOC_ID, settings, project_id="proj-a"
+    )["attachments"]
+    project_b = list_attachments(
+        DOC_ID, settings, project_id="proj-b"
+    )["attachments"]
+    assert len(project_a) == 1
+    assert len(project_b) == 1
+    assert project_a[0]["project_id"] == "proj-a"
+    assert project_b[0]["project_id"] == "proj-b"
+    assert (parsed / "attachments" / "proj-a.json").is_file()
+    assert (parsed / "attachments" / "proj-b.json").is_file()
+
+    attachment_id = str(project_a[0]["attachment_id"])
+    detach_evidence(
+        DOC_ID,
+        attachment_id,
+        settings,
+        project_id="proj-a",
+        sync_storage=False,
+        delete_chroma=False,
+    )
+
+    assert list_attachments(
+        DOC_ID, settings, project_id="proj-a"
+    )["attachments"] == []
+    assert len(
+        list_attachments(DOC_ID, settings, project_id="proj-b")[
+            "attachments"
+        ]
+    ) == 1
+    payloads = [
+        json.loads(line)
+        for line in (parsed / "chunks.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    ids = {str(item["id"]) for item in payloads}
+    assert MAIN_CHUNK["id"] in ids
+    assert any(":proj-b:" in chunk_id for chunk_id in ids)
+    assert not any(":proj-a:" in chunk_id for chunk_id in ids)
+
+
 def test_detach_deletes_chroma_vectors(
     tmp_path: Path, settings: Settings
 ) -> None:

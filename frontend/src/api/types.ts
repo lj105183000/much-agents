@@ -150,6 +150,7 @@ export interface BidSummary {
 
 export interface AttachmentSummary {
   attachment_id: string
+  project_id?: string | null
   file_name: string
   sha256: string
   chunk_count: number
@@ -157,6 +158,7 @@ export interface AttachmentSummary {
   parser: string
   warnings: string[]
   attached_at: string | null
+  legacy_shared?: boolean
 }
 
 export interface AttachmentListResponse {

@@ -95,6 +95,7 @@ class TenderContext:
     full_markdown: str
     meta: dict[str, Any]
     facts: ProjectFacts
+    project_id: str | None = None
 
     @classmethod
     def validate(cls, doc_id: str, settings: BidSettings) -> Path:
@@ -118,7 +119,13 @@ class TenderContext:
         return doc_dir
 
     @classmethod
-    def load(cls, doc_id: str, settings: BidSettings) -> "TenderContext":
+    def load(
+        cls,
+        doc_id: str,
+        settings: BidSettings,
+        *,
+        project_id: str | None = None,
+    ) -> "TenderContext":
         doc_dir = cls.validate(doc_id, settings)
         try:
             extraction_payload = read_json(doc_dir / "extraction.json")
@@ -143,6 +150,13 @@ class TenderContext:
             if not isinstance(item, dict) or not item.get("text"):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            chunk_project = str(metadata.get("project_id") or "")
+            if (
+                project_id
+                and chunk_project
+                and chunk_project != project_id
+            ):
+                continue
             chunks.append(
                 ChunkRecord(
                     chunk_id=str(item.get("id") or metadata.get("chunk_id") or ""),
@@ -170,6 +184,7 @@ class TenderContext:
             full_markdown=full_markdown,
             meta=meta if isinstance(meta, dict) else {},
             facts=facts,
+            project_id=project_id,
         )
 
 
