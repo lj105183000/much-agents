@@ -147,6 +147,9 @@ services:
       STORAGE_BACKEND: minio
     volumes:
       - upload-data:/app/upload
+      # Admin-only evaluation console reads private labels from the host.
+      # Missing or unreadable eval-data degrades to an empty console state.
+      - ./eval-data:/app/eval-data:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

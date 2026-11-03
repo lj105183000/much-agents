@@ -114,6 +114,15 @@ uv run python -m scripts.eval_rule_baseline build \
 
 Do not add real tender text, real company/profile data, or L1 labels here.
 
+## Admin evaluation console
+
+See [`docs/eval-console.md`](../../docs/eval-console.md). The console is
+admin-only and reads `EVAL_DATA_DIR` / `EVAL_BIDS_DIR`; it never edits labels
+and never calls an LLM judge. Deterministic runs are stored as JSON reports in
+`EVAL_REPORTS_DIR` (default `upload/eval-runs`). Label text is private:
+responses are `no-store`, exclude tender text/profile/evidence, and CSV exports
+are formula-escaped.
+
 ## Nightly regression
 
 `.github/workflows/eval-nightly.yml` is disabled unless the repository variable

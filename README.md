@@ -328,6 +328,7 @@ uv run python -m scripts.reconcile_costs --since 2026-11-01 --llm-invoice-cny 12
 ### 测试与评测
 
 - [前端 E2E 与压测](docs/e2e-and-load-testing.md)
+- [轻量评测控制台](docs/eval-console.md)
 - [LLM 基准、价格生效日期与成本对账](docs/llm-benchmark-and-cost-reconciliation.md)
 - [L1 评测集标注流程](docs/eval-annotation.md)
 - [L2 judge 与人工标签校准](docs/l2-judge-calibration.md)

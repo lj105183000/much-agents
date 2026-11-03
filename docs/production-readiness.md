@@ -12,6 +12,7 @@
 - L0 指标模块与离线基线脚本：`src/bidding/metrics.py`、`scripts/baseline_metrics.py`；报告新增 `coverage.weighted`、`coverage.reviewer_gap`。
 - L0 合成 fixture 规则基线：`src/evaluation/rule_baseline.py`、`scripts/eval_rule_baseline.py`、`tests/eval/fixtures/l0/`；普通 CI 每次提交检查覆盖率、占位符/问题密度、事实一致率、合规/一致性/gate/引用计数，不调用 LLM，真实数据仍只留在私有目录。
 - 夜间 L1 回归基线自举/刷新：`eval_regression --check-baseline|--update-baseline`；workflow 支持 `EVAL_SECTIONS` 与 `refresh_baseline`，基线缺失或缺少 L1 字段时自动 bootstrap 并上传 artifact。
+- 管理员轻量评测控制台：`api/eval_console.py`、`frontend/src/views/EvaluationView.tsx`；只读 labels + CSV 导出、确定性 L1 运行/基线、JSON 运行历史、L2 只读；不触发 LLM judge、不在线编辑标注、不使用新数据库表。
 - 私有评测集构建/校验：`src/evaluation/dataset.py`、`scripts/eval_dataset.py`；真实标书写入 gitignored 的 `eval-data/`。
 - LLM 调用账本与成本计量：`src/bidding/llm_usage.py`、迁移 `0006`、`llm_call_log`/`run_usage`；记录实际模型、token、延迟、重试、fallback、finish_reason。
 - 单节重试上限与 regenerate 绕过修复：`BID_SECTION_MAX_ATTEMPTS`。
