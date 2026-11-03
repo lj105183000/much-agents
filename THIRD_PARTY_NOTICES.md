@@ -141,7 +141,7 @@ MPL-2.0 是文件级 copyleft：只要不修改 MPL 覆盖的文件，可与 AGP
 | Chroma | `chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6` | Apache-2.0 | 独立向量数据库服务；digest 固定。 |
 | Prometheus | `prom/prometheus@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3` | Apache-2.0 | 可选 monitoring profile；指标抓取与告警规则，digest 固定。 |
 | Grafana OSS | `grafana/grafana-oss@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3` | AGPL-3.0 | 可选 monitoring profile；仅绑定 127.0.0.1:3000，digest 固定。 |
-| Alertmanager | `prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5` | Apache-2.0 | 可选 monitoring profile；仅绑定 127.0.0.1:9093，digest 固定。 |
+| Alertmanager | `prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5` | Apache-2.0 | 可选 monitoring profile；同一镜像运行 Alertmanager 与一次性配置复制 init 容器；仅绑定 127.0.0.1:9093，digest 固定。 |
 | PostgreSQL | `postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36` | PostgreSQL License | 宽松许可证，类 BSD；digest 固定。 |
 | Redis | `redis:7-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541` | 取决于实际解析版本 | 7.2 及更早为 BSD-3-Clause；7.4 起改为 RSALv2/SSPLv1；digest 已固定。 |
 | Nginx | `nginx:1.27-alpine` | BSD-2-Clause | 前端静态托管与反向代理。 |

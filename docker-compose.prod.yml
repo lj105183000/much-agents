@@ -325,6 +325,26 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  alertmanager-config:
+    image: prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
+    profiles: ["monitoring"]
+    # The alertmanager image runs as an unprivileged user, which cannot read
+    # the host's 0600 generated config through a bind mount. Copy it into a
+    # named volume as 0444; alertmanager mounts that volume read-only.
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        cp /src/alertmanager.yml /config/alertmanager.yml
+        chmod 0444 /config/alertmanager.yml
+    volumes:
+      - ./deploy/alertmanager:/src:ro
+      - alertmanager-config:/config
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
   alertmanager:
     image: prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
     profiles: ["monitoring"]
@@ -332,14 +352,15 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
-      # Mount the directory: Docker would create a directory if the generated
-      # alertmanager.yml file were missing from a file bind mount.
-      - ./deploy/alertmanager:/etc/alertmanager:ro
+      - alertmanager-config:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
     ports:
       - "127.0.0.1:9093:9093"
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_started
+      alertmanager-config:
+        condition: service_completed_successfully
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -398,5 +419,6 @@ volumes:
   chroma-data:
   upload-data:
   prometheus-data:
+  alertmanager-config:
   alertmanager-data:
   grafana-data:

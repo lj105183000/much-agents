@@ -169,11 +169,13 @@ jobs:
           python3 scripts/render_alertmanager.py \
             --env-file "$RUNNER_TEMP/alertmanager.env" \
             --output deploy/alertmanager/alertmanager.yml
-          docker run --rm \
-            -v "$PWD/deploy/alertmanager:/cfg:ro" \
-            --entrypoint /bin/amtool \
-            prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
-            check-config /cfg/alertmanager.yml
+          # Exercise the same init-container copy used in production, then
+          # validate the config the alertmanager user actually reads.
+          docker compose -f docker-compose.prod.yml --profile monitoring \
+            run --rm --no-deps alertmanager-config
+          docker compose -f docker-compose.prod.yml --profile monitoring \
+            run --rm --no-deps --entrypoint /bin/amtool alertmanager \
+            check-config /etc/alertmanager/alertmanager.yml
       - name: Build API image
         run: docker build --target api -t much-agents-api:ci .
       - name: Build web image

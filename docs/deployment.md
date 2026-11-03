@@ -275,18 +275,27 @@ docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus 
   #   ALERTMANAGER_EMAIL_TO=ops@example.com（或 NOTIFY_EMAIL_TO）
   #   SMTP_HOST=... SMTP_PORT=587 SMTP_FROM=... SMTP_USERNAME=... SMTP_PASSWORD=...
   python3 scripts/render_alertmanager.py
-  docker-compose -f docker-compose.prod.yml --profile monitoring up -d alertmanager
+  docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus alertmanager grafana
   ```
 
-  渲染器会拒绝占位 webhook（`host.docker.internal:9099`）、无效收件人、`SMTP_USE_SSL=true`（Alertmanager 邮件只支持 STARTTLS）以及未配置任何渠道的配置。修改 `deploy/env.production` 后必须重新渲染并重启 `alertmanager`。
-
-  可用 `amtool` 校验渲染结果（与 CI 相同）：
+  渲染器会拒绝占位 webhook（`host.docker.internal:9099`）、无效收件人、`SMTP_USE_SSL=true`（Alertmanager 邮件只支持 STARTTLS）以及未配置任何渠道的配置。修改 `deploy/env.production` 后必须重新渲染，并强制重建复制配置的 init 容器：
 
   ```bash
-  docker run --rm -v "$PWD/deploy/alertmanager:/cfg:ro" \
-    --entrypoint /bin/amtool \
-    prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
-    check-config /cfg/alertmanager.yml
+  python3 scripts/render_alertmanager.py
+  docker-compose -f docker-compose.prod.yml --profile monitoring \
+    up -d --force-recreate alertmanager-config alertmanager
+  ```
+
+  Alertmanager 镜像以非特权用户运行，无法读取宿主机上 0600 的 bind mount；`alertmanager-config` init 容器会以 root 读取该文件并复制到命名卷，权限改为 0444，Alertmanager 再以只读方式挂载该卷。宿主机上的 `deploy/env.production` 与渲染文件仍保持 0600。
+
+  可用 `amtool` 校验渲染结果（与 CI 相同，走同一 init 容器与命名卷）：
+
+  ```bash
+  docker-compose -f docker-compose.prod.yml --profile monitoring \
+    run --rm --no-deps alertmanager-config
+  docker-compose -f docker-compose.prod.yml --profile monitoring \
+    run --rm --no-deps --entrypoint /bin/amtool alertmanager \
+    check-config /etc/alertmanager/alertmanager.yml
   ```
 
 - 模板见 `deploy/alertmanager/alertmanager.example.yml`；生成的 `alertmanager.yml` 不入库，备份脚本也不会复制它（与 `deploy/env.production` 一样单独保管）。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。

@@ -42,10 +42,11 @@ docker-compose -f docker-compose.prod.yml exec -T api \
 
 ```bash
 python3 scripts/render_alertmanager.py
-docker run --rm -v "$PWD/deploy/alertmanager:/cfg:ro" \
-  --entrypoint /bin/amtool \
-  prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
-  check-config /cfg/alertmanager.yml
+docker compose -f docker-compose.prod.yml --profile monitoring \
+  run --rm --no-deps alertmanager-config
+docker compose -f docker-compose.prod.yml --profile monitoring \
+  run --rm --no-deps --entrypoint /bin/amtool alertmanager \
+  check-config /etc/alertmanager/alertmanager.yml
 ```
 
 在目标主机（Python 3.10+，仅标准库）或可访问目标域名/证书的机器上：

@@ -62,6 +62,8 @@
 
 **发布签名验证（2026-11-03）**：`v0.1.0` 镜像已推送到 GHCR。首次 tag 触发的 run 在 `cosign verify-attestation` 阶段被 GitHub Actions 对超长 SBOM 输出的 secret scanning 卡住并取消（已知 cosign/GHA 交互问题），修复为丢弃 stdout 并加 `timeout 120` 后，手动触发的 `Release images`（run `41628354933`）4m17s 全绿，Cosign 签名与 SPDX attestation 校验通过。剩余：用修复后的工作流重跑一次 tag 触发 run。
 
+**Alertmanager 配置权限修复（2026-11-03）**：CI 发现 0600 的渲染文件无法被非特权 Alertmanager 容器读取。新增 monitoring profile 的一次性 `alertmanager-config` init 容器，以 root 读取宿主机文件并复制到命名卷（0444），Alertmanager 以只读方式挂载该卷；CI 改为通过同一 init 容器 + `amtool check-config` 校验。
+
 仍待实施（按优先级）：
 
 - force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
