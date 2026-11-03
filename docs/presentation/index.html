@@ -104,6 +104,74 @@
       a:hover {
         text-decoration: underline;
       }
+      .screenshots {
+        margin-top: 34px;
+        padding-top: 26px;
+        border-top: 1px solid var(--line);
+      }
+      .section-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .section-heading h2 {
+        margin: 0;
+        font-size: clamp(19px, 2.2vw, 24px);
+        letter-spacing: 0.02em;
+      }
+      .section-heading p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .gallery {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .shot {
+        margin: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: #fff;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      }
+      .shot img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        background: #f8fafc;
+      }
+      .shot figcaption {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 12px 14px 14px;
+      }
+      .shot figcaption strong {
+        font-size: 14px;
+      }
+      .shot figcaption span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      @media (max-width: 780px) {
+        .section-heading {
+          display: block;
+        }
+        .section-heading p {
+          margin-top: 6px;
+        }
+        .gallery {
+          grid-template-columns: 1fr;
+        }
+      }
       @media (max-width: 640px) {
         body {
           padding: 16px 10px;
@@ -144,6 +212,67 @@
         <span>登录 · 文档库 · 编写大纲 · 企业资质 · 检索 · 门禁合规 · 审计</span>
         <a href="biaoshu-shaobing-product-intro-1080p.mp4" download>下载 MP4</a>
       </div>
+
+      <section class="screenshots" aria-labelledby="screenshots-title">
+        <div class="section-heading">
+          <h2 id="screenshots-title">产品前端界面</h2>
+          <p>同一演示环境的实际界面，使用合成演示数据</p>
+        </div>
+        <div class="gallery">
+          <figure class="shot">
+            <img src="screenshots/login.jpg" alt="登录工作台" />
+            <figcaption>
+              <strong>登录工作台</strong>
+              <span>本地账号登录、可撤销会话与项目上下文</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img
+              src="screenshots/document-library.jpg"
+              alt="文档库" />
+            <figcaption>
+              <strong>文档库</strong>
+              <span>解析产物、页数/文本块/目录项与附件证据</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img
+              src="screenshots/bid-outline.jpg"
+              alt="编写标书与大纲编辑" />
+            <figcaption>
+              <strong>编写标书</strong>
+              <span>可编辑大纲、目标字数、编写要点与写作重点</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img
+              src="screenshots/company-qualifications.jpg"
+              alt="企业资质库" />
+            <figcaption>
+              <strong>企业资质</strong>
+              <span>资质证书、发证/到期日期与到期提醒</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img
+              src="screenshots/document-search.jpg"
+              alt="文档检索" />
+            <figcaption>
+              <strong>文档检索</strong>
+              <span>语义优先、关键词回退，展示章节/页码/相关度</span>
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <img
+              src="screenshots/audit-log.jpg"
+              alt="审计日志" />
+            <figcaption>
+              <strong>审计日志</strong>
+              <span>SHA-256 哈希链、筛选、校验与 CSV 导出</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
     </main>
   </body>
 </html>

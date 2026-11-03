@@ -296,6 +296,7 @@ uv run python -m scripts.reconcile_costs --since 2026-11-01 --llm-invoice-cny 12
 ### 产品与验收
 
 - [产品介绍视频（60 秒，GitHub Pages 播放）](https://lj105183000.github.io/much-agents/presentation/)
+- [产品前端界面截图](docs/presentation/README.md#前端界面截图)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
 - [贡献指南](CONTRIBUTING.md)
 
