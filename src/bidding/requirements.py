@@ -8,6 +8,7 @@ the bid as ``requirements.json`` and summarized into ``report.json``.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -33,36 +34,136 @@ def _section_map(outline: BidOutline) -> dict[str, OutlineSection]:
     return {section.id: section for section in outline.sections}
 
 
+_SPLIT_RE = re.compile(
+    r"[\s，,。；;、：:（）()【】\[\]/与及和]+"
+)
+_LEADING_RE = re.compile(
+    r"^(?:投标人|供应商|承包人|须|应|应当|必须|需|具有|具备|提供|建立|完善|"
+    r"确保|满足|符合|包括|包含|相关|有效|相应|的|等)+"
+)
+_TRAILING_RE = re.compile(r"(?:等|的|及|与|和)$")
+_CITATION_RE = re.compile(r"\[E\d+\]")
+_STOP_TERMS = {
+    "要求",
+    "规定",
+    "内容",
+    "情况",
+    "措施",
+    "方案",
+    "项目",
+    "工程",
+    "投标",
+    "招标",
+}
+
+
+def _requirement_terms(text: str) -> list[str]:
+    normalized = normalize_title(text)
+    terms: list[str] = []
+    for raw in _SPLIT_RE.split(normalized):
+        term = _LEADING_RE.sub("", raw)
+        term = _TRAILING_RE.sub("", term)
+        if len(term) >= 2 and term not in _STOP_TERMS:
+            terms.append(term)
+    return list(dict.fromkeys(terms))
+
+
+def _term_matches(term: str, normalized_body: str) -> bool:
+    if term in normalized_body:
+        return True
+    if len(term) >= 4:
+        for size in (4, 3):
+            for index in range(len(term) - size + 1):
+                if term[index : index + size] in normalized_body:
+                    return True
+    return False
+
+
+def _section_coverage(
+    section: OutlineSection,
+    body: str,
+    terms: list[str],
+) -> dict[str, Any]:
+    normalized = normalize_title(body)
+    matched = [
+        term for term in terms if _term_matches(term, normalized)
+    ]
+    citations = _CITATION_RE.findall(body)
+    return {
+        "section_id": section.id,
+        "title": section.title,
+        "matched_terms": matched[:8],
+        "citations": citations[:8],
+        "has_placeholder": "【待填写" in body,
+        "chars": len(body.strip()),
+    }
+
+
+def _coverage_from_sections(
+    sections: list[OutlineSection],
+    section_markdowns: Mapping[str, str],
+    terms: list[str],
+) -> tuple[str, str, list[dict[str, Any]]]:
+    evidence = [
+        _section_coverage(
+            section,
+            section_markdowns.get(section.id, ""),
+            terms,
+        )
+        for section in sections
+    ]
+    non_empty = [item for item in evidence if item["chars"] > 0]
+    if not non_empty:
+        return "missing", "对应章节尚未生成", evidence
+    if not terms:
+        return (
+            "partial",
+            "无法从需求文本提取关键词，请人工核对覆盖情况",
+            evidence,
+        )
+    matched = [item for item in evidence if item["matched_terms"]]
+    placeholders = [item for item in evidence if item["has_placeholder"]]
+    if len(matched) == len(sections):
+        return "covered", "", evidence
+    if matched:
+        return "partial", "部分章节未出现需求关键词", evidence
+    if placeholders:
+        return "partial", "对应章节仍有占位符", evidence
+    return "partial", "章节未出现需求关键词，请人工核对", evidence
+
+
 def _narrative_status(
     targets: list[OutlineSection],
     section_markdowns: Mapping[str, str],
-) -> tuple[str, str]:
+    requirement_text: str = "",
+    *,
+    generic_construction: bool = False,
+) -> tuple[str, str, list[dict[str, Any]]]:
     narrative = [
         section for section in targets if section.kind == "narrative"
     ]
     selected = [section for section in narrative if section.selected]
-    if selected:
-        written = [
-            section
-            for section in selected
-            if section_markdowns.get(section.id, "").strip()
+    sections = selected or [
+        section for section in targets if section.kind != "narrative"
+    ]
+    if not sections:
+        return "missing", "评分因素未映射到章节", []
+    if generic_construction:
+        evidence = [
+            _section_coverage(
+                section,
+                section_markdowns.get(section.id, ""),
+                [],
+            )
+            for section in sections
         ]
-        if len(written) == len(selected):
-            return "covered", ""
-        if written:
-            return "partial", "部分章节尚未生成"
-        return "missing", "对应章节尚未生成"
-    templates = [section for section in targets if section.kind != "narrative"]
-    if templates:
-        rendered = [
-            section
-            for section in templates
-            if section_markdowns.get(section.id, "").strip()
-        ]
-        if rendered:
-            return "covered", ""
-        return "missing", "对应模板章节为空"
-    return "missing", "评分因素未映射到章节"
+        if not any(item["chars"] > 0 for item in evidence):
+            return "missing", "对应章节尚未生成", evidence
+        if any(item["has_placeholder"] for item in evidence):
+            return "partial", "对应章节仍有占位符", evidence
+        return "covered", "", evidence
+    terms = _requirement_terms(requirement_text)
+    return _coverage_from_sections(sections, section_markdowns, terms)
 
 
 def _factor_targets(
@@ -107,15 +208,39 @@ def _qualification_target(requirement: Any) -> str:
 def _qualification_status(
     section_id: str,
     section_markdowns: Mapping[str, str],
-) -> tuple[str, str, list[str]]:
+    requirement_text: str = "",
+    section: OutlineSection | None = None,
+) -> tuple[str, str, list[str], list[dict[str, Any]]]:
     if not section_id:
-        return "not_applicable", "标注为无需提供", []
+        return "not_applicable", "标注为无需提供", [], []
     body = section_markdowns.get(section_id, "").strip()
     if not body:
-        return "missing", "对应资格审查表为空", [section_id]
+        return "missing", "对应资格审查表为空", [section_id], []
+    terms = _requirement_terms(requirement_text)
+    evidence = (
+        [
+            _section_coverage(
+                section,
+                body,
+                terms,
+            )
+        ]
+        if section is not None
+        else []
+    )
     if "【待填写" in body:
-        return "partial", "资格审查表仍有占位符", [section_id]
-    return "covered", "", [section_id]
+        return "partial", "资格审查表仍有占位符", [section_id], evidence
+    normalized_body = normalize_title(body)
+    if terms and not any(
+        _term_matches(term, normalized_body) for term in terms
+    ):
+        return (
+            "partial",
+            "资格审查表未出现资格要求关键词，请人工核对",
+            [section_id],
+            evidence,
+        )
+    return "covered", "", [section_id], evidence
 
 
 def _truncate(value: Any, limit: int = 1000) -> str:
@@ -141,7 +266,23 @@ def build_requirements(
         context.extraction.evaluation_factors, start=1
     ):
         targets = _factor_targets(factor, outline)
-        status, reason = _narrative_status(targets, section_markdowns)
+        factor_text = "：".join(
+            part
+            for part in (
+                (factor.factor or "").strip(),
+                (factor.scoring_criteria or "").strip(),
+            )
+            if part
+        )
+        status, reason, coverage_evidence = _narrative_status(
+            targets,
+            section_markdowns,
+            factor_text,
+            generic_construction=(
+                (factor.category or "").strip() == "施工组织设计"
+                and (factor.factor or "").strip() == "施工组织设计"
+            ),
+        )
         items.append(
             {
                 "id": f"REQ-EVAL-{index:03d}",
@@ -164,6 +305,7 @@ def build_requirements(
                 "mandatory": False,
                 "status": status,
                 "section_ids": [section.id for section in targets],
+                "coverage_evidence": coverage_evidence,
                 "reason": reason,
             }
         )
@@ -172,10 +314,16 @@ def build_requirements(
         context.extraction.qualification_requirements, start=1
     ):
         section_id = _qualification_target(requirement)
-        status, reason, section_ids = _qualification_status(
-            section_id, section_markdowns
-        )
         target = by_id.get(section_id)
+        status, reason, section_ids, coverage_evidence = (
+            _qualification_status(
+                section_id,
+                section_markdowns,
+                (requirement.requirement or "").strip()
+                or (requirement.evidence or "").strip(),
+                section=target,
+            )
+        )
         items.append(
             {
                 "id": f"REQ-QUAL-{index:03d}",
@@ -193,6 +341,7 @@ def build_requirements(
                 "status": status,
                 "section_ids": section_ids,
                 "section_titles": [target.title] if target else [],
+                "coverage_evidence": coverage_evidence,
                 "reason": reason,
             }
         )

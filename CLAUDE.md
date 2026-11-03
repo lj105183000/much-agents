@@ -311,7 +311,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 需求覆盖矩阵与引用契约（`src/bidding/requirements.py`、`citations.py`）
 
-- 组装时从 `extraction.json` 生成 `requirements.json`：评分因素 `REQ-EVAL-*`（权重/原文/来源页/映射章节/状态）与资格要求 `REQ-QUAL-*`（强制属性、对应资格审查表）；状态为 `covered|partial|missing|not_applicable`，资格表有 `【待填写】` 视为 partial。`report.json` 只写 summary（总数、加权覆盖率、强制缺失）。
+- 组装时从 `extraction.json` 生成 `requirements.json`：评分因素 `REQ-EVAL-*`（权重/原文/来源页/映射章节/状态）与资格要求 `REQ-QUAL-*`（强制属性、对应资格审查表）；状态为 `covered|partial|missing|not_applicable`。覆盖状态不再只看“章节非空”：从需求文本提取关键词（含 3/4 字中文片段兜底）并要求在章节正文命中，`coverage_evidence` 记录每个章节的命中词、`[E#]` 引用与占位符；非空但无证据为 partial，资格表有 `【待填写】` 视为 partial。`report.json` 只写 summary（总数、加权覆盖率、强制缺失）。
 - 引用契约：Writer 提示词要求金额/日期/证件号等关键事实句末标注 `[E编号]`；编号对应生成时实际提供给 Writer 的检索证据（`retrieval_snapshots.hits`）。组装时用 `citations.json` 校验编号存在、范围、页码/章节与引用证据，统计关键事实覆盖率、无效编号与未引用主张；导出前从 `bid.md`、`sections/*.md` 与 DOCX 中剥离 `[E…]` 标记，交付文件不含内部标记。
 - 门禁：`requirements` 默认 warn（`BID_REQUIREMENTS_BLOCK=true` 时强制需求缺失 block）；`citations` warn（无效编号或覆盖率低于 `BID_CITATION_MIN_COVERAGE`）。21 项合规中的 `scoring_coverage` 优先消费需求矩阵。
 - 接口：`GET /api/bid-runs/{id}/requirements`、`GET /api/bid-runs/{id}/citations`；前端「需求覆盖与引用契约」面板展示缺失需求、加权覆盖率、引用覆盖率与未引用关键事实。

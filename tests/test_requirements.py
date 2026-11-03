@@ -73,6 +73,47 @@ def test_requirements_register_maps_and_scores_coverage(tmp_path: Path) -> None:
     assert result["summary"]["weighted_coverage"] < 1.0
 
 
+def test_narrative_coverage_requires_requirement_evidence(
+    tmp_path: Path,
+) -> None:
+    outline = _outline(tmp_path)
+    targets = [section for section in outline.sections if section.kind == "narrative"]
+    section = targets[2]  # 6.3 质量管理体系与措施
+    factor = EvaluationFactor(
+        category="施工组织设计",
+        factor="质量管理体系与措施",
+        max_score=3,
+    )
+    section.selected = True
+    section.evaluation_factors = [
+        {"category": factor.category, "factor": factor.factor}
+    ]
+    extraction = StructuredExtraction(evaluation_factors=[factor])
+    context = SimpleNamespace(extraction=extraction)
+
+    unrelated = build_requirements(
+        run_id="run-1",
+        context=context,  # type: ignore[arg-type]
+        outline=outline,
+        section_markdowns={section.id: "本章介绍施工准备和现场布置。"},
+    )
+    assert unrelated["items"][0]["status"] != "covered"
+    assert unrelated["items"][0]["coverage_evidence"][0]["matched_terms"] == []
+
+    covered = build_requirements(
+        run_id="run-1",
+        context=context,  # type: ignore[arg-type]
+        outline=outline,
+        section_markdowns={
+            section.id: "本章建立质量管理体系，明确质量目标和检查措施。[E1]"
+        },
+    )
+    assert covered["items"][0]["status"] == "covered"
+    evidence = covered["items"][0]["coverage_evidence"][0]
+    assert evidence["matched_terms"]
+    assert evidence["citations"] == ["[E1]"]
+
+
 def test_mandatory_missing_is_counted(tmp_path: Path) -> None:
     outline = _outline(tmp_path)
     extraction = StructuredExtraction(
