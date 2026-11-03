@@ -114,7 +114,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Nginx with TLS termination and the built SPA
 # ---------------------------------------------------------------------------
-FROM nginx:1.27-alpine AS web
+FROM nginx:1.29-alpine AS web
 
 COPY deploy/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
