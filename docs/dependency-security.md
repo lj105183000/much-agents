@@ -50,6 +50,14 @@ uvx --from pip-audit pip-audit -r /tmp/requirements.txt \
 
 如输出中出现新的 ID，不要直接扩大忽略列表；先评估可达性并记录到本文，再修改 `.github/workflows/ci.yml`。
 
+### 2026-11-03 镜像扫描修复
+
+CI 首次完整跑通 Trivy 镜像扫描后，修复了三类阻断项，均未新增 `.trivyignore` 例外：
+
+- **API 镜像**：内置 `uv 0.12.12` 命中 `GHSA-hq85-5cpj-mr62`（CRITICAL，CA store 问题），升级到 `0.13.4`；锁文件无需变更。
+- **Web 镜像**：`nginx:1.27-alpine` 的 Alpine userland 过期（OpenSSL CRITICAL 等），升级到 `nginx:1.29-alpine` 并在构建时执行 `apk upgrade --no-cache`。
+- **仓库扫描**：CI 会先生成一次性自签名 TLS 证书，Trivy 将 `deploy/nginx/certs/privkey.pem` 识别为私钥；该目录已 gitignore，扫描步骤用 `skip-dirs: deploy/nginx/certs` 排除 CI 自身生成的测试材料。
+
 ## 移除例外
 
 上游修复后：
