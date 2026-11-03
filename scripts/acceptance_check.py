@@ -35,6 +35,12 @@ from pathlib import Path
 from typing import Any
 
 INTERNAL_PORTS = (5432, 6379, 9000, 9001, 8000, 8001, 8021)
+MONITORING_PLACEHOLDERS = (
+    "host.docker.internal:9099",
+    "CHANGE_ME",
+    "change_me",
+    "example.internal",
+)
 
 
 @dataclass
@@ -147,7 +153,30 @@ def _request(
         return exc.code, dict(exc.headers), exc.read()
 
 
-def check_config(report: Report, root: Path, require_backup: bool, max_age_hours: float) -> None:
+def monitoring_config_issues(path: Path) -> list[str]:
+    """Return problems with the rendered Alertmanager config (text-only)."""
+    if not path.is_file():
+        return [
+            f"{path.name} is missing; run scripts/render_alertmanager.py "
+            "before enabling the monitoring profile"
+        ]
+    text = path.read_text(encoding="utf-8", errors="replace")
+    issues: list[str] = []
+    for marker in MONITORING_PLACEHOLDERS:
+        if marker in text:
+            issues.append(f"{path.name} still contains placeholder {marker!r}")
+    if "webhook_configs:" not in text and "email_configs:" not in text:
+        issues.append(f"{path.name} has no webhook_configs or email_configs receiver")
+    return issues
+
+
+def check_config(
+    report: Report,
+    root: Path,
+    require_backup: bool,
+    max_age_hours: float,
+    require_monitoring: bool = False,
+) -> None:
     env_path = root / "deploy" / "env.production"
     if not env_path.is_file():
         report.add("config", "fail", f"{env_path} is missing")
@@ -171,6 +200,20 @@ def check_config(report: Report, root: Path, require_backup: bool, max_age_hours
             report.add(f"tls-file:{name}", "pass", str(cert_path))
         else:
             report.add(f"tls-file:{name}", "fail", f"{cert_path} is missing")
+    monitoring_path = root / "deploy" / "alertmanager" / "alertmanager.yml"
+    monitoring_issues = monitoring_config_issues(monitoring_path)
+    if monitoring_issues:
+        missing_only = (
+            len(monitoring_issues) == 1 and "is missing" in monitoring_issues[0]
+        )
+        status = "fail" if require_monitoring or not missing_only else "warn"
+        report.add("monitoring", status, "; ".join(monitoring_issues))
+    else:
+        report.add(
+            "monitoring",
+            "pass",
+            f"{monitoring_path.name} has a configured notification receiver",
+        )
     newest = 0.0
     backup_dir = root / "backups"
     if backup_dir.is_dir():
@@ -413,6 +456,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-backup", action="store_true")
     parser.add_argument("--max-backup-age-hours", type=float, default=48.0)
     parser.add_argument(
+        "--require-monitoring",
+        action="store_true",
+        help="fail when the rendered Alertmanager config is missing",
+    )
+    parser.add_argument(
         "--root",
         type=Path,
         default=Path(__file__).resolve().parents[1],
@@ -425,7 +473,13 @@ def main(argv: list[str] | None = None) -> int:
     http_url = args.http_url or f"http://{host}/"
 
     report = Report()
-    check_config(report, args.root, args.require_backup, args.max_backup_age_hours)
+    check_config(
+        report,
+        args.root,
+        args.require_backup,
+        args.max_backup_age_hours,
+        require_monitoring=args.require_monitoring,
+    )
     if args.config_only:
         report.print()
         return 1 if report.failed else 0

@@ -26,6 +26,8 @@ docs/
 .mcp.json
 mcp_servers.json
 deploy/env.production
+# Generated Alertmanager config may contain webhook/SMTP secrets.
+deploy/alertmanager/alertmanager.yml
 deploy/nginx/certs/*.pem
 deploy/nginx/certs/*.key
 deploy/nginx/certs/*.crt

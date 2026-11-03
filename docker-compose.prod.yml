@@ -332,7 +332,9 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
-      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Mount the directory: Docker would create a directory if the generated
+      # alertmanager.yml file were missing from a file bind mount.
+      - ./deploy/alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
     ports:
       - "127.0.0.1:9093:9093"

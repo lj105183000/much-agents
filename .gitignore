@@ -20,6 +20,8 @@ venv/
 .env.*
 !.env.example
 deploy/env.production
+# Generated from deploy/env.production; may contain webhook/SMTP secrets.
+deploy/alertmanager/alertmanager.yml
 
 # Backups and TLS material (never commit private keys)
 backups/

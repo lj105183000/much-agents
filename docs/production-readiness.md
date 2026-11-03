@@ -26,7 +26,7 @@
 - L2 评测：`scripts/eval_judge.py` 盲评五维评分；`scripts/eval_calibrate.py` 计算一致率与 Cohen's kappa；`.github/workflows/eval-nightly.yml` 在自托管 runner 上按开关运行生成 + 回归。
 - 人工复核入口：`scripts/eval_review.py` 导出 `eval-data/reviews/<case>.md` 清单；`scripts/eval_annotate.py` 提供 CSV 导出/导入/校验/完成度状态，`--mark-reviewed` 同步 manifest；`scripts/eval_regression.py` 消费 reviewed points/facts 计算词面点召回、加权召回、事实覆盖、需求/引用覆盖并与基线比较（`--max-l1-drop`），`baseline_metrics` 同步记录 L1。详见 `docs/eval-annotation.md`。
 - L2 校准入口：`scripts/eval_l2.py export|judge|import` 从 run 生成盲评样本与人工 CSV，运行 `judge-v1`，按 sample_id 对齐后输出一致率、Cohen's kappa、维度 MAE/±1 与 `ready` 门禁；`--require-ready` 未达阈值退出 1。详见 `docs/l2-judge-calibration.md`。
-- 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Alertmanager + Grafana、5 条告警规则、Grafana 数据源与 `Much Agents Overview` 看板；Grafana 仅绑定 `127.0.0.1:3000`，看板已实测加载（HTTP 200）。Prometheus 已识别 `alertmanager:9093`；Alertmanager 当前使用占位 webhook，需替换为实际通知渠道。
+- 监控：`monitoring` Compose profile 提供固定 digest 的 Prometheus + Alertmanager + Grafana、5 条告警规则、Grafana 数据源与 `Much Agents Overview` 看板；Grafana 仅绑定 `127.0.0.1:3000`，看板已实测加载（HTTP 200）。Prometheus 已识别 `alertmanager:9093`；Alertmanager 配置由 `scripts/render_alertmanager.py` 从生产 env 渲染（gitignored、0600），CI 用 `amtool check-config` 校验，验收脚本检查占位值与真实渠道是否存在。
 - 检索快照：每个章节的 query、mode、top_k、命中 chunk/score/页码/文本哈希写入 `retrieval_snapshots`（迁移 `0010`），不保存证据原文。
 - Prompt registry：`prompt_registry`（迁移 `0011`）记录 prompt 文件哈希、默认模型/温度与 git sha，`scripts/seed_prompts.py` 可重复 upsert。
 
@@ -58,11 +58,13 @@
 
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
 
+**生产验收资产补强（2026-11-03）**：新增 `scripts/render_alertmanager.py`，从 `deploy/env.production` 渲染 `deploy/alertmanager/alertmanager.yml`（gitignored、0600；拒绝占位 webhook、无效收件人、隐式 TLS 与空渠道），CI Docker job 用 `amtool check-config` 校验；`scripts/acceptance_check.py` 新增 `monitoring` 检查与 `--require-monitoring`。新增 `.github/workflows/release-images.yml`：`v*` tag 或手动触发时推送 GHCR，用 GitHub Actions OIDC 做 Cosign 无密钥签名、SPDX SBOM attestation 并校验；`ci.yml` 移除旧的静态密钥签名步骤。真实 webhook/SMTP 值与首次发布 tag 仍需部署方执行。
+
 仍待实施（按优先级）：
 
 - force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
-- 启用 Cosign 签名（CI 已提供可选步骤，需配置 `CI_SIGN_IMAGES`、`COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD`）。
-- 将 Alertmanager 的占位 webhook 替换为实际 webhook/SMTP 配置。
+- 发布镜像的 Cosign 无密钥签名已落地到 `.github/workflows/release-images.yml`（推送 `v*` tag 或手动触发；OIDC + GHCR + SBOM attestation，无长期私钥）；剩余动作是打发布 tag 并验证一次远端签名。
+- Alertmanager 配置渲染器、CI `amtool check-config` 与验收检查已落地；实际 webhook/SMTP 地址与凭据仍需部署方在 `deploy/env.production` 提供。
 - L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具、复核清单与夜间 workflow 骨架已落地）。
 - MinerU/Embedding 配额、PITR。
 
@@ -180,7 +182,7 @@
 | 版本/反馈 | 人工编辑覆盖 `final_markdown`；无 `bid_section_versions`；无反馈/采纳入口；编辑/重写会删除 gate/compliance/consistency/report | 无法构造“修改前→修改后”样本，无法衡量真实采纳 |
 | 模型调用 | 两个重复的 DeepSeek 客户端；`llm.py:127-129` 静默 fallback 到 `deepseek-chat`；不检查 `finish_reason` | 实际模型不可知；截断内容静默返回 |
 | 检索 | Chroma 单集合；embedding 模型/维度不入集合版本；reviewer 只看前 3 条证据（`src/bidding/prompts.py:153`） | 检索不可复现；审查与完整证据不一致 |
-| 供应链 | MinIO/Chroma/Postgres/Redis 已固定 digest；CI 有 Trivy/Syft，Cosign 签名待接入 | 供应链安全仍需发布流程签名 |
+| 供应链 | MinIO/Chroma/Postgres/Redis 已固定 digest；CI 有 Trivy/Syft，发布 tag 由 `release-images.yml` 推送 GHCR 并做 Cosign 无密钥签名 + SBOM attestation | 首次发布 tag 时验证远端签名与 attestation |
 
 ### 2.3 单机 Demo 可接受、生产不可接受的边界
 
@@ -485,9 +487,9 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 ### 6.6 镜像与供应链
 
 - `docker-compose.prod.yml` 中 MinIO/Chroma 已固定 digest（沿用 M1 验收报告记录）；Postgres/Redis 仍需固定 digest 或小版本 tag。
-- CI 增加 Trivy 镜像扫描、Syft SBOM；Cosign 签名在具备密钥/无钥匙 OIDC 的发布流水线中接入。HIGH/CRITICAL 漏洞阻断或有明确 allowlist。
+- CI 增加 Trivy 镜像扫描、Syft SBOM；`.github/workflows/release-images.yml` 在发布 tag 时推送 GHCR，并用 GitHub Actions OIDC 做 Cosign 无密钥签名与 SPDX SBOM attestation，随后按工作流身份校验。HIGH/CRITICAL 漏洞阻断或有明确 allowlist。
 - 保留 LICENSE/NOTICE 在镜像内；AGPL 源码入口不变。
-- 验收：`docker compose config` 不含 `:latest`；CI 生成 SBOM；扫描结果可查。
+- 验收：`docker compose config` 不含 `:latest`；CI 生成 SBOM；扫描结果可查；发布 tag 的镜像签名与 attestation 可验证。
 
 ## 7. 模型质量与交付质量
 

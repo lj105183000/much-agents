@@ -158,6 +158,22 @@ jobs:
         run: docker compose -f docker-compose.prod.yml config > /dev/null
       - name: Check production images are pinned
         run: python3 scripts/check_image_pins.py docker-compose.prod.yml
+      - name: Validate rendered Alertmanager config
+        run: |
+          cat > "$RUNNER_TEMP/alertmanager.env" <<'EOF'
+          ALERTMANAGER_WEBHOOK_URL=https://alerts.example.com/hook
+          NOTIFY_EMAIL_TO=ops@example.com
+          SMTP_HOST=smtp.example.com
+          SMTP_FROM=much-agents@example.com
+          EOF
+          python3 scripts/render_alertmanager.py \
+            --env-file "$RUNNER_TEMP/alertmanager.env" \
+            --output deploy/alertmanager/alertmanager.yml
+          docker run --rm \
+            -v "$PWD/deploy/alertmanager:/cfg:ro" \
+            --entrypoint /bin/amtool \
+            prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
+            check-config /cfg/alertmanager.yml
       - name: Build API image
         run: docker build --target api -t much-agents-api:ci .
       - name: Build web image
@@ -200,21 +216,6 @@ jobs:
           image: much-agents-web:ci
           format: spdx-json
           artifact-name: much-agents-web-sbom.spdx.json
-      - name: Install cosign (optional)
-        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
-        uses: sigstore/cosign-installer@v4.1.2
-      - name: Sign API image (optional)
-        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-api:ci
-      - name: Sign web image (optional)
-        if: ${{ vars.CI_SIGN_IMAGES == 'true' }}
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY much-agents-web:ci
       - name: Verify license files in images
         run: |
           docker run --rm --entrypoint sh much-agents-api:ci \

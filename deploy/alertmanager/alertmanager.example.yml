@@ -1,0 +1,36 @@
+# Example Alertmanager config for the optional monitoring profile.
+#
+# Do not edit/use this file directly. Configure the ALERTMANAGER_* / SMTP_*
+# values in deploy/env.production, then materialize the real config:
+#
+#   python3 scripts/render_alertmanager.py
+#   docker compose -f docker-compose.prod.yml --profile monitoring up -d alertmanager
+#
+# The generated deploy/alertmanager/alertmanager.yml is gitignored and contains
+# secrets (SMTP password / webhook bearer token); it is written with mode 0600.
+route:
+  receiver: much-agents
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: much-agents
+    # Configured when ALERTMANAGER_WEBHOOK_URL is set.
+    webhook_configs:
+      - url: https://alerts.example.internal/much-agents
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: CHANGE_ME_WEBHOOK_TOKEN
+    # Configured when ALERTMANAGER_EMAIL_TO or NOTIFY_EMAIL_TO is set.
+    email_configs:
+      - to: ops@example.internal
+        from: much-agents@example.internal
+        smarthost: smtp.example.internal:587
+        require_tls: true
+        send_resolved: true
+        auth_username: much-agents@example.internal
+        auth_password: CHANGE_ME_SMTP_PASSWORD

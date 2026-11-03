@@ -371,9 +371,9 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）
 - 模板变量/公司级模板
 - 评论附件在线预览/病毒扫描与看板任意日期范围
-- Alertmanager 真实通知渠道
+- Alertmanager 真实通知渠道（渲染器/校验已就绪，需部署方提供 webhook/SMTP）
 - MCP OAuth 与前端配置 UI
-- Cosign 签名
+- Cosign 发布镜像签名（工作流已就绪，需打 `v*` tag 验证一次）
 - L1 实际标注数据与 L2 评测校准
 
 ## License

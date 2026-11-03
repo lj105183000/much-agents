@@ -267,7 +267,29 @@ docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus 
 ```
 
 - Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
-- Alertmanager 绑定 `127.0.0.1:9093`；`deploy/alertmanager/alertmanager.yml` 默认是一个占位 webhook（`host.docker.internal:9099`），**需要替换为你的 webhook 或 email_configs 后才会真正投递**。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。
+- Alertmanager 绑定 `127.0.0.1:9093`。Alertmanager **不会展开环境变量**，所以先把 `deploy/env.production` 中的通知渠道渲染成 `deploy/alertmanager/alertmanager.yml`（已 gitignore、权限 0600，含 SMTP/webhook 密钥）：
+
+  ```bash
+  # 至少配置一个渠道：
+  #   ALERTMANAGER_WEBHOOK_URL=...（可选 ALERTMANAGER_WEBHOOK_BEARER_TOKEN）
+  #   ALERTMANAGER_EMAIL_TO=ops@example.com（或 NOTIFY_EMAIL_TO）
+  #   SMTP_HOST=... SMTP_PORT=587 SMTP_FROM=... SMTP_USERNAME=... SMTP_PASSWORD=...
+  python3 scripts/render_alertmanager.py
+  docker-compose -f docker-compose.prod.yml --profile monitoring up -d alertmanager
+  ```
+
+  渲染器会拒绝占位 webhook（`host.docker.internal:9099`）、无效收件人、`SMTP_USE_SSL=true`（Alertmanager 邮件只支持 STARTTLS）以及未配置任何渠道的配置。修改 `deploy/env.production` 后必须重新渲染并重启 `alertmanager`。
+
+  可用 `amtool` 校验渲染结果（与 CI 相同）：
+
+  ```bash
+  docker run --rm -v "$PWD/deploy/alertmanager:/cfg:ro" \
+    --entrypoint /bin/amtool \
+    prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
+    check-config /cfg/alertmanager.yml
+  ```
+
+- 模板见 `deploy/alertmanager/alertmanager.example.yml`；生成的 `alertmanager.yml` 不入库，备份脚本也不会复制它（与 `deploy/env.production` 一样单独保管）。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。
 - Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`，并预置 `Much Agents Overview` 看板（5xx、readiness、24h LLM 成本、队列深度、run 状态、LLM 调用状态）。
 - 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（默认 100 CNY warning / 500 CNY page，按部署预算修改 `deploy/prometheus/alerts.yml`）、备份超过 26 小时未成功或指标缺失。
 - Prometheus 启动时把 `METRICS_TOKEN` 写入 `/tmp/metrics_token` 并以 Bearer 抓取 `/api/metrics`；token 为空时仍可用。
@@ -315,8 +337,10 @@ docker compose -f docker-compose.prod.yml ps
 - **backend**：`uv sync --frozen`、Ruff、pytest。
 - **migrations**：PostgreSQL 16 service，`upgrade head → downgrade -1 → upgrade head`。
 - **frontend**：`npm ci`、lint、test、build、`npm audit --omit=dev --audit-level=high`。
-- **docker**：校验 Compose、构建 API/Web 镜像、`nginx -t`。
+- **docker**：校验 Compose、渲染并用 `amtool check-config` 校验 Alertmanager 配置、构建 API/Web 镜像、Trivy 扫描、Syft SBOM 与 `nginx -t`。
 - **security**：gitleaks、`pip-audit`。
+
+发布镜像由 `.github/workflows/release-images.yml` 处理：推送 `v*` tag（或手动触发）时把 API/Web 镜像推送到 GHCR，用 GitHub Actions OIDC 做 Cosign **无密钥签名**，生成并附加 SPDX SBOM attestation，最后用工作流身份校验签名与 attestation。无需在仓库保存长期签名私钥；需要仓库允许 Actions 写 packages（`GITHUB_TOKEN` 的 `packages: write`）。
 
 本地等价检查：
 

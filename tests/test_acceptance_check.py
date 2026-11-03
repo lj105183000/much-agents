@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.acceptance_check import (
     certificate_days_left,
     env_config_issues,
+    monitoring_config_issues,
     parse_env_file,
 )
 
@@ -72,3 +73,39 @@ def test_certificate_days_left() -> None:
     past = formatdate(time.time() - 86400 * 2, usegmt=True)
     assert certificate_days_left(future) >= 58
     assert certificate_days_left(past) < 0
+
+
+def test_monitoring_config_issues_reports_missing_file(tmp_path: Path) -> None:
+    issues = monitoring_config_issues(tmp_path / "alertmanager.yml")
+    assert len(issues) == 1
+    assert "is missing" in issues[0]
+    assert "render_alertmanager.py" in issues[0]
+
+
+def test_monitoring_config_issues_rejects_placeholders(tmp_path: Path) -> None:
+    path = tmp_path / "alertmanager.yml"
+    path.write_text(
+        "receivers:\n  - name: default\n    webhook_configs:\n"
+        "      - url: http://host.docker.internal:9099/alerts\n",
+        encoding="utf-8",
+    )
+    issues = monitoring_config_issues(path)
+    assert any("placeholder" in issue for issue in issues)
+
+
+def test_monitoring_config_issues_requires_a_receiver(tmp_path: Path) -> None:
+    path = tmp_path / "alertmanager.yml"
+    path.write_text("receivers:\n  - name: default\n", encoding="utf-8")
+    assert monitoring_config_issues(path) == [
+        "alertmanager.yml has no webhook_configs or email_configs receiver"
+    ]
+
+
+def test_monitoring_config_issues_accepts_rendered_config(tmp_path: Path) -> None:
+    path = tmp_path / "alertmanager.yml"
+    path.write_text(
+        "receivers:\n  - name: much-agents\n    webhook_configs:\n"
+        "      - url: https://alerts.internal/hook\n",
+        encoding="utf-8",
+    )
+    assert monitoring_config_issues(path) == []

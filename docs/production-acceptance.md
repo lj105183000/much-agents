@@ -38,6 +38,16 @@ docker-compose -f docker-compose.prod.yml exec -T api \
 
 ## 3. 自动验收
 
+若启用 monitoring profile，先在目标主机渲染并校验 Alertmanager 配置（见 `docs/deployment.md` 7.1）：
+
+```bash
+python3 scripts/render_alertmanager.py
+docker run --rm -v "$PWD/deploy/alertmanager:/cfg:ro" \
+  --entrypoint /bin/amtool \
+  prom/alertmanager@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5 \
+  check-config /cfg/alertmanager.yml
+```
+
 在目标主机（Python 3.10+，仅标准库）或可访问目标域名/证书的机器上：
 
 ```bash
@@ -46,7 +56,8 @@ python3 scripts/acceptance_check.py \
   --base-url https://much-agents.internal \
   --cafile /etc/ssl/certs/internal-ca.pem \
   --expect-ip 10.0.0.12 \
-  --require-backup
+  --require-backup \
+  --require-monitoring
 ```
 
 检查项：
@@ -55,6 +66,7 @@ python3 scripts/acceptance_check.py \
 |---|---|
 | `config` | 环境变量安全，无 `CHANGE_ME`；非 production 配置会失败 |
 | `tls-file:*` | 证书与私钥存在且非空 |
+| `monitoring` | 渲染后的 Alertmanager 配置存在、无占位值且至少有一个 webhook/email 渠道；缺失时默认 warn，`--require-monitoring` 时 fail |
 | `backup` | 最近备份在 `--max-backup-age-hours`（默认 48h）内；`--require-backup` 时缺失即失败 |
 | `dns` | 域名可解析；`--expect-ip` 时地址匹配 |
 | `ports` | 内部端口从外部不可达（loopback 主机会跳过） |

@@ -1,0 +1,155 @@
+name: Release images
+
+# Publish and sign release images in GHCR.
+#
+# Signing is keyless: the workflow uses the GitHub Actions OIDC identity
+# (id-token: write) with Sigstore Fulcio/Rekor, so no long-lived private key is
+# stored in repository secrets. Verification is pinned to this workflow file
+# and the token.actions.githubusercontent.com issuer.
+#
+# The `ci.yml` docker job still builds images for Trivy/SBOM checks on every
+# push; this workflow only runs for release tags or a manual dispatch.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (letters, digits, dot, dash, underscore)"
+        required: true
+        default: "manual"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate tag and compute image names
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [[ ! "$tag" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "invalid image tag: $tag" >&2
+            exit 1
+          fi
+          owner="${REPOSITORY_OWNER,,}"
+          repo="${REPOSITORY_NAME#*/}"
+          repo="${repo,,}"
+          {
+            echo "tag=$tag"
+            echo "api=ghcr.io/${owner}/${repo}-api"
+            echo "web=ghcr.io/${owner}/${repo}-web"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: api
+          push: true
+          tags: ${{ steps.meta.outputs.api }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push web image
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: web
+          push: true
+          tags: ${{ steps.meta.outputs.web }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign images (keyless)
+        env:
+          API_REF: ${{ steps.meta.outputs.api }}@${{ steps.api.outputs.digest }}
+          WEB_REF: ${{ steps.meta.outputs.web }}@${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$API_REF"
+          cosign sign --yes "$WEB_REF"
+
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ steps.meta.outputs.api }}@${{ steps.api.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: sbom-api.spdx.json
+          artifact-name: much-agents-api-sbom.spdx.json
+
+      - name: Generate web SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ steps.meta.outputs.web }}@${{ steps.web.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: sbom-web.spdx.json
+          artifact-name: much-agents-web-sbom.spdx.json
+
+      - name: Attest SBOMs
+        env:
+          API_REF: ${{ steps.meta.outputs.api }}@${{ steps.api.outputs.digest }}
+          WEB_REF: ${{ steps.meta.outputs.web }}@${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type spdxjson --predicate sbom-api.spdx.json "$API_REF"
+          cosign attest --yes --type spdxjson --predicate sbom-web.spdx.json "$WEB_REF"
+
+      - name: Verify signatures and SBOM attestations
+        env:
+          API_REF: ${{ steps.meta.outputs.api }}@${{ steps.api.outputs.digest }}
+          WEB_REF: ${{ steps.meta.outputs.web }}@${{ steps.web.outputs.digest }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${WORKFLOW_REPOSITORY}/.github/workflows/release-images.yml@refs/"
+          issuer="https://token.actions.githubusercontent.com"
+          for ref in "$API_REF" "$WEB_REF"; do
+            cosign verify "$ref" \
+              --certificate-oidc-issuer "$issuer" \
+              --certificate-identity-regexp "$identity"
+            cosign verify-attestation "$ref" \
+              --type spdxjson \
+              --certificate-oidc-issuer "$issuer" \
+              --certificate-identity-regexp "$identity"
+          done

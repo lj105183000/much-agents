@@ -54,3 +54,27 @@ def test_ci_trivy_scans_are_blocking() -> None:
     assert 'exit-code: "1"' in workflow
     assert 'exit-code: "0"' not in workflow
     assert (ROOT / ".trivyignore").is_file()
+
+
+def test_alertmanager_example_has_both_channels() -> None:
+    example = yaml.safe_load(
+        (ROOT / "deploy/alertmanager/alertmanager.example.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    receiver = example["receivers"][0]
+    assert receiver["name"] == example["route"]["receiver"]
+    assert receiver["webhook_configs"]
+    assert receiver["email_configs"]
+
+
+def test_alertmanager_generated_config_is_gitignored_and_mounted() -> None:
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "deploy/alertmanager/alertmanager.yml" in gitignore
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    assert "deploy/alertmanager/alertmanager.yml" in dockerignore
+    compose = yaml.safe_load(
+        (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    )
+    volumes = compose["services"]["alertmanager"]["volumes"]
+    assert "./deploy/alertmanager:/etc/alertmanager:ro" in volumes
