@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from docx import Document
 from docx.oxml.ns import qn
+
+from .pagination import analyze_pdf
 
 EMU_PER_INCH = 914400
 
@@ -27,10 +29,25 @@ def _check(
     }
 
 
-def check_docx(path: str | Path) -> dict[str, Any]:
+def check_docx(
+    path: str | Path,
+    *,
+    pdf_path: str | Path | None = None,
+    page_limit: int | None = None,
+    expected_titles: Sequence[str] = (),
+) -> dict[str, Any]:
     document = Document(str(path))
     body_xml = document.element.xml
-    toc_ok = "TOC" in body_xml and "instrText" in body_xml
+    heading_count = sum(
+        1
+        for paragraph in document.paragraphs
+        if (paragraph.style.name or "").startswith("Heading")
+    )
+    toc_ok = (
+        "TOC" in body_xml
+        and "instrText" in body_xml
+        and heading_count > 0
+    )
 
     page_ok = False
     for section in document.sections:
@@ -70,7 +87,13 @@ def check_docx(path: str | Path) -> dict[str, Any]:
             tables_without_header.append(index)
 
     checks = [
-        _check("docx_toc", "目录域", "block", toc_ok, "缺少 TOC 域，Word 无法更新目录"),
+        _check(
+            "docx_toc",
+            "目录域",
+            "block",
+            toc_ok,
+            "缺少 TOC 域或可生成目录的标题，Word 无法更新目录",
+        ),
         _check("docx_page_number", "页码域", "block", page_ok, "页脚缺少 PAGE 域"),
         _check("docx_fonts", "中文字体", "warn", fonts_ok, "样式未设置 eastAsia 字体"),
         _check(
@@ -88,6 +111,36 @@ def check_docx(path: str | Path) -> dict[str, Any]:
             "存在 DPI 低于 96 的图片",
         ),
     ]
+    analysis: dict[str, Any] | None = None
+    if pdf_path is not None and Path(pdf_path).is_file():
+        analysis = analyze_pdf(
+            pdf_path,
+            expected_titles=expected_titles,
+            page_limit=page_limit,
+        )
+        checks.append(
+            _check(
+                "docx_page_limit",
+                "实际页数",
+                "block",
+                not bool(analysis["over_limit"]),
+                (
+                    f"实际 {analysis['page_count']} 页，超过 "
+                    f"{analysis['page_limit']} 页上限"
+                ),
+            )
+        )
+        if expected_titles:
+            missing = list(analysis["toc_missing"] or [])
+            checks.append(
+                _check(
+                    "docx_toc_entries",
+                    "目录条目",
+                    "warn",
+                    not missing,
+                    f"导出 PDF 前几页未找到标题：{missing}",
+                )
+            )
     status = (
         "block"
         if any(item["level"] == "block" and item["status"] == "fail" for item in checks)
@@ -95,17 +148,30 @@ def check_docx(path: str | Path) -> dict[str, Any]:
         if any(item["status"] == "fail" for item in checks)
         else "pass"
     )
-    return {
+    result = {
         "schema_version": "1.0",
         "status": status,
         "checks": checks,
         "images": images,
-        "page_count": None,
-        "page_count_estimated": True,
+        "page_count": (
+            analysis["page_count"] if analysis is not None else None
+        ),
+        "page_count_estimated": analysis is None,
+        "toc_headings": heading_count,
         "warnings": [
             item["message"] for item in checks if item["status"] == "fail"
         ],
     }
+    if analysis is not None:
+        result.update(
+            {
+                "page_limit": analysis["page_limit"],
+                "toc_entries_expected": analysis["toc_entries_expected"],
+                "toc_entries_found": analysis["toc_entries_found"],
+                "toc_missing": analysis["toc_missing"],
+            }
+        )
+    return result
 
 
 __all__ = ["check_docx"]

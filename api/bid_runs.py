@@ -39,6 +39,7 @@ from src.bidding.content_hash import (
 )
 from src.bidding.context import TenderContext
 from src.bidding.cost_metrics import cost_per_1k_chars, cost_per_section
+from src.bidding.docx_quality import check_docx
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
     ExternalRenderer,
@@ -3637,6 +3638,77 @@ class BidRunService:
         )
         return self._approval_payload(record, run_id=run_id)
 
+    async def _record_pdf_pagination(
+        self,
+        *,
+        run: BidRunRecord,
+        run_dir: Path,
+        pdf_path: Path,
+        force: bool,
+    ) -> dict[str, Any]:
+        records = await self._repo().get_outline(run.run_id)
+        titles = [
+            record.title
+            for record in records
+            if int(record.level or 0) <= 2
+        ]
+        page_limit = int((run.gate or {}).get("page_limit") or 150)
+        try:
+            quality = await asyncio.to_thread(
+                check_docx,
+                run_dir / "bid.docx",
+                pdf_path=pdf_path,
+                page_limit=page_limit,
+                expected_titles=titles,
+            )
+        except Exception as exc:  # noqa: BLE001 - pagination must not crash export
+            logger.warning(
+                "could not inspect exported PDF for run %s: %s",
+                run.run_id,
+                exc,
+            )
+            return {}
+        try:
+            atomic_write_json(run_dir / "docx_quality.json", quality)
+            report_path = run_dir / "report.json"
+            if report_path.is_file():
+                report = read_json(report_path)
+                if isinstance(report, dict):
+                    report["docx_quality"] = quality
+                    atomic_write_json(report_path, report)
+        except OSError:
+            logger.warning(
+                "could not persist pagination report for run %s",
+                run.run_id,
+                exc_info=True,
+            )
+        if is_remote(self.storage):
+            assert self.storage is not None
+            prefix = run_prefix(run.doc_id, run.run_id)
+            for name in ("docx_quality.json", "report.json"):
+                path = run_dir / name
+                if not path.is_file():
+                    continue
+                try:
+                    await asyncio.to_thread(
+                        self.storage.put_file,
+                        f"{prefix}/{name}",
+                        path,
+                    )
+                except StorageError:
+                    logger.warning(
+                        "could not sync %s for run %s",
+                        name,
+                        run.run_id,
+                        exc_info=True,
+                    )
+        if quality.get("status") == "block" and not force:
+            detail = "；".join(quality.get("warnings") or []) or "分页检查未通过"
+            raise BidRunError(
+                409, f"export is blocked by pagination checks: {detail}"
+            )
+        return quality
+
     async def export(self, run_id: str, *, force: bool = False) -> ExportTarget:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -3823,6 +3895,15 @@ class BidRunService:
             PDF_EXPORTS.inc(result="cache")
         if not pdf_path.is_file():
             raise BidRunError(409, "bid.pdf is not available")
+        run = await self._repo().get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        await self._record_pdf_pagination(
+            run=run,
+            run_dir=run_dir,
+            pdf_path=pdf_path,
+            force=force,
+        )
         return ExportTarget(path=pdf_path, key=f"{prefix}/bid.pdf")
 
     async def export_doc(
