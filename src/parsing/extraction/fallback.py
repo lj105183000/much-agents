@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from ..models import ParsedDocument
+from .dates import normalize_event
 from .pruning import Payload
 from .schemas import (
     EvaluationFactor,
@@ -113,31 +114,48 @@ def extract_overview_regex(payloads: list[Payload]) -> ProjectOverview:
     return ProjectOverview(**{key: value for key, value in values.items() if value})
 
 
+def _event_before(text: str) -> str:
+    """Return the label closest to (but before) a date on the same line."""
+
+    best_label = ""
+    best_position = -1
+    for token, label in _DATE_EVENTS.items():
+        position = text.rfind(token)
+        if position > best_position:
+            best_position = position
+            best_label = label
+    return normalize_event(best_label) or "关键日期"
+
+
 def extract_key_dates_regex(payloads: list[Payload]) -> list[KeyDateItem]:
     text = _joined_text(payloads)
-    items: dict[str, KeyDateItem] = {}
+    items: dict[tuple[str, str], KeyDateItem] = {}
     for match in _DATE_RE.finditer(text):
         line_start = text.rfind("\n", 0, match.start()) + 1
         line_end = text.find("\n", match.end())
         line = text[line_start : line_end if line_end >= 0 else len(text)]
         context = line.strip()
-        event = next(
-            (label for token, label in _DATE_EVENTS.items() if token in context),
-            "关键日期",
-        )
-        if event == "关键日期" and not re.search(r"\d{1,2}\s*[时:]\s*\d{1,2}", match.group(0)):
+        prefix = line[: match.start() - line_start]
+        event = _event_before(prefix)
+        if event == "关键日期":
+            event = next(
+                (
+                    normalize_event(label)
+                    for token, label in _DATE_EVENTS.items()
+                    if token in context
+                ),
+                "关键日期",
+            )
+        if event == "关键日期" and not re.search(
+            r"\d{1,2}\s*[时:]\s*\d{1,2}", match.group(0)
+        ):
             continue
         datetime_text = re.sub(r"\s+", "", match.group(0))
-        existing = items.get(datetime_text)
+        key = (event, datetime_text)
+        existing = items.get(key)
         if existing is not None:
-            if existing.event == "关键日期" and event != "关键日期":
-                items[datetime_text] = KeyDateItem(
-                    event=event,
-                    datetime_text=datetime_text,
-                    evidence=context[:200],
-                )
             continue
-        items[datetime_text] = KeyDateItem(
+        items[key] = KeyDateItem(
             event=event,
             datetime_text=datetime_text,
             evidence=context[:200],

@@ -322,7 +322,9 @@ def test_planner_only_uses_available_facts(tmp_path: Path) -> None:
         profile=profile,
     )
     assert gantt is not None
-    assert gantt.data["total_days"] == 218
+    # The fixture's plan dates are inclusive (2023-11-25 .. 2024-06-30).
+    assert gantt.data["mode"] == "dates"
+    assert gantt.data["total_days"] == 219
     assert any("示意" in warning for warning in gantt.warnings)
 
 

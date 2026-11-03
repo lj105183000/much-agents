@@ -145,7 +145,7 @@ def run_bid_writing(
 
     started = time.perf_counter()
     atomic_write_json(output_dir / "outline.json", outline.to_dict())
-    for section in outline.narratives:
+    for section in outline.selected_narratives:
         body = assembly.section_markdowns.get(section.id, "")
         atomic_write_text(output_dir / "sections" / f"{section.id}.md", body)
     atomic_write_text(output_dir / "bid.md", assembly.markdown)

@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from src.parsing.artifacts import read_json, read_jsonl
+from src.parsing.extraction.dates import normalize_event
+from src.parsing.extraction.fallback import extract_key_dates_regex
+from src.parsing.extraction.pruning import Payload
 from src.parsing.extraction.schemas import StructuredExtraction
 from src.parsing.models import TocEntry
 
@@ -181,9 +184,31 @@ def _project_facts(extraction: StructuredExtraction, full_markdown: str) -> Proj
     if not max_price:
         max_price = placeholder("最高投标限价")
 
-    dates = {item.event: item.datetime_text for item in extraction.key_dates}
+    dates: dict[str, str] = {}
+    for item in extraction.key_dates:
+        event = normalize_event(item.event)
+        if event and item.datetime_text:
+            dates.setdefault(event, item.datetime_text)
+    if not all(
+        key in dates
+        for key in ("投标截止时间", "计划开工日期", "计划竣工日期")
+    ):
+        try:
+            regex_dates = extract_key_dates_regex(
+                [Payload(name="full", text=full_markdown)]
+            )
+        except Exception:  # noqa: BLE001 - old caches must still load
+            regex_dates = []
+        for item in regex_dates:
+            event = normalize_event(item.event)
+            if event and item.datetime_text:
+                dates.setdefault(event, item.datetime_text)
+
     validity_match = _VALIDITY_RE.search(full_markdown)
     validity = validity_match.group(1) + "天" if validity_match else ""
+    planned_end = dates.get("计划竣工日期", "") or dates.get(
+        "计划完工日期", ""
+    )
 
     return ProjectFacts(
         project_name=overview.project_name or placeholder("项目名称"),
@@ -199,6 +224,6 @@ def _project_facts(extraction: StructuredExtraction, full_markdown: str) -> Proj
         bid_deadline=overview.bid_deadline or dates.get("投标截止时间", "") or placeholder("投标截止时间"),
         bid_open_time=overview.bid_open_time or dates.get("开标时间", "") or placeholder("开标时间"),
         planned_start=dates.get("计划开工日期", "") or placeholder("计划开工日期"),
-        planned_end=dates.get("计划完工日期", "") or placeholder("计划完工日期"),
+        planned_end=planned_end or placeholder("计划竣工日期"),
         bid_validity_days=validity or placeholder("投标有效期"),
     )

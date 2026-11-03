@@ -38,11 +38,7 @@ def _final_narrative(
     revision: SectionRevision | None,
 ) -> tuple[str, bool, list[str]]:
     if not section.selected:
-        return (
-            placeholder(f"{section.title}内容（本次未生成）"),
-            False,
-            [f"narrative skipped: {section.title}"],
-        )
+        return "", False, []
     if revision is not None and revision.accepted and revision.markdown.strip():
         return revision.markdown, True, list(revision.warnings)
     if draft is not None and draft.written and draft.markdown.strip():
@@ -103,6 +99,8 @@ def assemble_bid(
         figures_by_section[figure_block.section_id].append(figure_block)
 
     for section in outline.sections:
+        if section.kind == "narrative" and not section.selected:
+            continue
         if section.kind == "narrative":
             body, written, section_warnings = _final_narrative(
                 section,
@@ -137,6 +135,8 @@ def assemble_bid(
     )
     toc_lines = ["## 目录"]
     for section in outline.sections:
+        if section.kind == "narrative" and not section.selected:
+            continue
         if section.level <= 1:
             toc_lines.append(f"- {section.title}")
         elif section.parent_id is not None and section.kind in ("narrative", "attachment", "form"):
@@ -200,6 +200,7 @@ def assemble_bid(
         "warnings": list(dict.fromkeys(all_warnings + redactions)),
         "stats": {
             "narrative_sections": len(outline.narratives),
+            "narrative_selected": len(outline.selected_narratives),
             "narrative_written": written_narratives,
             "estimated_pages": estimated_pages,
             "characters": len(markdown),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -17,7 +18,14 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.bid_run_repo import BidRunRepository
-from api.database import BidRunRow, BidSectionStateRow, DocumentRow
+from api.database import (
+    BidRunRow,
+    BidSectionStateRow,
+    DocumentRow,
+    ExternalUsageRow,
+    LlmCallLogRow,
+    RunUsageRow,
+)
 from src.bidding.content_hash import compute_section_content_sha256
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
@@ -127,6 +135,122 @@ async def _exercise_repository() -> None:
         assert latest[0].review_summary == "verdict=pass; issues=0"
     finally:
         async with factory() as session:
+            await session.execute(
+                delete(BidRunRow).where(BidRunRow.id == run_id)
+            )
+            await session.execute(
+                delete(DocumentRow).where(
+                    DocumentRow.project_id == DEFAULT_PROJECT_ID,
+                    DocumentRow.doc_id == doc_id,
+                )
+            )
+            await session.commit()
+        await engine.dispose()
+
+
+def test_month_cost_uses_llm_call_log_timestamps() -> None:
+    asyncio.run(_exercise_month_cost())
+
+
+async def _exercise_month_cost() -> None:
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    run_id = f"it-cost-{uuid4().hex}"
+    doc_id = f"it-cost-doc-{uuid4().hex}"
+    repository = BidRunRepository(factory)
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous = month_start - timedelta(hours=1)
+    try:
+        async with factory() as session:
+            session.add(
+                DocumentRow(
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    filename="cost.pdf",
+                )
+            )
+            session.add(
+                BidRunRow(
+                    id=run_id,
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    revision=1,
+                )
+            )
+            session.add_all(
+                [
+                    LlmCallLogRow(
+                        ts=previous,
+                        project_id=DEFAULT_PROJECT_ID,
+                        run_id=run_id,
+                        provider="deepseek",
+                        operation="writer",
+                        cost_cny=1.0,
+                    ),
+                    LlmCallLogRow(
+                        ts=now,
+                        project_id=DEFAULT_PROJECT_ID,
+                        run_id=run_id,
+                        provider="deepseek",
+                        operation="writer",
+                        cost_cny=2.0,
+                    ),
+                    ExternalUsageRow(
+                        project_id=DEFAULT_PROJECT_ID,
+                        doc_id=doc_id,
+                        provider="mineru",
+                        operation="parse",
+                        units=1,
+                        unit_type="page",
+                        cost_cny=10.0,
+                        created_at=previous,
+                    ),
+                    ExternalUsageRow(
+                        project_id=DEFAULT_PROJECT_ID,
+                        doc_id=doc_id,
+                        provider="mineru",
+                        operation="parse",
+                        units=1,
+                        unit_type="page",
+                        cost_cny=0.5,
+                        created_at=now,
+                    ),
+                    RunUsageRow(
+                        run_id=run_id,
+                        project_id=DEFAULT_PROJECT_ID,
+                        cost_cny=999.0,
+                        updated_at=now,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        month_cost = await repository.project_month_cost(DEFAULT_PROJECT_ID)
+        assert round(month_cost, 4) == 2.5
+
+        trend = await repository.budget_trend(
+            days=7, project_id=DEFAULT_PROJECT_ID
+        )
+        assert trend is not None
+        assert trend["month_cost_cny"] == 2.5
+        today = now.date().isoformat()
+        today_row = next(
+            row for row in trend["daily"] if row["date"] == today
+        )
+        assert today_row["llm_cost_cny"] == 2.0
+        assert today_row["external_cost_cny"] == 0.5
+    finally:
+        async with factory() as session:
+            await session.execute(
+                delete(ExternalUsageRow).where(ExternalUsageRow.doc_id == doc_id)
+            )
+            await session.execute(
+                delete(LlmCallLogRow).where(LlmCallLogRow.run_id == run_id)
+            )
+            await session.execute(
+                delete(RunUsageRow).where(RunUsageRow.run_id == run_id)
+            )
             await session.execute(
                 delete(BidRunRow).where(BidRunRow.id == run_id)
             )

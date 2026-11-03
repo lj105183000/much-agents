@@ -42,14 +42,15 @@ def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:
         result.output_dir / "profile.json",
     ):
         assert Path(path).is_file()
-    assert len(list(result.sections_dir.glob("*.md"))) == 11
+    assert len(list(result.sections_dir.glob("*.md"))) == 2
 
     markdown = result.bid_markdown.read_text(encoding="utf-8")
     assert "# 测试供水工程" in markdown
     assert "## 一、投标函及投标函附录" in markdown
     assert "### 6.1 编制说明与工程概况" in markdown
     assert "### 6.2 施工方案与技术措施" in markdown
-    assert "### 6.3 质量管理体系与措施" in markdown
+    assert "### 6.3 质量管理体系与措施" not in markdown
+    assert "本次未生成" not in markdown
     assert "【待填写：公司名称】" in markdown
     assert "【待填写：投标总价" in markdown
     assert "999万元" not in markdown

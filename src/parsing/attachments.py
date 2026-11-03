@@ -598,6 +598,51 @@ def append_attachment_chunks(
     }
 
 
+def load_preserved_attachment_chunks(
+    parsed_dir: Path,
+    doc_id: str,
+) -> tuple[list[Chunk], set[str]]:
+    """Load attachment chunks from an existing document before re-parsing.
+
+    Re-parsing only rebuilds main-document chunks.  Keeping attachment rows
+    here lets the pipeline rewrite ``chunks.jsonl`` without losing evidence.
+    """
+
+    chunks_path = parsed_dir / "chunks.jsonl"
+    if not chunks_path.is_file():
+        return [], set()
+    preserved: list[Chunk] = []
+    for line in chunks_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        metadata = (
+            payload.get("metadata")
+            if isinstance(payload.get("metadata"), dict)
+            else {}
+        )
+        chunk_id = str(payload.get("id") or metadata.get("chunk_id") or "")
+        is_attachment = bool(metadata.get("attachment")) or ":att-" in chunk_id
+        if not is_attachment:
+            continue
+        preserved.append(
+            Chunk(
+                id=chunk_id,
+                text=str(payload.get("text") or ""),
+                embed_text=str(
+                    payload.get("embed_text") or payload.get("text") or ""
+                ),
+                metadata=dict(metadata),
+            )
+        )
+    return preserved, {chunk.id for chunk in preserved if chunk.id}
+
+
 def attach_evidence(
     doc_id: str,
     path: str | Path,
@@ -806,5 +851,6 @@ __all__ = [
     "build_attachment_chunks",
     "detach_evidence",
     "list_attachments",
+    "load_preserved_attachment_chunks",
     "validate_attachment_file",
 ]

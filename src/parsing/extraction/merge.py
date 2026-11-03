@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterable, TypeVar
 
+from .dates import normalize_event
 from .schemas import (
     EvaluationFactor,
     FormatChecklistItem,
@@ -79,13 +80,19 @@ def _canonical_datetime(text: str) -> str:
     return value
 
 
+def _normalized_date(item: KeyDateItem) -> KeyDateItem:
+    event = normalize_event(item.event)
+    return item.model_copy(update={"event": event}) if event != item.event else item
+
+
 def _date_key(item: KeyDateItem) -> tuple:
-    return (_canonical_datetime(item.datetime_text),)
+    return (normalize_event(item.event), _canonical_datetime(item.datetime_text))
 
 
 def _merge_dates(primary: Iterable[KeyDateItem], secondary: Iterable[KeyDateItem]) -> list[KeyDateItem]:
     result: dict[tuple, KeyDateItem] = {}
     for item in [*primary, *secondary]:
+        item = _normalized_date(item)
         key = _date_key(item)
         existing = result.get(key)
         if existing is None or (

@@ -58,6 +58,51 @@ def test_second_run_uses_parse_cache(sample_pdf: Path, tmp_path: Path, monkeypat
     assert ("parse", 100, "cache hit (pymupdf)") in progress
 
 
+def test_force_reparse_preserves_attachment_chunks(
+    sample_pdf: Path, tmp_path: Path
+) -> None:
+    settings = offline_settings(tmp_path)
+    first = parse_document(
+        sample_pdf,
+        ParseOptions(parser="pymupdf", extract=False, ingest=False),
+        settings,
+    )
+    attachment_id = f"{first.doc_id}:att-deadbeef:0000"
+    chunks_path = first.output_dir / "chunks.jsonl"
+    with chunks_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "id": attachment_id,
+                    "text": "工程量清单附件",
+                    "embed_text": "工程量清单附件",
+                    "metadata": {
+                        "doc_id": first.doc_id,
+                        "chunk_id": attachment_id,
+                        "attachment": "boq.csv",
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    second = parse_document(
+        sample_pdf,
+        ParseOptions(parser="pymupdf", extract=False, ingest=False, force=True),
+        settings,
+    )
+
+    ids = {
+        json.loads(line)["id"]
+        for line in (second.output_dir / "chunks.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    }
+    assert attachment_id in ids
+
+
 def test_force_reparses(sample_pdf: Path, tmp_path: Path, monkeypatch) -> None:
     settings = offline_settings(tmp_path)
     options = ParseOptions(parser="pymupdf", extract=False, ingest=False)

@@ -2170,19 +2170,38 @@ class BidRunRepository:
                 )
 
             llm_day = func.date_trunc(
-                text("'day'"), RunUsageRow.updated_at
+                text("'day'"), LlmCallLogRow.ts
             )
             external_day = func.date_trunc(
                 text("'day'"), ExternalUsageRow.created_at
             )
+            legacy_day = func.date_trunc(
+                text("'day'"), RunUsageRow.updated_at
+            )
             llm_statement = (
                 select(
                     llm_day,
-                    func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                    func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
                 )
-                .where(RunUsageRow.updated_at >= month_start)
+                .where(LlmCallLogRow.ts >= month_start)
                 .group_by(llm_day)
                 .order_by(llm_day)
+            )
+            legacy_statement = (
+                select(
+                    legacy_day,
+                    func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
+                )
+                .where(
+                    RunUsageRow.updated_at >= month_start,
+                    ~(
+                        select(LlmCallLogRow.id)
+                        .where(LlmCallLogRow.run_id == RunUsageRow.run_id)
+                        .exists()
+                    ),
+                )
+                .group_by(legacy_day)
+                .order_by(legacy_day)
             )
             external_statement = (
                 select(
@@ -2193,37 +2212,20 @@ class BidRunRepository:
                 .group_by(external_day)
                 .order_by(external_day)
             )
-            job_llm_day = func.date_trunc(
-                text("'day'"), LlmCallLogRow.ts
-            )
-            job_llm_statement = (
-                select(
-                    job_llm_day,
-                    func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
-                )
-                .where(
-                    LlmCallLogRow.run_id.is_(None),
-                    LlmCallLogRow.ts >= month_start,
-                )
-                .group_by(job_llm_day)
-                .order_by(job_llm_day)
-            )
             if project_id:
                 llm_statement = llm_statement.where(
+                    LlmCallLogRow.project_id == project_id
+                )
+                legacy_statement = legacy_statement.where(
                     RunUsageRow.project_id == project_id
                 )
                 external_statement = external_statement.where(
                     ExternalUsageRow.project_id == project_id
                 )
-                job_llm_statement = job_llm_statement.where(
-                    LlmCallLogRow.project_id == project_id
-                )
             llm_rows = (await session.execute(llm_statement)).all()
+            legacy_rows = (await session.execute(legacy_statement)).all()
             external_rows = (
                 await session.execute(external_statement)
-            ).all()
-            job_llm_rows = (
-                await session.execute(job_llm_statement)
             ).all()
 
         llm_by_day = {
@@ -2231,16 +2233,16 @@ class BidRunRepository:
             for day, cost in llm_rows
             if day is not None
         }
+        for day, cost in legacy_rows:
+            if day is None:
+                continue
+            key = day.date().isoformat()
+            llm_by_day[key] = llm_by_day.get(key, 0.0) + float(cost or 0)
         external_by_day = {
             day.date().isoformat(): float(cost or 0)
             for day, cost in external_rows
             if day is not None
         }
-        for day, cost in job_llm_rows:
-            if day is None:
-                continue
-            key = day.date().isoformat()
-            llm_by_day[key] = llm_by_day.get(key, 0.0) + float(cost or 0)
         daily: list[dict[str, Any]] = []
         cumulative = 0.0
         current = month_start.date()
@@ -2303,13 +2305,15 @@ class BidRunRepository:
             day=1, hour=0, minute=0, second=0, microsecond=0
         )
         async with self._session_factory() as session:
-            run_cost = (
+            llm_cost = (
                 await session.execute(
                     select(
-                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0)
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.cost_cny), 0.0
+                        )
                     ).where(
-                        RunUsageRow.project_id == project_id,
-                        RunUsageRow.updated_at >= month_start,
+                        LlmCallLogRow.project_id == project_id,
+                        LlmCallLogRow.ts >= month_start,
                     )
                 )
             ).scalar_one()
@@ -2325,23 +2329,27 @@ class BidRunRepository:
                     )
                 )
             ).scalar_one()
-            job_llm_cost = (
+            legacy_cost = (
                 await session.execute(
                     select(
-                        func.coalesce(
-                            func.sum(LlmCallLogRow.cost_cny), 0.0
-                        )
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0)
                     ).where(
-                        LlmCallLogRow.project_id == project_id,
-                        LlmCallLogRow.run_id.is_(None),
-                        LlmCallLogRow.ts >= month_start,
+                        RunUsageRow.project_id == project_id,
+                        RunUsageRow.updated_at >= month_start,
+                        ~(
+                            select(LlmCallLogRow.id)
+                            .where(
+                                LlmCallLogRow.run_id == RunUsageRow.run_id
+                            )
+                            .exists()
+                        ),
                     )
                 )
             ).scalar_one()
         return (
-            float(run_cost or 0.0)
+            float(llm_cost or 0.0)
             + float(external_cost or 0.0)
-            + float(job_llm_cost or 0.0)
+            + float(legacy_cost or 0.0)
         )
 
     async def add_llm_call_log(
@@ -2629,7 +2637,39 @@ class BidRunRepository:
                     )
                 )
             ).scalar_one_or_none()
-            usage = (
+            usage_log = (
+                await session.execute(
+                    select(
+                        func.count(LlmCallLogRow.id),
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.prompt_tokens), 0
+                        ),
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.completion_tokens), 0
+                        ),
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.total_tokens), 0
+                        ),
+                        func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.retry_count), 0
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (LlmCallLogRow.fallback.is_(True), 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ),
+                    ).where(
+                        LlmCallLogRow.run_id.is_not(None),
+                        LlmCallLogRow.ts >= start,
+                    )
+                )
+            ).one()
+            usage_legacy = (
                 await session.execute(
                     select(
                         func.coalesce(func.sum(RunUsageRow.llm_calls), 0),
@@ -2639,9 +2679,28 @@ class BidRunRepository:
                         func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0),
                         func.coalesce(func.sum(RunUsageRow.retries), 0),
                         func.coalesce(func.sum(RunUsageRow.fallback_calls), 0),
-                    ).where(RunUsageRow.updated_at >= start)
+                    ).where(
+                        RunUsageRow.updated_at >= start,
+                        ~(
+                            select(LlmCallLogRow.id)
+                            .where(
+                                LlmCallLogRow.run_id == RunUsageRow.run_id
+                            )
+                            .exists()
+                        ),
+                    )
                 )
             ).one()
+            usage = tuple(
+                (
+                    float(left or 0.0) + float(right or 0.0)
+                    if index == 4
+                    else int(left or 0) + int(right or 0)
+                )
+                for index, (left, right) in enumerate(
+                    zip(usage_log, usage_legacy)
+                )
+            )
             feedback_rows = (
                 await session.execute(
                     select(

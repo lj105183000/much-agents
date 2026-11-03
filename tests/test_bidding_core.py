@@ -150,6 +150,8 @@ def test_context_load_and_validation(tmp_path: Path) -> None:
     assert context.facts.duration_days == "218"
     assert context.facts.bid_validity_days == "90天"
     assert context.facts.max_price_text.startswith("100万元")
+    assert context.facts.planned_start == "2023年11月25日"
+    assert context.facts.planned_end == "2024年06月30日"
     assert len(context.chunks) == 2
 
     with pytest.raises(BidContextError):

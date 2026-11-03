@@ -16,6 +16,7 @@ from .artifacts import (
     ensure_dir,
     read_json,
 )
+from .attachments import load_preserved_attachment_chunks
 from .chunking import chunk_document
 from .config import Settings
 from .docid import safe_stem, sha256_file
@@ -291,7 +292,16 @@ def parse_document(
         min_size=settings.chunk_min_size,
         project_name=project_name,
     )
-    atomic_write_jsonl(doc_dir / "chunks.jsonl", [chunk.to_dict() for chunk in chunks])
+    preserved_chunks, preserved_ids = load_preserved_attachment_chunks(
+        doc_dir, document.doc_id
+    )
+    atomic_write_jsonl(
+        doc_dir / "chunks.jsonl",
+        [
+            *(chunk.to_dict() for chunk in chunks),
+            *(chunk.to_dict() for chunk in preserved_chunks),
+        ],
+    )
     timings["chunk"] = time.perf_counter() - started
 
     # ---- ingest ----
@@ -334,6 +344,7 @@ def parse_document(
                         settings=settings,
                         store=store,
                         collection=collection_name,
+                        prune_keep_ids=preserved_ids,
                     )
                     fresh_ingest_summary = summary
                     atomic_write_json(ingest_path, summary)

@@ -81,8 +81,13 @@ def test_key_dates_filter_and_dedupe() -> None:
         "投标截止时间： 2023年11月14日13时30分\n"
     )
     dates = extract_key_dates_regex([payload("dates", text)])
-    assert all(item.event != "关键日期" for item in dates)
-    assert len({item.datetime_text for item in dates}) == len(dates)
+    assert {item.event for item in dates} == {
+        "计划开工日期",
+        "计划竣工日期",
+        "投标截止时间",
+    }
+    assert len(dates) == 3
+    assert len({(item.event, item.datetime_text) for item in dates}) == 3
 
 
 def test_front_appendix_regex() -> None:

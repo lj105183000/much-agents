@@ -188,6 +188,7 @@ def run_ingest(
     embedder: ZhipuEmbedder | None = None,
     collection: str | None = None,
     prune: bool = True,
+    prune_keep_ids: set[str] | None = None,
 ) -> dict:
     if not chunks:
         raise IngestError("no chunks to ingest")
@@ -201,9 +202,8 @@ def run_ingest(
         raise IngestError("embedding count does not match chunk count")
     before = store.existing_ids(doc_id)
     written = store.upsert_chunks(chunks, vectors)
-    deleted = (
-        store.prune_stale(doc_id, {chunk.id for chunk in chunks}) if prune else 0
-    )
+    keep_ids = {chunk.id for chunk in chunks} | set(prune_keep_ids or ())
+    deleted = store.prune_stale(doc_id, keep_ids) if prune else 0
     collection_name = (
         getattr(store.ensure_collection(), "name", None)
         or collection

@@ -199,10 +199,14 @@ def write_staged_outputs(
     for section in outline.sections:
         if section.kind != "narrative":
             continue
+        target = sections_dir / f"{section.id}.md"
+        if not section.selected:
+            target.unlink(missing_ok=True)
+            continue
         body = assembly.section_markdowns.get(section.id, "")
         # Section files live one directory below figures/.
         body = body.replace("](figures/", "](../figures/")
-        atomic_write_text(sections_dir / f"{section.id}.md", body)
+        atomic_write_text(target, body)
     return {
         "output_dir": str(root),
         "bid_markdown": str(root / "bid.md"),
