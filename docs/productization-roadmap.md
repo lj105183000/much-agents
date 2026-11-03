@@ -1,6 +1,6 @@
 # Much Agents 内网多人产品化路线图
 
-> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派、站内通知/Webhook/SMTP 与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版、反馈事件/质量快照、外部用量账本、run 预算控制与轻量运营看板，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
+> 状态：路线图（2026-10-24，2026-11-02 更新）。P0-A「认证/RBAC」、P0-B「项目隔离」、P0-C「审计」、P0-D「部署/CI/备份」均已实现；P2 的审批流、章节版本历史/diff/恢复、评审评论/@提及/指派/回复/截止时间、站内通知/Webhook/企业微信/SMTP（用户级邮箱）与 SSE 实时进度，P3 的 PDF/DOC 导出（Headless LibreOffice）、可选 DOCX 样式模板与企业资质库，P1 的需求覆盖矩阵/引用契约最小版、反馈事件/质量快照、外部用量账本、run 预算控制与轻量运营看板，以及 P4 的 Playwright E2E 与 HTTP/SSE 压测脚本也已落地，其余 P1–P4 仍为规划。功能现状以代码与 `CLAUDE.md` 为准，细节见 `docs/authentication.md`、`docs/projects.md`、`docs/audit.md`、`docs/deployment.md`、`docs/collaboration.md`。
 
 ## Context
 
@@ -18,7 +18,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 - **开发默认仍不等于生产**：`.env.example` 保留 `0.0.0.0` 与 `CORS_ORIGINS=*` 以兼容本机启动；`ENVIRONMENT=production` 会拒绝这些值并 fail-fast。
 - **前端测试（已补 E2E）**：Vitest 覆盖 URL 信任边界与 API 客户端；Playwright 覆盖登录、建 run、评论解决、只读权限与上传解析；组件级测试、多项目切换与浏览器 SSE 重连仍未覆盖；token 仍存 localStorage。
 - **生成不可溯源**：`src/bidding/llm.py:95-165` 是 DeepSeek 专用客户端；`MeteredChatClient`（`:178-187`）只计调用次数、没有 token/成本；`src/bidding/prompts.py:153` 审查只看到 3 条证据；`src/bidding/checks.py:159-163` 用关键词子串判断需求覆盖。
-- **协作与实时进度（已补，通知/看板未做）**：审批绑定内容哈希、章节版本 diff/恢复、评论/@提及/指派与 SSE 实时进度已落地；站内通知、SMTP/Webhook、截止时间与项目看板仍未实现。
+- **协作与实时进度（已补，看板未做）**：审批绑定内容哈希、章节版本 diff/恢复、评论/@提及/指派/单层回复/截止时间与 SSE 实时进度已落地；站内通知、SMTP/Webhook/企业微信、用户级邮箱已实现；项目看板仍未实现。
 - **交付物有限**：`src/bidding/docx_export.py:286-370` 仅基础标题/段落/表格/图片；无 PDF；无模板管理。
 - **输入格式单一**：`src/parsing/pipeline.py:212-213` 只接受 PDF；无 DOCX/XLSX/HTML、无本地 OCR。
 
@@ -287,8 +287,8 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 ### 5.3 评论、指派与通知（已实现）
 
 - 已落地 `bid_comments`（run 级评论、可选章节定位、作者快照、正文、`open/resolved`、@提及与处理人快照）；`GET /api/project-members` 提供项目成员选择；`GET/POST/PATCH /api/bid-runs/{id}/comments*` 承载查看、发表、解决/重开、指派。详见 `docs/collaboration.md`。
-- 已落地 `notifications`（迁移 `0015`）：@提及/指派、run 组装/门禁阻断/待审批的站内通知；可选 Webhook（HMAC-SHA256 签名）与 SMTP（全局收件人）；前端铃铛与已读管理。详见 `docs/notifications.md`。
-- 尚未实现：资质到期提醒（资质库本身未建）、用户级邮箱与通知偏好、截止时间、项目看板、评论删除/线程回复、通知重试/DLQ。
+- 已落地 `notifications`（迁移 `0015`）：@提及/指派/回复/到期、run 组装/门禁阻断/待审批的站内通知；可选 Webhook（HMAC-SHA256 签名）、企业微信群机器人与 SMTP（优先用户邮箱，回退全局收件人）；前端铃铛与已读管理。迁移 `0025` 增加用户邮箱与评论 `parent_comment_id`/`due_at`。详见 `docs/notifications.md`。
+- 尚未实现：通知重试/DLQ、Webhook 白名单域名校验、项目看板、评论删除/多级线程、编辑租约。
 
 ### 5.4 并发保护与实时进度（已实现）
 

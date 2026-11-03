@@ -312,6 +312,8 @@ class BidCommentRecord:
     comment_id: str
     project_id: str
     run_id: str
+    parent_comment_id: str | None
+    due_at: datetime | None
     section_id: str | None
     author_id: str | None
     author_name: str
@@ -444,6 +446,8 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         comment_id=row.id,
         project_id=row.project_id,
         run_id=row.run_id,
+        parent_comment_id=row.parent_comment_id,
+        due_at=row.due_at,
         section_id=row.section_id,
         author_id=row.author_id,
         author_name=row.author_name,
@@ -1811,12 +1815,16 @@ class BidRunRepository:
         mentions: list[dict[str, Any]],
         assignee_id: str | None,
         assignee_name: str | None,
+        parent_comment_id: str | None = None,
+        due_at: datetime | None = None,
     ) -> BidCommentRecord:
         now = _now()
         row = BidCommentRow(
             id=comment_id,
             project_id=project_id,
             run_id=run_id,
+            parent_comment_id=parent_comment_id,
+            due_at=due_at,
             section_id=section_id,
             author_id=author_id,
             author_name=author_name,
@@ -1866,6 +1874,26 @@ class BidRunRepository:
             rows = (await session.execute(statement)).scalars().all()
         return [_comment_record(row) for row in rows]
 
+    async def due_comments(
+        self,
+        *,
+        before: datetime,
+        limit: int = 200,
+    ) -> list[BidCommentRecord]:
+        statement = (
+            select(BidCommentRow)
+            .where(
+                BidCommentRow.status == "open",
+                BidCommentRow.due_at.is_not(None),
+                BidCommentRow.due_at <= before,
+            )
+            .order_by(BidCommentRow.due_at.asc())
+            .limit(max(1, int(limit)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_comment_record(row) for row in rows]
+
     async def update_comment(
         self,
         run_id: str,
@@ -1877,6 +1905,7 @@ class BidRunRepository:
             "assignee_id",
             "assignee_name",
             "status",
+            "due_at",
             "resolved_by",
             "resolved_by_name",
             "resolved_at",
@@ -1907,6 +1936,27 @@ class BidRunRepository:
         async with self._session_factory() as session:
             row = await session.get(NotificationPreferenceRow, user_id)
         return _notification_preferences(row)
+
+    async def user_emails_map(
+        self, user_ids: list[str]
+    ) -> dict[str, str]:
+        unique = list(dict.fromkeys(user_id for user_id in user_ids if user_id))
+        if not unique:
+            return {}
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(UserRow.id, UserRow.email).where(
+                        UserRow.id.in_(unique),
+                        UserRow.email.is_not(None),
+                    )
+                )
+            ).all()
+        return {
+            str(user_id): str(email)
+            for user_id, email in rows
+            if email
+        }
 
     async def notification_preferences_map(
         self, user_ids: list[str]

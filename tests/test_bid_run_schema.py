@@ -41,6 +41,20 @@ def test_bid_run_schema_does_not_store_profile_content() -> None:
     assert "profile" not in version_columns
 
 
+def test_comment_threads_and_user_email_columns() -> None:
+    comment_columns = set(
+        Base.metadata.tables["bid_comments"].columns.keys()
+    )
+    assert {"parent_comment_id", "due_at"} <= comment_columns
+    assert "email" in Base.metadata.tables["users"].columns
+
+    due_indexes = {
+        index.name
+        for index in Base.metadata.tables["bid_comments"].indexes
+    }
+    assert "ix_bid_comments_due" in due_indexes
+
+
 def test_bid_runs_have_active_document_index() -> None:
     indexes = {
         index.name: index

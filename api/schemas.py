@@ -321,6 +321,8 @@ class BidCommentCreateRequest(BaseModel):
 
     body: str = Field(min_length=1, max_length=4000)
     section_id: str | None = Field(default=None, max_length=64)
+    parent_comment_id: str | None = Field(default=None, max_length=36)
+    due_at: datetime | None = None
     mentions: list[str] = Field(default_factory=list, max_length=20)
     assignee_id: str | None = Field(default=None, max_length=36)
 
@@ -339,6 +341,7 @@ class BidCommentUpdateRequest(BaseModel):
     body: str | None = Field(default=None, min_length=1, max_length=4000)
     status: Literal["open", "resolved"] | None = None
     assignee_id: str | None = Field(default=None, max_length=36)
+    due_at: datetime | None = None
 
     @field_validator("body")
     @classmethod
@@ -354,6 +357,8 @@ class BidCommentUpdateRequest(BaseModel):
 class BidCommentView(BaseModel):
     comment_id: str
     run_id: str
+    parent_comment_id: str | None = None
+    due_at: datetime | None = None
     section_id: str | None = None
     section_title: str | None = None
     author_id: str | None = None
@@ -1262,6 +1267,7 @@ class UserSummary(BaseModel):
     id: str
     username: str
     display_name: str
+    email: str | None = None
     role: str
     is_active: bool
     last_login_at: datetime | None = None
@@ -1277,11 +1283,13 @@ class UserCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=1, max_length=256)
     display_name: str | None = Field(default=None, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
     role: UserRole = "viewer"
 
 
 class UserUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
     role: UserRole | None = None
     is_active: bool | None = None
 

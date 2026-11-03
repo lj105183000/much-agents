@@ -405,3 +405,65 @@ def test_artifact_endpoints_require_auth(tmp_path: Path) -> None:
             client.get("/api/jobs/unknown/artifacts", headers=headers).status_code
             == 404
         )
+
+
+def test_admin_sets_and_clears_user_email(tmp_path: Path) -> None:
+    app, service, _company = make_app(tmp_path)
+    seed(service, "admin", role="admin")
+    with TestClient(app) as client:
+        headers = bearer(login(client, "admin").json()["token"])
+        created = client.post(
+            "/api/users",
+            headers=headers,
+            json={
+                "username": "alice",
+                "password": PASSWORD,
+                "display_name": "Alice",
+                "email": "Alice@Example.com",
+                "role": "writer",
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["email"] == "alice@example.com"
+        user_id = created.json()["id"]
+
+        duplicate = client.post(
+            "/api/users",
+            headers=headers,
+            json={
+                "username": "bob",
+                "password": PASSWORD,
+                "email": "ALICE@example.com",
+                "role": "viewer",
+            },
+        )
+        assert duplicate.status_code == 409, duplicate.text
+
+        invalid = client.patch(
+            f"/api/users/{user_id}",
+            headers=headers,
+            json={"email": "invalid"},
+        )
+        assert invalid.status_code == 400, invalid.text
+
+        cleared = client.patch(
+            f"/api/users/{user_id}",
+            headers=headers,
+            json={"email": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["email"] is None
+
+        restored = client.patch(
+            f"/api/users/{user_id}",
+            headers=headers,
+            json={"email": "alice@example.com"},
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["email"] == "alice@example.com"
+
+        listing = client.get("/api/users", headers=headers)
+        assert any(
+            user["email"] == "alice@example.com"
+            for user in listing.json()["users"]
+        )

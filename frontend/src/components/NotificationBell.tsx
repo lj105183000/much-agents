@@ -19,6 +19,8 @@ const KIND_META: Record<
 > = {
   comment_mention: { label: '提及', tone: 'cyan' },
   comment_assigned: { label: '指派', tone: 'amber' },
+  comment_reply: { label: '回复', tone: 'cyan' },
+  comment_due: { label: '评论到期', tone: 'amber' },
   run_assembled: { label: '组装完成', tone: 'green' },
   gate_blocked: { label: '门禁阻断', tone: 'red' },
   approval_pending: { label: '待审批', tone: 'amber' },

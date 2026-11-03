@@ -319,3 +319,83 @@ def test_event_snapshot_and_sse_format(tmp_path: Path) -> None:
         payload = json.loads(event.split("data: ", 1)[1])
         assert payload["run_id"] == run_id
         assert payload["job"]["percent"] == 42
+
+
+def test_comment_replies_and_due_dates(tmp_path: Path) -> None:
+    app, _repo, _store, _service = make_app(tmp_path)
+    with TestClient(app) as client:
+        run_id, section_id = create_run(client)
+        outline = client.get(f"/api/bid-runs/{run_id}/outline").json()
+        narratives = [
+            section["section_id"]
+            for section in outline["sections"]
+            if section["kind"] == "narrative"
+        ]
+        other_section = next(
+            section for section in narratives if section != section_id
+        )
+
+        parent = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "请在进度章节补充横道图",
+                "section_id": section_id,
+                "due_at": "2026-12-01T10:00:00+08:00",
+            },
+        )
+        assert parent.status_code == 201, parent.text
+        parent_json = parent.json()
+        assert parent_json["parent_comment_id"] is None
+        assert parent_json["due_at"].startswith("2026-12-01T10:00:00")
+        parent_id = parent_json["comment_id"]
+
+        reply = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "已补充，请复核",
+                "parent_comment_id": parent_id,
+            },
+        )
+        assert reply.status_code == 201, reply.text
+        reply_json = reply.json()
+        assert reply_json["parent_comment_id"] == parent_id
+        assert reply_json["section_id"] == section_id
+
+        nested = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "嵌套回复",
+                "parent_comment_id": reply_json["comment_id"],
+            },
+        )
+        assert nested.status_code == 422
+
+        missing_parent = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "找不到父评论", "parent_comment_id": "missing"},
+        )
+        assert missing_parent.status_code == 422
+
+        mismatched = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "章节不一致",
+                "parent_comment_id": parent_id,
+                "section_id": other_section,
+            },
+        )
+        assert mismatched.status_code == 422
+
+        rescheduled = client.patch(
+            f"/api/bid-runs/{run_id}/comments/{parent_id}",
+            json={"due_at": "2026-12-02T09:30:00Z"},
+        )
+        assert rescheduled.status_code == 200, rescheduled.text
+        assert rescheduled.json()["due_at"].startswith("2026-12-02T09:30:00")
+
+        cleared = client.patch(
+            f"/api/bid-runs/{run_id}/comments/{parent_id}",
+            json={"due_at": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["due_at"] is None

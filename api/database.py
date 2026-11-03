@@ -109,6 +109,7 @@ class UserRow(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(254))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'viewer'")
@@ -692,6 +693,7 @@ class BidCommentRow(Base):
         Index("ix_bid_comments_run_created", "run_id", "created_at"),
         Index("ix_bid_comments_project_status", "project_id", "status"),
         Index("ix_bid_comments_assignee", "assignee_id"),
+        Index("ix_bid_comments_due", "due_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -705,6 +707,8 @@ class BidCommentRow(Base):
         ForeignKey("bid_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
+    parent_comment_id: Mapped[str | None] = mapped_column(String(36))
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     section_id: Mapped[str | None] = mapped_column(String(64))
     # Author/assignee identifiers are snapshots, not foreign keys: local
     # development uses a synthetic user, and deleting a user must not delete

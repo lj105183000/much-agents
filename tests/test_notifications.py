@@ -560,3 +560,230 @@ def test_smtp_dispatcher_sends_metadata_only() -> None:
     assert "标书待审批" in message["Subject"]
     assert sent["login"] == "user"
     assert sent["quit"] is True
+
+
+def test_reply_creates_notification_for_parent_author(tmp_path: Path) -> None:
+    app, repo, _notifier = make_app(tmp_path)
+    with TestClient(app) as client:
+        run_id = create_run(client)
+        outline = client.get(f"/api/bid-runs/{run_id}/outline").json()
+        section_id = next(
+            section["section_id"]
+            for section in outline["sections"]
+            if section["kind"] == "narrative"
+        )
+        parent = asyncio.run(
+            repo.add_comment(
+                comment_id="comment-parent",
+                project_id=DEFAULT_PROJECT_ID,
+                run_id=run_id,
+                section_id=section_id,
+                author_id="u-alice",
+                author_name="Alice",
+                body="原意见",
+                mentions=[],
+                assignee_id=None,
+                assignee_name=None,
+            )
+        )
+        reply = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "已处理",
+                "parent_comment_id": parent.comment_id,
+            },
+        )
+        assert reply.status_code == 201, reply.text
+        assert reply.json()["section_id"] == section_id
+
+        records = [
+            record
+            for record in repo.notifications.values()
+            if record.kind == "comment_reply"
+        ]
+        assert len(records) == 1
+        assert records[0].user_id == "u-alice"
+        assert records[0].comment_id == reply.json()["comment_id"]
+
+
+def test_comment_due_notification_targets_assignee_and_dedupes() -> None:
+    from datetime import timedelta
+
+    from api.notifications import COMMENT_DUE
+
+    repo = FakeBidRunRepository()
+    repo.notification_recipients["project-1"] = [
+        NotificationRecipient("u-manager", "manager", "经理", "manager"),
+        NotificationRecipient("u-writer", "writer", "编写", "writer"),
+        NotificationRecipient("u-viewer", "viewer", "只读", "viewer"),
+    ]
+    webhook_calls: list[dict[str, object]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_post(url, **kwargs):
+        webhook_calls.append(kwargs)
+        return Response()
+
+    settings = NotificationSettings(
+        webhook_url="https://hooks.example.test/notify"
+    )
+    service = NotificationService(
+        repo,
+        settings,
+        NotificationDispatcher(settings, post=fake_post),
+        dispatch_inline=True,
+    )
+    run = replace(_paused_run(), project_id="project-1")
+    due_at = datetime.now(timezone.utc) + timedelta(hours=6)
+
+    async def scenario() -> None:
+        first = await service.notify_comment_due(
+            run=run,
+            comment_id="comment-1",
+            comment_body="请补充进度横道图",
+            due_at=due_at,
+            section_id="narr-1",
+            assignee_id="u-writer",
+            author_id="u-manager",
+        )
+        second = await service.notify_comment_due(
+            run=run,
+            comment_id="comment-1",
+            comment_body="请补充进度横道图",
+            due_at=due_at,
+            section_id="narr-1",
+            assignee_id="u-writer",
+            author_id="u-manager",
+        )
+        assert [record.user_id for record in first] == ["u-writer"]
+        assert first[0].kind == COMMENT_DUE
+        assert "即将到期" in first[0].title
+        assert second == []
+
+        unassigned = await service.notify_comment_due(
+            run=run,
+            comment_id="comment-2",
+            comment_body="无人处理",
+            due_at=due_at,
+            section_id=None,
+            assignee_id=None,
+            author_id=None,
+        )
+        assert {record.user_id for record in unassigned} == {"u-manager"}
+
+    asyncio.run(scenario())
+    # One webhook for the first due notification and one for the unassigned
+    # comment; the duplicate second scan must not resend.
+    assert len(webhook_calls) == 2
+
+
+def test_smtp_dispatcher_prefers_per_user_recipients() -> None:
+    sent: dict[str, object] = {}
+
+    class FakeSmtp:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            sent["host"] = host
+            sent["port"] = port
+
+        def starttls(self) -> None:
+            sent["starttls"] = True
+
+        def login(self, username: str, password: str) -> None:
+            sent["login"] = username
+
+        def send_message(self, message) -> None:
+            sent["message"] = message
+            sent.setdefault("messages", []).append(message)
+
+        def quit(self) -> None:
+            sent["quit"] = True
+
+    settings = NotificationSettings(
+        email_enabled=True,
+        smtp_host="smtp.example.test",
+        smtp_port=587,
+        smtp_username="user",
+        smtp_password="secret",
+        smtp_from="much-agents@example.test",
+    )
+    dispatcher = NotificationDispatcher(settings, smtp_factory=FakeSmtp)
+    from api.notifications import NotificationEvent
+
+    dispatcher.dispatch(
+        NotificationEvent(
+            event="comment.reply",
+            occurred_at=datetime.now(timezone.utc),
+            project_id=DEFAULT_PROJECT_ID,
+            title="Alice 回复了你的评论",
+            run_id="run-1",
+            comment_id="comment-2",
+            recipient_user_ids=("u-alice", "u-bob"),
+            recipient_emails=("alice@example.test", "bob@example.test"),
+        )
+    )
+    messages = sent["messages"]
+    assert [message["To"] for message in messages] == [
+        "alice@example.test",
+        "bob@example.test",
+    ]
+    assert "Alice" in messages[0]["Subject"]
+
+
+def test_wecom_dispatcher_sends_markdown_metadata_only() -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+
+    settings = NotificationSettings(
+        wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+    )
+    dispatcher = NotificationDispatcher(settings, post=fake_post)
+    from api.notifications import NotificationEvent
+
+    dispatcher.dispatch(
+        NotificationEvent(
+            event="comment.due",
+            occurred_at=datetime.now(timezone.utc),
+            project_id=DEFAULT_PROJECT_ID,
+            title="评论即将到期",
+            run_id="run-1",
+            comment_id="comment-1",
+            section_id="narr-1",
+        )
+    )
+    payload = captured["json"]
+    assert payload["msgtype"] == "markdown"
+    content = payload["markdown"]["content"]
+    assert "评论即将到期" in content
+    assert "run-1" in content
+    assert "comment-1" not in content
+
+    calls: list[dict[str, object]] = []
+
+    def counting_post(url, **kwargs):
+        calls.append(kwargs)
+        return Response()
+
+    batch = NotificationDispatcher(settings, post=counting_post)
+    first = NotificationEvent(
+        event="comment.reply",
+        occurred_at=datetime.now(timezone.utc),
+        project_id=DEFAULT_PROJECT_ID,
+        title="回复",
+        run_id="run-1",
+        comment_id="comment-1",
+        recipient_user_ids=("u-alice",),
+    )
+    second = replace(first, recipient_user_ids=("u-bob",))
+    batch.dispatch_many([first, second])
+    assert len(calls) == 1

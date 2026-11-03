@@ -764,6 +764,7 @@ class FakeBidRunRepository:
             str, list[NotificationRecipient]
         ] = {}
         self.notification_preferences: dict[str, dict[str, bool]] = {}
+        self.user_emails: dict[str, str] = {}
         self.feedback_events: list[FeedbackRecord] = []
         self.quality_snapshots: list[QualitySnapshotRecord] = []
         self.run_usage: dict[str, RunUsageRecord] = {}
@@ -923,12 +924,16 @@ class FakeBidRunRepository:
         mentions: list[dict[str, Any]],
         assignee_id: str | None,
         assignee_name: str | None,
+        parent_comment_id: str | None = None,
+        due_at: datetime | None = None,
     ) -> BidCommentRecord:
         now = datetime.now(timezone.utc)
         record = BidCommentRecord(
             comment_id=comment_id,
             project_id=project_id,
             run_id=run_id,
+            parent_comment_id=parent_comment_id,
+            due_at=due_at,
             section_id=section_id,
             author_id=author_id,
             author_name=author_name,
@@ -972,6 +977,31 @@ class FakeBidRunRepository:
         rows.sort(key=lambda record: record.created_at, reverse=True)
         return rows[: max(1, min(int(limit), 500))]
 
+    async def due_comments(
+        self,
+        *,
+        before: datetime,
+        limit: int = 200,
+    ) -> list[BidCommentRecord]:
+        rows = [
+            record
+            for record in self.comments.values()
+            if record.status == "open"
+            and record.due_at is not None
+            and record.due_at <= before
+        ]
+        rows.sort(key=lambda record: record.due_at or before)
+        return rows[: max(1, limit)]
+
+    async def user_emails_map(
+        self, user_ids: list[str]
+    ) -> dict[str, str]:
+        return {
+            user_id: self.user_emails[user_id]
+            for user_id in user_ids
+            if user_id in self.user_emails
+        }
+
     async def update_comment(
         self,
         run_id: str,
@@ -986,6 +1016,7 @@ class FakeBidRunRepository:
             "assignee_id",
             "assignee_name",
             "status",
+            "due_at",
             "resolved_by",
             "resolved_by_name",
             "resolved_at",
@@ -2981,6 +3012,17 @@ class FakeAuthRepository:
     async def get_user(self, user_id: str) -> UserRecord | None:
         return self.users.get(user_id)
 
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        normalized = email.strip().lower()
+        return next(
+            (
+                user
+                for user in self.users.values()
+                if (user.email or "").lower() == normalized
+            ),
+            None,
+        )
+
     async def list_users(self, limit: int = 200) -> list[UserRecord]:
         return sorted(self.users.values(), key=lambda user: user.username)[:limit]
 
@@ -2989,6 +3031,7 @@ class FakeAuthRepository:
         *,
         username: str,
         display_name: str,
+        email: str | None,
         password_hash: str,
         role: str,
     ) -> UserRecord:
@@ -2996,11 +3039,16 @@ class FakeAuthRepository:
             from api.auth import AuthError
 
             raise AuthError(409, "用户名已存在")
+        if email and any(user.email == email for user in self.users.values()):
+            from api.auth import AuthError
+
+            raise AuthError(409, "邮箱已被使用")
         now = self._now()
         user = UserRecord(
             id=uuid4().hex,
             username=username,
             display_name=display_name,
+            email=email,
             password_hash=password_hash,
             role=role,
             is_active=True,
@@ -3023,10 +3071,16 @@ class FakeAuthRepository:
         current = self.users.get(user_id)
         if current is None:
             return None
-        allowed = {"display_name", "role", "is_active"}
+        allowed = {"display_name", "email", "role", "is_active"}
         values = {
             key: value for key, value in fields.items() if key in allowed
         }
+        if values.get("email"):
+            existing = await self.get_user_by_email(str(values["email"]))
+            if existing is not None and existing.id != user_id:
+                from api.auth import AuthError
+
+                raise AuthError(409, "邮箱已被使用")
         if enforce_last_admin and current.role == "admin" and current.is_active:
             removes_admin = (
                 values.get("role", current.role) != "admin"

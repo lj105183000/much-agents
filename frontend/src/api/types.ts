@@ -44,6 +44,7 @@ export interface UserSummary {
   id: string
   username: string
   display_name: string
+  email: string | null
   role: UserRole
   is_active: boolean
   last_login_at: string | null
@@ -59,11 +60,13 @@ export interface UserCreateInput {
   username: string
   password: string
   display_name?: string | null
+  email?: string | null
   role: UserRole
 }
 
 export interface UserUpdateInput {
   display_name?: string | null
+  email?: string | null
   role?: UserRole
   is_active?: boolean
 }
@@ -822,6 +825,8 @@ export interface BidCommentMention {
 export interface BidCommentView {
   comment_id: string
   run_id: string
+  parent_comment_id: string | null
+  due_at: string | null
   section_id: string | null
   section_title: string | null
   author_id: string | null
@@ -846,6 +851,8 @@ export interface BidCommentListResponse {
 export interface BidCommentCreateInput {
   body: string
   section_id?: string | null
+  parent_comment_id?: string | null
+  due_at?: string | null
   mentions?: string[]
   assignee_id?: string | null
 }
@@ -854,6 +861,7 @@ export interface BidCommentUpdateInput {
   body?: string
   status?: 'open' | 'resolved'
   assignee_id?: string | null
+  due_at?: string | null
 }
 
 export type BidFeedbackEventType =
@@ -1249,6 +1257,8 @@ export interface EvalOverview {
 export type NotificationKind =
   | 'comment_mention'
   | 'comment_assigned'
+  | 'comment_reply'
+  | 'comment_due'
   | 'run_assembled'
   | 'gate_blocked'
   | 'approval_pending'

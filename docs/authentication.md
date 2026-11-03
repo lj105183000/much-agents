@@ -52,11 +52,12 @@ printf '%s\n' '<强密码>' | uv run python -m api.users create-admin \
 
 ```bash
 uv run python -m api.users list
-uv run python -m api.users create-user --username zhangsan --display-name 张三 --role writer
+uv run python -m api.users create-user --username zhangsan --display-name 张三 --email zhangsan@example.com --role writer
 uv run python -m api.users reset-password --username admin
 ```
 
 - 用户名统一转为小写，需为 3–64 位小写字母、数字、点、下划线或连字符，且以字母或数字开头。
+- 邮箱可选（≤254 字符）；保存前去除首尾空白并转小写，按 `lower(email)` 唯一（迁移 `0025`）。邮箱仅用于按用户发送通知邮件；`PATCH` 传 `null` 或空字符串可清除。
 - 密码长度 12–128 个字符，不能等于用户名；少量常见弱口令会被拒绝。
 - 密码遗失时用 `reset-password` 重置；重置会撤销该用户全部会话。
 - 不能停用或降级最后一个启用中的管理员（接口返回 409）；请先创建第二个管理员。
@@ -94,8 +95,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/api/auth/me
 | `POST` | `/api/auth/logout` | 撤销当前会话，返回 204 |
 | `POST` | `/api/auth/password` | 修改自己的密码（`current_password` / `new_password`），撤销全部会话 |
 | `GET` | `/api/users` | 管理员：用户列表 |
-| `POST` | `/api/users` | 管理员：创建用户 |
-| `PATCH` | `/api/users/{user_id}` | 管理员：修改显示名/角色/启用状态 |
+| `POST` | `/api/users` | 管理员：创建用户（含可选邮箱） |
+| `PATCH` | `/api/users/{user_id}` | 管理员：修改显示名/邮箱/角色/启用状态；邮箱可置 `null` 清除 |
 | `POST` | `/api/users/{user_id}/password` | 管理员：重置密码并撤销该用户全部会话 |
 
 会话规则：
@@ -115,7 +116,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/api/auth/me
 - 任意请求返回 401 会清除本地会话并回到登录页；登录接口本身的 401 只显示错误，不做全局登出。旧 token 的在途请求不会误踢新会话。
 - 会话保存在 `localStorage` 的 `much-agents:auth:v1`，并与当前 API base、过期时间绑定；不写入 URL、不使用 cookie。
 - 任务历史按用户 id 分键保存，避免共享浏览器串数据。
-- 「用户管理」与「审计日志」视图只对管理员显示；角色感知按钮覆盖上传、编写、组装、编辑、重写、配图重新生成、公司管理和导出。
+- 「用户管理」支持设置/清除用户邮箱，邮箱用于通知邮件；「审计日志」视图与用户管理一样只对管理员显示；角色感知按钮覆盖上传、编写、组装、编辑、重写、配图重新生成、公司管理和导出。
 - Header 提供项目切换器（业务请求自动带 `X-Project-Id`）、修改密码对话框与登出；登出会清除当前用户的解析/任务历史与项目选择。
 - 产物预览与下载通过带认证的 Blob 请求完成；图片使用 `AuthenticatedImage`，Markdown 内图片也会被重写为认证 Blob。没有 query token。
 

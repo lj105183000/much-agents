@@ -50,6 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     create = sub.add_parser("create-user", help="创建普通用户")
     create.add_argument("--username", required=True)
     create.add_argument("--display-name", default=None)
+    create.add_argument("--email", default=None)
     create.add_argument(
         "--role",
         default="viewer",
@@ -64,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     admin = sub.add_parser("create-admin", help="创建管理员")
     admin.add_argument("--username", required=True)
     admin.add_argument("--display-name", default=None)
+    admin.add_argument("--email", default=None)
     admin.add_argument("--password-stdin", action="store_true")
 
     reset = sub.add_parser("reset-password", help="重置密码并撤销该用户全部会话")
@@ -118,6 +120,7 @@ async def _run(args: argparse.Namespace) -> int:
                 args.username,
                 password,
                 display_name=args.display_name,
+                email=args.email,
                 role=role,
             )
             projects = ProjectRepository(database.session_factory)

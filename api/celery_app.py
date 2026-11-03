@@ -18,6 +18,7 @@ from src.parsing.logging_utils import configure_stdio
 from .config import ApiSettings
 from .redis_jobs import RedisJobStore
 from .task_names import (
+    COMMENT_DUE_TASK_NAME,
     MAINTENANCE_QUEUE,
     MAINTENANCE_TASK_NAME,
     PARSE_QUEUE,
@@ -102,6 +103,11 @@ def create_celery_app(settings: ApiSettings) -> Celery:
             "check-qualification-expiry": {
                 "task": QUALIFICATION_EXPIRY_TASK_NAME,
                 "schedule": 86400.0,
+                "options": {"queue": MAINTENANCE_QUEUE},
+            },
+            "check-comment-due": {
+                "task": COMMENT_DUE_TASK_NAME,
+                "schedule": 3600.0,
                 "options": {"queue": MAINTENANCE_QUEUE},
             },
         },

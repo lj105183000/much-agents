@@ -25,6 +25,7 @@ from api.database import (
     ExternalUsageRow,
     LlmCallLogRow,
     RunUsageRow,
+    UserRow,
 )
 from src.bidding.content_hash import compute_section_content_sha256
 
@@ -343,6 +344,106 @@ async def _exercise_assembly_lease() -> None:
                     DocumentRow.project_id == DEFAULT_PROJECT_ID,
                     DocumentRow.doc_id == doc_id,
                 )
+            )
+            await session.commit()
+        await engine.dispose()
+
+
+def test_comment_due_scan_and_user_email_lookup() -> None:
+    asyncio.run(_exercise_comment_due_and_emails())
+
+
+async def _exercise_comment_due_and_emails() -> None:
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    run_id = f"it-{uuid4().hex}"
+    doc_id = f"it-doc-{uuid4().hex}"
+    user_id = uuid4().hex
+    due_comment_id = uuid4().hex
+    later_comment_id = uuid4().hex
+    repository = BidRunRepository(factory)
+    now = datetime.now(timezone.utc)
+    try:
+        async with factory() as session:
+            session.add(
+                UserRow(
+                    id=user_id,
+                    username=f"it-{uuid4().hex[:12]}",
+                    display_name="Integration User",
+                    email="integration@example.test",
+                    password_hash="x",
+                    role="writer",
+                    is_active=True,
+                    failed_login_count=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                DocumentRow(
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    filename="integration.pdf",
+                )
+            )
+            await session.commit()
+        async with factory() as session:
+            session.add(
+                BidRunRow(
+                    id=run_id,
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    revision=1,
+                )
+            )
+            await session.commit()
+
+        await repository.add_comment(
+            comment_id=due_comment_id,
+            project_id=DEFAULT_PROJECT_ID,
+            run_id=run_id,
+            section_id=None,
+            author_id=user_id,
+            author_name="Integration User",
+            body="即将到期",
+            mentions=[],
+            assignee_id=user_id,
+            assignee_name="Integration User",
+            due_at=now + timedelta(hours=3),
+        )
+        await repository.add_comment(
+            comment_id=later_comment_id,
+            project_id=DEFAULT_PROJECT_ID,
+            run_id=run_id,
+            section_id=None,
+            author_id=user_id,
+            author_name="Integration User",
+            body="稍后到期",
+            mentions=[],
+            assignee_id=None,
+            assignee_name=None,
+            due_at=now + timedelta(days=3),
+        )
+        due = await repository.due_comments(
+            before=now + timedelta(hours=24)
+        )
+        assert [record.comment_id for record in due] == [due_comment_id]
+
+        emails = await repository.user_emails_map([user_id, "missing"])
+        assert emails == {user_id: "integration@example.test"}
+    finally:
+        async with factory() as session:
+            await session.execute(
+                delete(BidRunRow).where(BidRunRow.id == run_id)
+            )
+            await session.execute(
+                delete(DocumentRow).where(
+                    DocumentRow.project_id == DEFAULT_PROJECT_ID,
+                    DocumentRow.doc_id == doc_id,
+                )
+            )
+            await session.execute(
+                delete(UserRow).where(UserRow.id == user_id)
             )
             await session.commit()
         await engine.dispose()

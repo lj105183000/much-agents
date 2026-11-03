@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import smtplib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from typing import Any, Callable
@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 COMMENT_MENTION = "comment_mention"
 COMMENT_ASSIGNED = "comment_assigned"
+COMMENT_REPLY = "comment_reply"
+COMMENT_DUE = "comment_due"
 RUN_ASSEMBLED = "run_assembled"
 GATE_BLOCKED = "gate_blocked"
 APPROVAL_PENDING = "approval_pending"
@@ -77,6 +79,8 @@ class NotificationSettings:
     smtp_starttls: bool = True
     smtp_use_ssl: bool = False
     email_to: tuple[str, ...] = ()
+    wecom_webhook_url: str = ""
+    wecom_timeout_seconds: float = 5.0
 
     @classmethod
     def from_env(cls) -> "NotificationSettings":
@@ -97,6 +101,12 @@ class NotificationSettings:
             ),
             smtp_use_ssl=_bool(os.environ.get("SMTP_USE_SSL")),
             email_to=_email_list(os.environ.get("NOTIFY_EMAIL_TO")),
+            wecom_webhook_url=os.environ.get(
+                "NOTIFY_WECOM_WEBHOOK_URL", ""
+            ).strip(),
+            wecom_timeout_seconds=_float_env(
+                "NOTIFY_WECOM_TIMEOUT_SECONDS", 5.0
+            ),
         )
 
     @property
@@ -109,12 +119,19 @@ class NotificationSettings:
             self.email_enabled
             and self.smtp_host
             and self.smtp_from
-            and self.email_to
         )
 
     @property
+    def wecom_enabled(self) -> bool:
+        return bool(self.wecom_webhook_url)
+
+    @property
     def enabled(self) -> bool:
-        return self.webhook_enabled or self.email_ready
+        return (
+            self.webhook_enabled
+            or self.email_ready
+            or self.wecom_enabled
+        )
 
 
 def _float_env(name: str, default: float) -> float:
@@ -156,6 +173,7 @@ class NotificationEvent:
     qualification_id: str | None = None
     days_left: int | None = None
     recipient_user_ids: tuple[str, ...] = ()
+    recipient_emails: tuple[str, ...] = ()
 
     def public_payload(self) -> dict[str, Any]:
         return {
@@ -201,12 +219,39 @@ class NotificationDispatcher:
         return self.settings.enabled
 
     def dispatch_many(self, events: list[NotificationEvent]) -> None:
+        sent_wecom: set[tuple[Any, ...]] = set()
         for event in events:
-            self.dispatch(event)
+            key = (
+                event.event,
+                event.project_id,
+                event.run_id,
+                event.comment_id,
+                event.section_id,
+                event.title,
+                event.gate_status,
+                event.content_sha256,
+                event.budget_scope,
+                event.budget_level,
+                event.company_id,
+                event.qualification_id,
+                event.days_left,
+            )
+            # The group webhook is shared by all recipients: send one message
+            # per logical event instead of one per recipient.
+            send_wecom = key not in sent_wecom
+            sent_wecom.add(key)
+            self._dispatch(event, send_wecom=send_wecom)
 
     def dispatch(self, event: NotificationEvent) -> None:
+        self._dispatch(event)
+
+    def _dispatch(
+        self, event: NotificationEvent, *, send_wecom: bool = True
+    ) -> None:
         if self.settings.webhook_enabled:
             self._send_webhook(event)
+        if send_wecom and self.settings.wecom_enabled:
+            self._send_wecom(event)
         if self.settings.email_ready:
             self._send_email(event)
 
@@ -245,12 +290,45 @@ class NotificationDispatcher:
                 type(exc).__name__,
             )
 
+    def _send_wecom(self, event: NotificationEvent) -> None:
+        settings = self.settings
+        lines = [
+            f"**{event.title or event.event}**",
+            f"> 事件: {event.event}",
+            f"> 项目: {event.project_id}",
+            f"> 时间: {event.occurred_at.isoformat()}",
+        ]
+        if event.run_id:
+            lines.append(f"> run: {event.run_id}")
+        if event.gate_status:
+            lines.append(f"> 门禁: {event.gate_status}")
+        if event.days_left is not None:
+            lines.append(f"> 剩余: {event.days_left} 天")
+        if event.actor_name:
+            lines.append(f"> 操作人: {event.actor_name}")
+        content = "\n".join(lines)
+        # WeCom markdown messages are limited to 4096 bytes; keep the head.
+        if len(content.encode("utf-8")) > 4000:
+            content = content.encode("utf-8")[:4000].decode("utf-8", "ignore")
+        try:
+            response = self._post(
+                settings.wecom_webhook_url,
+                json={"msgtype": "markdown", "markdown": {"content": content}},
+                timeout=settings.wecom_timeout_seconds,
+            )
+            raise_for_status = getattr(response, "raise_for_status", None)
+            if callable(raise_for_status):
+                raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - notification fan-out
+            logger.warning(
+                "notification WeCom delivery failed: %s", type(exc).__name__
+            )
+
     def _send_email(self, event: NotificationEvent) -> None:
         settings = self.settings
-        message = EmailMessage()
-        message["From"] = settings.smtp_from
-        message["To"] = ", ".join(settings.email_to)
-        message["Subject"] = f"[Much Agents] {event.title or event.event}"[:200]
+        recipients = event.recipient_emails or settings.email_to
+        if not recipients:
+            return
         lines = [
             event.title or event.event,
             "",
@@ -274,7 +352,7 @@ class NotificationDispatcher:
         if event.actor_name:
             lines.append(f"操作人: {event.actor_name}")
         lines.extend(["", "请登录 Much Agents 查看详情。"])
-        message.set_content("\n".join(lines))
+        body = "\n".join(lines)
         smtp = None
         try:
             if self._smtp_factory is not None:
@@ -299,7 +377,17 @@ class NotificationDispatcher:
                 smtp.starttls()
             if settings.smtp_username:
                 smtp.login(settings.smtp_username, settings.smtp_password)
-            smtp.send_message(message)
+            # Send one message per recipient so personal addresses are never
+            # disclosed to other recipients on the same event.
+            for recipient in recipients:
+                message = EmailMessage()
+                message["From"] = settings.smtp_from
+                message["To"] = recipient
+                message["Subject"] = (
+                    f"[Much Agents] {event.title or event.event}"[:200]
+                )
+                message.set_content(body)
+                smtp.send_message(message)
         except Exception as exc:  # noqa: BLE001 - notification fan-out
             logger.warning(
                 "notification email failed for %s: %s",
@@ -446,7 +534,11 @@ class NotificationService:
                 or target.user_id not in allowed
             ):
                 continue
-            if target.kind not in {COMMENT_MENTION, COMMENT_ASSIGNED}:
+            if target.kind not in {
+                COMMENT_MENTION,
+                COMMENT_ASSIGNED,
+                COMMENT_REPLY,
+            }:
                 continue
             key = (target.user_id, target.kind)
             if key in seen:
@@ -455,6 +547,9 @@ class NotificationService:
             if target.kind == COMMENT_ASSIGNED:
                 title = f"{actor_name} 将一条评论指派给你"
                 event_name = "comment.assigned"
+            elif target.kind == COMMENT_REPLY:
+                title = f"{actor_name} 回复了你的评论"
+                event_name = "comment.reply"
             else:
                 title = f"{actor_name} 在「{section_title or '标书'}」提及了你"
                 event_name = "comment.mention"
@@ -506,7 +601,7 @@ class NotificationService:
             if (record.user_id, record.kind) in event_by_target
         ]
         if events:
-            self._schedule(events)
+            await self._schedule(events)
         return records
 
     async def notify_run_assembled(
@@ -584,7 +679,7 @@ class NotificationService:
             if record.user_id in recipient_by_id
         )
         if notified_ids:
-            self._schedule(
+            await self._schedule(
                 [
                     NotificationEvent(
                         event=event_name,
@@ -712,7 +807,7 @@ class NotificationService:
             )
         )
         if recipient_ids:
-            self._schedule(
+            await self._schedule(
                 [
                     NotificationEvent(
                         event=event_name,
@@ -729,6 +824,106 @@ class NotificationService:
                     )
                 ]
             )
+        return records
+
+    async def notify_comment_due(
+        self,
+        *,
+        run: BidRunRecord,
+        comment_id: str,
+        comment_body: str,
+        due_at: datetime,
+        section_id: str | None,
+        assignee_id: str | None,
+        author_id: str | None,
+    ) -> list[NotificationRecord]:
+        repo = self._repo()
+        members = await repo.list_project_recipients(
+            run.project_id, ("manager", "writer", "reviewer", "viewer")
+        )
+        member_ids = {member.user_id for member in members}
+        candidate = assignee_id or author_id
+        if candidate and candidate in member_ids:
+            recipient_ids = [candidate]
+        else:
+            # Fall back to project managers/reviewers when the comment is
+            # unassigned or its assignee/author is no longer a member.
+            recipient_ids = [
+                member.user_id
+                for member in members
+                if member.role in {"manager", "reviewer"}
+            ]
+        allowed = set(
+            await self._allowed_recipients(
+                list(dict.fromkeys(recipient_ids)), "comment"
+            )
+        )
+        excerpt = comment_body.strip()
+        if len(excerpt) > 200:
+            excerpt = excerpt[:200] + "…"
+        now = datetime.now(timezone.utc)
+        overdue = due_at <= now
+        title = (
+            f"评论已到期：{run.project_name or run.doc_id}"
+            if overdue
+            else f"评论即将到期：{run.project_name or run.doc_id}"
+        )
+        body = (
+            f"到期时间：{due_at.isoformat()}\n"
+            f"意见：{excerpt or '（见评论）'}"
+        )
+        rows: list[dict[str, Any]] = []
+        event_by_user: dict[str, NotificationEvent] = {}
+        for user_id in dict.fromkeys(recipient_ids):
+            if not user_id or user_id not in allowed:
+                continue
+            dedupe = f"comment:{comment_id}:due:{due_at.isoformat()}:{user_id}"
+            rows.append(
+                {
+                    "id": str(uuid4()),
+                    "project_id": run.project_id,
+                    "user_id": user_id,
+                    "kind": COMMENT_DUE,
+                    "title": title[:200],
+                    "body": body[:2000],
+                    "resource_type": "bid_run",
+                    "resource_id": run.run_id,
+                    "run_id": run.run_id,
+                    "doc_id": run.doc_id,
+                    "comment_id": comment_id,
+                    "section_id": section_id,
+                    "actor_id": None,
+                    "actor_name": None,
+                    "dedupe_key": dedupe[:160],
+                }
+            )
+            event_by_user[user_id] = NotificationEvent(
+                event="comment.due",
+                occurred_at=now,
+                project_id=run.project_id,
+                title=title,
+                run_id=run.run_id,
+                doc_id=run.doc_id,
+                comment_id=comment_id,
+                section_id=section_id,
+                recipient_user_ids=(user_id,),
+            )
+        if not rows:
+            return []
+        try:
+            records = await repo.add_notifications(rows)
+        except Exception:  # noqa: BLE001 - reminders must not break maintenance
+            logger.warning(
+                "could not persist comment due notifications", exc_info=True
+            )
+            return []
+        events = [
+            event_by_user[record.user_id]
+            for record in records
+            if record.user_id in event_by_user
+        ]
+        if events:
+            await self._schedule(events)
         return records
 
     async def notify_qualification_expiry(
@@ -812,12 +1007,51 @@ class NotificationService:
                 "could not persist qualification reminders", exc_info=True
             )
             return []
-        self._schedule(events)
+        inserted = {(record.project_id, record.user_id) for record in records}
+        scheduled: list[NotificationEvent] = []
+        for event in events:
+            recipients = tuple(
+                user_id
+                for user_id in event.recipient_user_ids
+                if (event.project_id, user_id) in inserted
+            )
+            if recipients:
+                scheduled.append(
+                    replace(event, recipient_user_ids=recipients)
+                )
+        if scheduled:
+            await self._schedule(scheduled)
         return records
 
-    def _schedule(self, events: list[NotificationEvent]) -> None:
+    async def _schedule(self, events: list[NotificationEvent]) -> None:
         if not events or not self.dispatcher.enabled:
             return
+        emails: dict[str, str] = {}
+        if self.dispatcher.settings.email_ready:
+            user_ids = [
+                user_id
+                for event in events
+                for user_id in event.recipient_user_ids
+            ]
+            try:
+                emails = await self._repo().user_emails_map(user_ids)
+            except Exception:  # noqa: BLE001 - email lookup is best-effort
+                logger.warning(
+                    "could not load notification emails", exc_info=True
+                )
+                emails = {}
+        if emails:
+            events = [
+                replace(
+                    event,
+                    recipient_emails=tuple(
+                        emails[user_id]
+                        for user_id in event.recipient_user_ids
+                        if user_id in emails
+                    ),
+                )
+                for event in events
+            ]
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -853,7 +1087,9 @@ def notification_payload(record: NotificationRecord) -> dict[str, Any]:
 __all__ = [
     "APPROVAL_PENDING",
     "COMMENT_ASSIGNED",
+    "COMMENT_DUE",
     "COMMENT_MENTION",
+    "COMMENT_REPLY",
     "GATE_BLOCKED",
     "NotificationDispatcher",
     "NotificationError",

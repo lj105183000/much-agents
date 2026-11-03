@@ -12,7 +12,13 @@ from api.dispatch import CeleryDispatcher
 from api.jobs import JobStore
 from api.runner import InlineRunner
 from api.service import UploadError
-from api.task_names import BID_QUEUE, BID_TASK_NAME, PARSE_QUEUE, PARSE_TASK_NAME
+from api.task_names import (
+    BID_QUEUE,
+    BID_TASK_NAME,
+    COMMENT_DUE_TASK_NAME,
+    PARSE_QUEUE,
+    PARSE_TASK_NAME,
+)
 from tests.fakes import (
     FakeCeleryApp,
     FakeDispatcher,
@@ -80,6 +86,10 @@ def test_create_celery_app_config(tmp_path: Path) -> None:
     assert app.conf.worker_prefetch_multiplier == 1
     assert app.conf.worker_pool == "solo"
     assert app.conf.broker_transport_options["visibility_timeout"] == 6 * 3600
+    comment_due = app.conf.beat_schedule["check-comment-due"]
+    assert comment_due["task"] == COMMENT_DUE_TASK_NAME
+    assert comment_due["schedule"] == 3600.0
+    assert comment_due["options"]["queue"] == "maintenance"
 
 
 def test_worker_task_wires_store_and_executor(monkeypatch) -> None:

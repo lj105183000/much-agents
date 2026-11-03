@@ -1,15 +1,17 @@
 # 评审评论、指派与实时进度（P2 协作）
 
-> 状态：已实现（2026-11-02）。覆盖 run 级评论、章节定位、@项目成员、处理人指派、解决/重开，以及基于 fetch-SSE 的生成进度实时推送。站内通知与可选 SMTP/Webhook 已实现；项目看板仍为后续项。
+> 状态：已实现（2026-11-03）。覆盖 run 级评论、章节定位、@项目成员、处理人指派、解决/重开、单层回复与截止时间提醒，以及基于 fetch-SSE 的生成进度实时推送。站内通知与可选 SMTP/Webhook/企业微信已实现；项目看板仍为后续项。
 
 ## 1. 数据模型
 
-Alembic `0014` 新增 `bid_comments`：
+Alembic `0014` 新增 `bid_comments`；`0025` 增加 `parent_comment_id`、`due_at` 与 `due_at` 索引：
 
 | 字段 | 说明 |
 |---|---|
 | `id` | UUID 字符串 |
 | `project_id` / `run_id` | 所属项目与投标 run；删除项目/run 时级联删除 |
+| `parent_comment_id` | 可选，父评论 id；只允许一层回复 |
+| `due_at` | 可选，截止时间（带时区）；用于到期提醒 |
 | `section_id` | 可选，指向大纲章节；`NULL` 表示针对整份标书 |
 | `author_id` / `author_name` | 作者快照；用户删除后历史评论仍可读 |
 | `body` | 正文，1–4000 字符，去除首尾空白 |
@@ -29,8 +31,8 @@ Alembic `0014` 新增 `bid_comments`：
 |---|---|---|---|
 | `GET` | `/api/project-members` | 项目只读 | 当前项目的成员摘要（`user_id/username/display_name/role`），用于 @ 与指派选择；不返回全局用户列表 |
 | `GET` | `/api/bid-runs/{run_id}/comments` | 项目只读 | 参数 `status=open\|resolved`、`section_id`、`limit`（1–500，默认 200），按时间倒序 |
-| `POST` | `/api/bid-runs/{run_id}/comments` | 全局 review + 项目 review | `{body, section_id?, mentions?: [user_id], assignee_id?}`；提及/处理人必须是项目成员 |
-| `PATCH` | `/api/bid-runs/{run_id}/comments/{comment_id}` | 全局 review + 项目 review | `{body?, status?, assignee_id?}`；正文仅作者或 admin 可改，指派/解决由复核角色处理 |
+| `POST` | `/api/bid-runs/{run_id}/comments` | 全局 review + 项目 review | `{body, section_id?, parent_comment_id?, due_at?, mentions?: [user_id], assignee_id?}`；提及/处理人必须是项目成员 |
+| `PATCH` | `/api/bid-runs/{run_id}/comments/{comment_id}` | 全局 review + 项目 review | `{body?, status?, assignee_id?, due_at?}`；正文仅作者或 admin 可改，指派/解决由复核角色处理 |
 | `GET` | `/api/bid-runs/{run_id}/events` | 项目只读 | SSE 实时进度，`text/event-stream` |
 
 示例：
@@ -47,8 +49,11 @@ curl -X POST http://127.0.0.1:8001/api/bid-runs/<run_id>/comments \
 
 - `status=resolved` 记录解决人与时间；重新打开会清空这三个字段。
 - `assignee_id: null` 表示取消指派；省略该字段表示不修改。
-- 提及去重；`mentions` 最多 20 个。成员目录不可用（如本地无 PostgreSQL）时，不带提及/指派的评论仍可创建，带提及/指派返回 503。
-- 审计只记录 `comment_id/section_id/assignee_id/status/changed_fields/mention_count` 等元数据，不记录评论正文。
+- `due_at: null` 表示清除截止时间；省略该字段表示不修改。前端用 `datetime-local` 输入，提交前转换为 UTC ISO 字符串。
+- `parent_comment_id` 只能指向同一 run 的顶层评论；回复一条回复、或显式指定与父评论不同的章节返回 422。回复未指定章节时继承父评论章节。
+- 回复创建成功后会通知父评论作者（`comment_reply`）；截止时间由每小时维护任务扫描，到期前 24 小时内通知处理人/作者（`comment_due`），按评论 + 到期时间去重，解决后不再提醒。
+- 提及去重；`mentions` 最多 20 个。成员目录不可用（如本地无 PostgreSQL）时，不带提及/指派/回复目标的评论仍可创建；带提及/指派返回 503，回复仍可创建但不发回复通知。
+- 审计只记录 `comment_id/section_id/assignee_id/status/parent_comment_id/due_at/changed_fields/mention_count` 等元数据，不记录评论正文。
 
 ## 3. SSE 实时进度
 
@@ -71,13 +76,12 @@ data: {"run_id":"...","status":"generating","percent":40,...,"job":{"percent":42
 ## 4. 权限与前端
 
 - 只读角色（viewer）可查看评论与实时进度，不能发表、解决、指派或编辑。
-- 评论 composer 支持章节下拉、处理人下拉与 @ 成员多选；作者可编辑自己的正文，admin 可编辑任意正文。
+- 评论 composer 支持章节下拉、处理人下拉、@ 成员多选、可选截止时间与「回复」引用；回复以平铺列表展示父评论摘要，作者可编辑自己的正文，admin 可编辑任意正文。
 - 所有写操作仍由后端守卫与项目隔离兜底；前端隐藏按钮不构成授权。
 - 处理人/提及只能来自 `GET /api/project-members`；该接口只返回当前项目成员摘要。
 
 ## 5. 尚未实现
 
-- 评论线程/回复/删除、截止时间与项目看板。
-- 评论删除/附件/线程回复。
+- 评论删除、多级线程与评论附件；当前只支持一层回复，删除评论仍未实现。
 - 事件追加表与 `Last-Event-ID` 断点续传；当前是快照流，断线重连后由下一帧恢复完整状态。
 - 项目看板（按负责人/状态聚合）与编辑租约。

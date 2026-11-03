@@ -6,6 +6,7 @@ PARSE_QUEUE = "parse"
 BID_TASK_NAME = "bidding.write_bid"
 MAINTENANCE_TASK_NAME = "much_agents.reap_stale_bid_runs"
 QUALIFICATION_EXPIRY_TASK_NAME = "much_agents.check_qualification_expiry"
+COMMENT_DUE_TASK_NAME = "much_agents.check_comment_due"
 MAINTENANCE_QUEUE = "maintenance"
 # Production separates parse and bid workers so long bid runs cannot starve
 # uploads. The Windows development launcher consumes both queues with one

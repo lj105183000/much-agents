@@ -64,6 +64,7 @@ class UserRecord:
     id: str
     username: str
     display_name: str
+    email: str | None
     password_hash: str
     role: str
     is_active: bool
@@ -208,6 +209,18 @@ def validate_username(username: str) -> str:
     return normalized
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_email(value: str | None) -> str | None:
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if len(text) > 254 or not _EMAIL_RE.fullmatch(text):
+        raise AuthError(400, "邮箱格式无效")
+    return text
+
+
 def validate_password(password: str, *, username: str = "") -> str:
     if not isinstance(password, str):
         raise AuthError(400, "密码格式不正确")
@@ -262,6 +275,7 @@ def _user_record(row: UserRow) -> UserRecord:
         id=row.id,
         username=row.username,
         display_name=row.display_name,
+        email=row.email,
         password_hash=row.password_hash,
         role=row.role,
         is_active=bool(row.is_active),
@@ -290,6 +304,14 @@ class AuthRepository:
             row = await session.get(UserRow, user_id)
             return _user_record(row) if row is not None else None
 
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        statement = select(UserRow).where(
+            func.lower(UserRow.email) == email.strip().lower()
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            return _user_record(row) if row is not None else None
+
     async def list_users(self, limit: int = 200) -> list[UserRecord]:
         statement = select(UserRow).order_by(UserRow.username).limit(limit)
         async with self._session_factory() as session:
@@ -301,6 +323,7 @@ class AuthRepository:
         *,
         username: str,
         display_name: str,
+        email: str | None,
         password_hash: str,
         role: str,
     ) -> UserRecord:
@@ -309,6 +332,7 @@ class AuthRepository:
             id=uuid4().hex,
             username=username,
             display_name=display_name,
+            email=email,
             password_hash=password_hash,
             role=role,
             is_active=True,
@@ -322,7 +346,7 @@ class AuthRepository:
                     session.add(row)
                     await session.flush()
         except IntegrityError as exc:
-            raise AuthError(409, "用户名已存在") from exc
+            raise AuthError(409, "用户名或邮箱已存在") from exc
         return _user_record(row)
 
     async def update_user(
@@ -332,54 +356,59 @@ class AuthRepository:
         enforce_last_admin: bool = False,
         **fields: object,
     ) -> UserRecord | None:
-        allowed = {"display_name", "role", "is_active"}
+        allowed = {"display_name", "email", "role", "is_active"}
         values = {key: value for key, value in fields.items() if key in allowed}
         if not values:
             return await self.get_user(user_id)
         values["updated_at"] = _now()
         statement = update(UserRow).where(UserRow.id == user_id).values(**values)
-        async with self._session_factory() as session:
-            async with session.begin():
-                if enforce_last_admin:
-                    # Lock admin mutations and re-check inside the same
-                    # transaction so two concurrent demotions cannot both
-                    # observe two active admins.
-                    await session.execute(
-                        text("SELECT pg_advisory_xact_lock(:key)"),
-                        {"key": ADMIN_UPDATE_LOCK_ID},
-                    )
-                    current = await session.get(
-                        UserRow, user_id, with_for_update=True
-                    )
-                    if current is None:
-                        return None
-                    removes_admin = (
-                        current.role == "admin"
-                        and bool(current.is_active)
-                        and (
-                            values.get("role", current.role) != "admin"
-                            or values.get("is_active", True) is False
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    if enforce_last_admin:
+                        # Lock admin mutations and re-check inside the same
+                        # transaction so two concurrent demotions cannot both
+                        # observe two active admins.
+                        await session.execute(
+                            text("SELECT pg_advisory_xact_lock(:key)"),
+                            {"key": ADMIN_UPDATE_LOCK_ID},
                         )
-                    )
-                    if removes_admin:
-                        count = int(
-                            (
-                                await session.execute(
-                                    select(func.count(UserRow.id)).where(
-                                        UserRow.role == "admin",
-                                        UserRow.is_active.is_(True),
+                        current = await session.get(
+                            UserRow, user_id, with_for_update=True
+                        )
+                        if current is None:
+                            return None
+                        removes_admin = (
+                            current.role == "admin"
+                            and bool(current.is_active)
+                            and (
+                                values.get("role", current.role) != "admin"
+                                or values.get("is_active", True) is False
+                            )
+                        )
+                        if removes_admin:
+                            count = int(
+                                (
+                                    await session.execute(
+                                        select(func.count(UserRow.id)).where(
+                                            UserRow.role == "admin",
+                                            UserRow.is_active.is_(True),
+                                        )
                                     )
+                                ).scalar_one()
+                                or 0
+                            )
+                            if count <= 1:
+                                raise AuthError(
+                                    409, "不能停用或降级最后一个管理员"
                                 )
-                            ).scalar_one()
-                            or 0
-                        )
-                        if count <= 1:
-                            raise AuthError(409, "不能停用或降级最后一个管理员")
-                result = await session.execute(statement)
-                if result.rowcount == 0:
-                    return None
-                row = await session.get(UserRow, user_id)
-                return _user_record(row) if row is not None else None
+                    result = await session.execute(statement)
+                    if result.rowcount == 0:
+                        return None
+                    row = await session.get(UserRow, user_id)
+                    return _user_record(row) if row is not None else None
+        except IntegrityError as exc:
+            raise AuthError(409, "邮箱已被使用") from exc
 
     async def update_password(self, user_id: str, password_hash: str) -> bool:
         statement = (
@@ -589,6 +618,7 @@ class AuthService:
         password: str,
         *,
         display_name: str | None = None,
+        email: str | None = None,
         role: str = "viewer",
     ) -> UserRecord:
         normalized = validate_username(username)
@@ -598,10 +628,16 @@ class AuthService:
         name = (display_name or "").strip() or normalized
         if len(name) > 128:
             raise AuthError(400, "显示名称过长")
+        normalized_email = normalize_email(email)
+        if normalized_email is not None:
+            existing = await self.repo.get_user_by_email(normalized_email)
+            if existing is not None:
+                raise AuthError(409, "邮箱已被使用")
         password_digest = await self._hash_password(password)
         return await self.repo.create_user(
             username=normalized,
             display_name=name,
+            email=normalized_email,
             password_hash=password_digest,
             role=role,
         )
@@ -614,6 +650,8 @@ class AuthService:
         user_id: str,
         *,
         display_name: str | None = None,
+        email: str | None = None,
+        update_email: bool = False,
         role: str | None = None,
         is_active: bool | None = None,
     ) -> UserRecord:
@@ -628,6 +666,13 @@ class AuthService:
             if len(name) > 128:
                 raise AuthError(400, "显示名称过长")
             fields["display_name"] = name
+        if update_email:
+            normalized_email = normalize_email(email)
+            if normalized_email is not None:
+                existing = await self.repo.get_user_by_email(normalized_email)
+                if existing is not None and existing.id != user_id:
+                    raise AuthError(409, "邮箱已被使用")
+            fields["email"] = normalized_email
         if role is not None:
             if role not in ROLES:
                 raise AuthError(400, "无效的角色")

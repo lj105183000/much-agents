@@ -53,6 +53,8 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   const [sectionId, setSectionId] = useState('')
   const [assigneeId, setAssigneeId] = useState('')
   const [mentions, setMentions] = useState<string[]>([])
+  const [replyTo, setReplyTo] = useState<BidCommentView | null>(null)
+  const [dueAt, setDueAt] = useState('')
   const [creating, setCreating] = useState(false)
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -62,6 +64,13 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.user_id, member])),
     [members],
+  )
+  const commentById = useMemo(
+    () =>
+      new Map(
+        comments.map((comment) => [comment.comment_id, comment]),
+      ),
+    [comments],
   )
   const currentMember = user ? memberById.get(user.id) : undefined
   const sections = outline?.sections ?? []
@@ -122,6 +131,8 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
       await api.createBidComment(runId, {
         body: trimmed,
         section_id: sectionId || null,
+        parent_comment_id: replyTo?.comment_id ?? null,
+        due_at: dueAt ? new Date(dueAt).toISOString() : null,
         assignee_id: assigneeId || null,
         mentions,
       })
@@ -129,6 +140,8 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
       setMentions([])
       setAssigneeId('')
       setSectionId('')
+      setReplyTo(null)
+      setDueAt('')
       await load()
     } catch (caught) {
       setError(errorMessage(caught, '评论发表失败'))
@@ -228,6 +241,20 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
 
       {canReview ? (
         <div className="mt-4 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
+          {replyTo ? (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-cyan-200">
+              <span className="truncate">
+                回复 {replyTo.author_name}：{replyTo.body.slice(0, 120)}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-slate-400 hover:text-slate-200"
+                onClick={() => setReplyTo(null)}
+              >
+                取消回复
+              </button>
+            </div>
+          ) : null}
           <Field label="发表评论" htmlFor="comment-body">
             <textarea
               id="comment-body"
@@ -240,11 +267,16 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
             />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="关联章节" htmlFor="comment-section">
+            <Field
+              label="关联章节"
+              htmlFor="comment-section"
+              hint={replyTo ? '回复时继承父评论章节' : undefined}
+            >
               <select
                 id="comment-section"
                 className={selectClass}
                 value={sectionId}
+                disabled={replyTo !== null}
                 onChange={(event) => setSectionId(event.target.value)}
               >
                 <option value="">整份标书</option>
@@ -278,6 +310,19 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
               </select>
             </Field>
           </div>
+          <Field
+            label="截止时间（可选）"
+            htmlFor="comment-due"
+            hint="到期前 24 小时内会通知处理人或作者。"
+          >
+            <input
+              id="comment-due"
+              type="datetime-local"
+              className={selectClass}
+              value={dueAt}
+              onChange={(event) => setDueAt(event.target.value)}
+            />
+          </Field>
           {members.length ? (
             <div>
               <p className="mb-1.5 text-xs font-medium text-slate-300">
@@ -362,7 +407,28 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                   <span className="text-[10px] text-slate-400">
                     {formatDate(comment.created_at)}
                   </span>
+                  {comment.due_at ? (
+                    <Badge
+                      tone={
+                        comment.status === 'resolved' ? 'neutral' : 'amber'
+                      }
+                    >
+                      到期 {formatDate(comment.due_at)}
+                    </Badge>
+                  ) : null}
                 </div>
+
+                {comment.parent_comment_id ? (
+                  <p className="mt-2 border-l-2 border-slate-700 pl-2 text-[11px] leading-5 text-slate-500">
+                    回复{' '}
+                    {commentById.get(comment.parent_comment_id)?.author_name ??
+                      '上级评论'}
+                    ：
+                    {(
+                      commentById.get(comment.parent_comment_id)?.body ?? ''
+                    ).slice(0, 120)}
+                  </p>
+                ) : null}
 
                 {editingId === comment.comment_id ? (
                   <div className="mt-2 space-y-2">
@@ -471,6 +537,16 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                         取消指派
                       </Button>
                     ) : null}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setReplyTo(comment)
+                        setSectionId(comment.section_id ?? '')
+                      }}
+                    >
+                      回复
+                    </Button>
                     {authorCanEdit && editingId !== comment.comment_id ? (
                       <Button
                         variant="ghost"

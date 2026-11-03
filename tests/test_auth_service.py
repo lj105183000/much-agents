@@ -217,3 +217,40 @@ def test_password_change_and_reset_revoke_sessions() -> None:
         await service.authenticate("alice", "third password value")
 
     asyncio.run(scenario())
+
+
+def test_user_email_is_normalized_unique_and_clearable() -> None:
+    async def scenario() -> None:
+        service, _repo = make_service()
+        user = await service.create_user(
+            "alice",
+            PASSWORD,
+            email="  Alice@Example.COM ",
+        )
+        assert user.email == "alice@example.com"
+
+        with pytest.raises(AuthError) as invalid:
+            await service.create_user(
+                "bob", PASSWORD, email="not-an-email"
+            )
+        assert invalid.value.status_code == 400
+
+        with pytest.raises(AuthError) as duplicate:
+            await service.create_user(
+                "bob", PASSWORD, email="ALICE@example.com"
+            )
+        assert duplicate.value.status_code == 409
+
+        updated = await service.update_user(
+            user.id, email="new@example.com", update_email=True
+        )
+        assert updated.email == "new@example.com"
+
+        cleared = await service.update_user(
+            user.id, email=None, update_email=True
+        )
+        assert cleared.email is None
+        kept = await service.update_user(user.id, display_name="Alice")
+        assert kept.email is None
+
+    asyncio.run(scenario())

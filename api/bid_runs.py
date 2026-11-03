@@ -966,6 +966,8 @@ class BidRunService:
         return BidCommentView(
             comment_id=record.comment_id,
             run_id=record.run_id,
+            parent_comment_id=record.parent_comment_id,
+            due_at=record.due_at,
             section_id=record.section_id,
             section_title=section_title,
             author_id=record.author_id,
@@ -1047,12 +1049,28 @@ class BidRunService:
             raise BidRunError(422, "comment body must not be blank")
         if len(body) > 4000:
             raise BidRunError(422, "comment body is too long")
+        due_at = payload.due_at
+        if due_at is not None and due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=timezone.utc)
 
         sections = await repo.get_outline(run_id)
         titles = {section.section_id: section.title for section in sections}
         section_id = (payload.section_id or "").strip() or None
         if section_id is not None and section_id not in titles:
             raise BidRunError(422, f"unknown outline section: {section_id}")
+        parent_comment_id = (payload.parent_comment_id or "").strip() or None
+        if parent_comment_id is not None:
+            parent = await repo.get_comment(run_id, parent_comment_id)
+            if parent is None:
+                raise BidRunError(422, "unknown parent comment")
+            if parent.parent_comment_id is not None:
+                raise BidRunError(422, "only one level of replies is supported")
+            if section_id is None:
+                section_id = parent.section_id
+            elif parent.section_id and section_id != parent.section_id:
+                raise BidRunError(
+                    422, "reply must target the same outline section"
+                )
 
         deduped: list[BidCommentMention] = []
         seen: set[str] = set()
@@ -1073,6 +1091,8 @@ class BidRunService:
             mentions=[mention.model_dump() for mention in deduped],
             assignee_id=payload.assignee_id,
             assignee_name=assignee_name,
+            parent_comment_id=parent_comment_id,
+            due_at=due_at,
         )
         return self._comment_payload(record, titles.get(section_id or ""))
 
@@ -1113,6 +1133,12 @@ class BidRunService:
             values["assignee_id"] = payload.assignee_id
             if set_assignee:
                 values["assignee_name"] = assignee_name
+
+        if "due_at" in fields:
+            due_at = payload.due_at
+            if due_at is not None and due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            values["due_at"] = due_at
 
         if "status" in fields:
             if payload.status is None:

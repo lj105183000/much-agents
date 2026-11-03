@@ -23,12 +23,14 @@ import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from '../lib/roles'
 interface CreateForm {
   username: string
   display_name: string
+  email: string
   role: UserRole
   password: string
 }
 
 interface EditForm {
   display_name: string
+  email: string
   role: UserRole
   is_active: boolean
 }
@@ -36,6 +38,7 @@ interface EditForm {
 const EMPTY_CREATE: CreateForm = {
   username: '',
   display_name: '',
+  email: '',
   role: 'viewer',
   password: '',
 }
@@ -55,6 +58,7 @@ export function UsersView() {
   const [createForm, setCreateForm] = useState<CreateForm>(EMPTY_CREATE)
   const [editForm, setEditForm] = useState<EditForm>({
     display_name: '',
+    email: '',
     role: 'viewer',
     is_active: true,
   })
@@ -112,6 +116,7 @@ export function UsersView() {
     setTarget(user)
     setEditForm({
       display_name: user.display_name,
+      email: user.email ?? '',
       role: user.role,
       is_active: user.is_active,
     })
@@ -143,6 +148,7 @@ export function UsersView() {
         username: createForm.username.trim(),
         password: createForm.password,
         display_name: createForm.display_name.trim() || undefined,
+        email: createForm.email.trim() || undefined,
         role: createForm.role,
       })
       setMode(null)
@@ -161,6 +167,7 @@ export function UsersView() {
     try {
       await authApi.updateUser(target.id, {
         display_name: editForm.display_name.trim() || undefined,
+        email: editForm.email.trim(),
         role: editForm.role,
         is_active: editForm.is_active,
       })
@@ -297,6 +304,7 @@ export function UsersView() {
                           </p>
                           <p className="truncate text-[11px] text-slate-500">
                             @{user.username}
+                            {user.email ? ` · ${user.email}` : ''}
                           </p>
                         </div>
                       </div>
@@ -401,6 +409,25 @@ export function UsersView() {
             />
           </Field>
           <Field
+            label="邮箱"
+            htmlFor="new-email"
+            hint="可选；用于按用户发送通知邮件，留空使用全局收件人。"
+          >
+            <input
+              id="new-email"
+              type="email"
+              className={inputClass}
+              value={createForm.email}
+              onChange={(event) =>
+                setCreateForm((current) => ({
+                  ...current,
+                  email: event.target.value,
+                }))
+              }
+              placeholder="user@example.com"
+            />
+          </Field>
+          <Field
             label="角色"
             htmlFor="new-role"
             hint={ROLE_HINTS[createForm.role]}
@@ -476,6 +503,24 @@ export function UsersView() {
                 setEditForm((current) => ({
                   ...current,
                   display_name: event.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field
+            label="邮箱"
+            htmlFor="edit-email"
+            hint="可选；用于按用户发送通知邮件，留空使用全局收件人。"
+          >
+            <input
+              id="edit-email"
+              type="email"
+              className={inputClass}
+              value={editForm.email}
+              onChange={(event) =>
+                setEditForm((current) => ({
+                  ...current,
+                  email: event.target.value,
                 }))
               }
             />

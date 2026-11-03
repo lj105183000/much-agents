@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from src.bidding.config import BidSettings
 from src.parsing.config import Settings
@@ -26,6 +27,7 @@ from .service import execute_parse_job
 from .storage_runtime import build_runtime_storage
 from .task_names import (
     BID_TASK_NAME,
+    COMMENT_DUE_TASK_NAME,
     MAINTENANCE_TASK_NAME,
     PARSE_TASK_NAME,
     QUALIFICATION_EXPIRY_TASK_NAME,
@@ -193,3 +195,52 @@ def check_qualification_expiry_task() -> None:
         return
     if sent:
         logger.info("sent %d qualification expiry notifications", sent)
+
+
+@celery_app.task(name=COMMENT_DUE_TASK_NAME, ignore_result=True)
+def check_comment_due_task() -> None:
+    api_settings = ApiSettings.from_env()
+    database = Database(api_settings.database_url)
+    if not database.enabled or database.session_factory is None:
+        return
+
+    async def run() -> int:
+        try:
+            repo = BidRunRepository(database.session_factory)
+            notifications = NotificationService(
+                repo,
+                NotificationSettings.from_env(),
+                dispatch_inline=True,
+            )
+            now = datetime.now(timezone.utc)
+            comments = await repo.due_comments(
+                before=now + timedelta(hours=24)
+            )
+            sent = 0
+            for comment in comments:
+                if comment.due_at is None:
+                    continue
+                run_record = await repo.get_run(comment.run_id)
+                if run_record is None:
+                    continue
+                records = await notifications.notify_comment_due(
+                    run=run_record,
+                    comment_id=comment.comment_id,
+                    comment_body=comment.body,
+                    due_at=comment.due_at,
+                    section_id=comment.section_id,
+                    assignee_id=comment.assignee_id,
+                    author_id=comment.author_id,
+                )
+                sent += len(records)
+            return sent
+        finally:
+            await database.close()
+
+    try:
+        sent = asyncio.run(run())
+    except Exception:  # noqa: BLE001 - maintenance must not crash the worker
+        logger.exception("comment due check failed")
+        return
+    if sent:
+        logger.info("sent %d comment due notifications", sent)

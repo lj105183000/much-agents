@@ -86,6 +86,7 @@ from .jobs import JobStoreError
 from .notifications import (
     COMMENT_ASSIGNED,
     COMMENT_MENTION,
+    COMMENT_REPLY,
     NotificationService,
     NotificationTarget,
     notification_payload,
@@ -323,6 +324,7 @@ def _user_summary(record: UserRecord) -> UserSummary:
         id=record.id,
         username=record.username,
         display_name=record.display_name,
+        email=record.email,
         role=record.role,
         is_active=record.is_active,
         last_login_at=record.last_login_at,
@@ -970,6 +972,7 @@ def build_router() -> APIRouter:
             payload.username,
             payload.password,
             display_name=payload.display_name,
+            email=payload.email,
             role=payload.role,
         )
         await projects.add_default_member(record.id, record.role)
@@ -993,6 +996,8 @@ def build_router() -> APIRouter:
         record = await service.update_user(
             user_id,
             display_name=payload.display_name,
+            email=payload.email,
+            update_email="email" in payload.model_fields_set,
             role=payload.role,
             is_active=payload.is_active,
         )
@@ -1806,7 +1811,11 @@ def build_router() -> APIRouter:
         notifications: NotificationService = Depends(get_notification_service),
     ) -> BidCommentView:
         assignee_id = (payload.assignee_id or "").strip() or None
-        needs_members = bool(payload.mentions) or assignee_id is not None
+        needs_members = (
+            bool(payload.mentions)
+            or assignee_id is not None
+            or bool(payload.parent_comment_id)
+        )
         members = (
             await _comment_member_map(projects, context) if needs_members else None
         )
@@ -1870,6 +1879,10 @@ def build_router() -> APIRouter:
                 "section_id": result.section_id,
                 "assignee_id": result.assignee_id,
                 "mention_count": len(result.mentions),
+                "parent_comment_id": result.parent_comment_id,
+                "due_at": result.due_at.isoformat()
+                if result.due_at
+                else None,
             },
         )
         targets = [
@@ -1888,6 +1901,23 @@ def build_router() -> APIRouter:
                     kind=COMMENT_ASSIGNED,
                 )
             )
+        if result.parent_comment_id:
+            parent = await service.get_comment(run_id, result.parent_comment_id)
+            existing_users = {target.user_id for target in targets}
+            if (
+                parent.author_id
+                and parent.author_id != user.id
+                and parent.author_id not in existing_users
+                and members is not None
+                and parent.author_id in members
+            ):
+                targets.append(
+                    NotificationTarget(
+                        user_id=parent.author_id,
+                        display_name=parent.author_name,
+                        kind=COMMENT_REPLY,
+                    )
+                )
         await notifications.notify_comment(
             run_id=run_id,
             comment_id=result.comment_id,
