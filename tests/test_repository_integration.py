@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.bid_run_repo import BidRunRepository
@@ -155,8 +155,8 @@ def test_month_cost_uses_llm_call_log_timestamps() -> None:
 async def _exercise_month_cost() -> None:
     engine = create_async_engine(TEST_DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    run_id = f"it-cost-{uuid4().hex}"
-    doc_id = f"it-cost-doc-{uuid4().hex}"
+    run_id = f"ic-{uuid4().hex[:20]}"
+    doc_id = f"icd-{uuid4().hex[:20]}"
     repository = BidRunRepository(factory)
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -170,6 +170,7 @@ async def _exercise_month_cost() -> None:
                     filename="cost.pdf",
                 )
             )
+            await session.flush()
             session.add(
                 BidRunRow(
                     id=run_id,
@@ -251,6 +252,89 @@ async def _exercise_month_cost() -> None:
             await session.execute(
                 delete(RunUsageRow).where(RunUsageRow.run_id == run_id)
             )
+            await session.execute(
+                delete(BidRunRow).where(BidRunRow.id == run_id)
+            )
+            await session.execute(
+                delete(DocumentRow).where(
+                    DocumentRow.project_id == DEFAULT_PROJECT_ID,
+                    DocumentRow.doc_id == doc_id,
+                )
+            )
+            await session.commit()
+        await engine.dispose()
+
+
+def test_assembly_claim_fencing_and_queued_reaper() -> None:
+    asyncio.run(_exercise_assembly_lease())
+
+
+async def _exercise_assembly_lease() -> None:
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    run_id = f"il-{uuid4().hex[:20]}"
+    doc_id = f"ild-{uuid4().hex[:20]}"
+    repository = BidRunRepository(factory)
+    now = datetime.now(timezone.utc)
+    try:
+        async with factory() as session:
+            session.add(
+                DocumentRow(
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    filename="lease.pdf",
+                )
+            )
+            await session.flush()
+            session.add(
+                BidRunRow(
+                    id=run_id,
+                    project_id=DEFAULT_PROJECT_ID,
+                    doc_id=doc_id,
+                    status="paused",
+                    revision=1,
+                )
+            )
+            await session.commit()
+
+        assert await repository.claim_assembly(
+            run_id, assembly_token="token-a"
+        )
+        assert not await repository.claim_assembly(
+            run_id, assembly_token="token-b"
+        )
+        assert not await repository.update_run_owned(
+            run_id,
+            assembly_token="stale",
+            allowed_statuses=("assembling",),
+            status="assembled",
+        )
+        assert await repository.update_run_owned(
+            run_id,
+            assembly_token="token-a",
+            allowed_statuses=("assembling",),
+            status="assembled",
+            clear_assembly_token=True,
+        )
+
+        async with factory() as session:
+            await session.execute(
+                update(BidRunRow)
+                .where(BidRunRow.id == run_id)
+                .values(
+                    status="queued",
+                    updated_at=now - timedelta(seconds=2000),
+                )
+            )
+            await session.commit()
+        reaped = await repository.reap_stale(
+            stale_seconds=300, queue_timeout_seconds=600
+        )
+        assert run_id in reaped
+        run = await repository.get_run(run_id)
+        assert run is not None and run.status == "paused"
+    finally:
+        async with factory() as session:
             await session.execute(
                 delete(BidRunRow).where(BidRunRow.id == run_id)
             )
