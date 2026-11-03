@@ -164,6 +164,12 @@ from .schemas import (
     BidSectionDetail,
     BidSectionUpdateRequest,
     BidTemplateListResponse,
+    ProjectBoardAssignee,
+    ProjectBoardCommentTotals,
+    ProjectBoardRecentComment,
+    ProjectBoardResponse,
+    ProjectBoardRunTotals,
+    ProjectBoardSection,
     BidTemplateUpdateRequest,
     BidTemplateView,
 )
@@ -1161,6 +1167,127 @@ class BidRunService:
         titles = {section.section_id: section.title for section in sections}
         return self._comment_payload(
             updated, titles.get(updated.section_id or "")
+        )
+
+    async def delete_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+        is_admin: bool,
+    ) -> int:
+        """Soft-delete a comment (and its replies); returns reply count."""
+
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        if not is_admin and actor_id != record.author_id:
+            raise BidRunError(403, "only the author can delete a comment")
+        result = await repo.soft_delete_comment(
+            run_id,
+            comment_id,
+            deleted_by=actor_id,
+            deleted_by_name=actor_name,
+        )
+        if result is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        return result[1]
+
+    async def project_board(self, project_id: str) -> ProjectBoardResponse:
+        repo = self._repo()
+        now = datetime.now(timezone.utc)
+        due_soon_before = now + timedelta(hours=24)
+        assignee_stats = await repo.project_comment_assignee_stats(
+            project_id,
+            now=now,
+            due_soon_before=due_soon_before,
+        )
+        section_stats = await repo.project_comment_section_stats(
+            project_id, now=now
+        )
+        recent = await repo.recent_project_comments(project_id)
+        runs = await repo.list_runs(project_id=project_id, limit=1000)
+
+        open_count = sum(stat.open_count for stat in assignee_stats)
+        resolved_count = sum(stat.resolved_count for stat in assignee_stats)
+        overdue_count = sum(stat.overdue_count for stat in assignee_stats)
+        due_soon_count = sum(stat.due_soon_count for stat in assignee_stats)
+        unassigned_open = sum(
+            stat.open_count for stat in assignee_stats if not stat.assignee_id
+        )
+        active = sum(
+            1 for run in runs if run.status in ACTIVE_RUN_STATUSES
+        )
+        assembled = sum(1 for run in runs if run.status == "assembled")
+        paused = sum(1 for run in runs if run.status == "paused")
+        failed = sum(1 for run in runs if run.status == "failed")
+        gate_blocked = sum(1 for run in runs if run.gate_status == "block")
+
+        def _excerpt(text: str, limit: int = 160) -> str:
+            stripped = text.strip()
+            return stripped if len(stripped) <= limit else stripped[:limit] + "…"
+
+        return ProjectBoardResponse(
+            project_id=project_id,
+            generated_at=now,
+            comments=ProjectBoardCommentTotals(
+                open=open_count,
+                resolved=resolved_count,
+                overdue=overdue_count,
+                due_soon=due_soon_count,
+                unassigned=unassigned_open,
+            ),
+            runs=ProjectBoardRunTotals(
+                total=len(runs),
+                active=active,
+                assembled=assembled,
+                paused=paused,
+                failed=failed,
+                gate_blocked=gate_blocked,
+            ),
+            assignees=[
+                ProjectBoardAssignee(
+                    user_id=stat.assignee_id,
+                    display_name=stat.assignee_name or "未指派",
+                    open=stat.open_count,
+                    resolved=stat.resolved_count,
+                    overdue=stat.overdue_count,
+                    due_soon=stat.due_soon_count,
+                )
+                for stat in assignee_stats
+            ],
+            sections=[
+                ProjectBoardSection(
+                    section_id=stat.section_id,
+                    section_title=stat.section_title,
+                    open=stat.open_count,
+                    overdue=stat.overdue_count,
+                )
+                for stat in section_stats
+            ],
+            recent_comments=[
+                ProjectBoardRecentComment(
+                    comment_id=item.comment_id,
+                    run_id=item.run_id,
+                    doc_id=item.doc_id,
+                    project_name=item.project_name,
+                    section_id=item.section_id,
+                    section_title=item.section_title,
+                    author_name=item.author_name,
+                    assignee_id=item.assignee_id,
+                    assignee_name=item.assignee_name,
+                    body_excerpt=_excerpt(item.body),
+                    due_at=item.due_at,
+                    created_at=item.created_at,
+                )
+                for item in recent
+            ],
         )
 
     async def event_snapshot(self, run_id: str) -> BidRunEventSnapshot:

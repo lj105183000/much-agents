@@ -8,6 +8,7 @@ export type ViewKey =
   | 'search'
   | 'library'
   | 'history'
+  | 'board'
   | 'projects'
   | 'analytics'
   | 'audit'
@@ -846,6 +847,64 @@ export interface BidCommentView {
 export interface BidCommentListResponse {
   run_id: string
   comments: BidCommentView[]
+}
+
+export interface ProjectBoardCommentTotals {
+  open: number
+  resolved: number
+  overdue: number
+  due_soon: number
+  unassigned: number
+}
+
+export interface ProjectBoardRunTotals {
+  total: number
+  active: number
+  assembled: number
+  paused: number
+  failed: number
+  gate_blocked: number
+}
+
+export interface ProjectBoardAssignee {
+  user_id: string | null
+  display_name: string
+  open: number
+  resolved: number
+  overdue: number
+  due_soon: number
+}
+
+export interface ProjectBoardSection {
+  section_id: string | null
+  section_title: string | null
+  open: number
+  overdue: number
+}
+
+export interface ProjectBoardRecentComment {
+  comment_id: string
+  run_id: string
+  doc_id: string
+  project_name: string | null
+  section_id: string | null
+  section_title: string | null
+  author_name: string
+  assignee_id: string | null
+  assignee_name: string | null
+  body_excerpt: string
+  due_at: string | null
+  created_at: string
+}
+
+export interface ProjectBoard {
+  project_id: string
+  generated_at: string
+  comments: ProjectBoardCommentTotals
+  runs: ProjectBoardRunTotals
+  assignees: ProjectBoardAssignee[]
+  sections: ProjectBoardSection[]
+  recent_comments: ProjectBoardRecentComment[]
 }
 
 export interface BidCommentCreateInput {

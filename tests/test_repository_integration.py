@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.bid_run_repo import BidRunRepository
 from api.database import (
+    BidOutlineSectionRow,
     BidRunRow,
     BidSectionStateRow,
     DocumentRow,
@@ -361,6 +362,7 @@ async def _exercise_comment_due_and_emails() -> None:
     user_id = uuid4().hex
     due_comment_id = uuid4().hex
     later_comment_id = uuid4().hex
+    reply_comment_id = uuid4().hex
     repository = BidRunRepository(factory)
     now = datetime.now(timezone.utc)
     try:
@@ -397,12 +399,24 @@ async def _exercise_comment_due_and_emails() -> None:
                 )
             )
             await session.commit()
+        async with factory() as session:
+            session.add(
+                BidOutlineSectionRow(
+                    run_id=run_id,
+                    section_id="s1",
+                    title="施工组织设计",
+                    kind="narrative",
+                    level=2,
+                    order_index=1,
+                )
+            )
+            await session.commit()
 
         await repository.add_comment(
             comment_id=due_comment_id,
             project_id=DEFAULT_PROJECT_ID,
             run_id=run_id,
-            section_id=None,
+            section_id="s1",
             author_id=user_id,
             author_name="Integration User",
             body="即将到期",
@@ -415,7 +429,7 @@ async def _exercise_comment_due_and_emails() -> None:
             comment_id=later_comment_id,
             project_id=DEFAULT_PROJECT_ID,
             run_id=run_id,
-            section_id=None,
+            section_id="s1",
             author_id=user_id,
             author_name="Integration User",
             body="稍后到期",
@@ -424,6 +438,19 @@ async def _exercise_comment_due_and_emails() -> None:
             assignee_name=None,
             due_at=now + timedelta(days=3),
         )
+        await repository.add_comment(
+            comment_id=reply_comment_id,
+            project_id=DEFAULT_PROJECT_ID,
+            run_id=run_id,
+            section_id="s1",
+            author_id=user_id,
+            author_name="Integration User",
+            body="回复",
+            mentions=[],
+            assignee_id=None,
+            assignee_name=None,
+            parent_comment_id=due_comment_id,
+        )
         due = await repository.due_comments(
             before=now + timedelta(hours=24)
         )
@@ -431,6 +458,55 @@ async def _exercise_comment_due_and_emails() -> None:
 
         emails = await repository.user_emails_map([user_id, "missing"])
         assert emails == {user_id: "integration@example.test"}
+
+        stats = await repository.project_comment_assignee_stats(
+            DEFAULT_PROJECT_ID,
+            now=now,
+            due_soon_before=now + timedelta(hours=24),
+        )
+        by_assignee = {stat.assignee_id: stat for stat in stats}
+        assert by_assignee[user_id].open_count == 1
+        assert by_assignee[user_id].due_soon_count == 1
+        assert by_assignee[None].open_count == 2
+
+        sections = await repository.project_comment_section_stats(
+            DEFAULT_PROJECT_ID, now=now
+        )
+        section = next(
+            item for item in sections if item.section_id == "s1"
+        )
+        assert section.section_title == "施工组织设计"
+        assert section.open_count == 3
+
+        recent = await repository.recent_project_comments(
+            DEFAULT_PROJECT_ID, limit=10
+        )
+        assert due_comment_id in {
+            item.comment_id for item in recent
+        }
+
+        deleted = await repository.soft_delete_comment(
+            run_id,
+            due_comment_id,
+            deleted_by=user_id,
+            deleted_by_name="Integration User",
+        )
+        assert deleted is not None
+        assert deleted[1] == 1
+        assert await repository.get_comment(run_id, due_comment_id) is None
+        assert await repository.due_comments(
+            before=now + timedelta(hours=24)
+        ) == []
+        remaining = await repository.project_comment_assignee_stats(
+            DEFAULT_PROJECT_ID,
+            now=now,
+            due_soon_before=now + timedelta(hours=24),
+        )
+        remaining_by_assignee = {
+            stat.assignee_id: stat for stat in remaining
+        }
+        assert user_id not in remaining_by_assignee
+        assert remaining_by_assignee[None].open_count == 1
     finally:
         async with factory() as session:
             await session.execute(

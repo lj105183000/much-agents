@@ -694,6 +694,7 @@ class BidCommentRow(Base):
         Index("ix_bid_comments_project_status", "project_id", "status"),
         Index("ix_bid_comments_assignee", "assignee_id"),
         Index("ix_bid_comments_due", "due_at"),
+        Index("ix_bid_comments_project_deleted", "project_id", "deleted_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -709,6 +710,11 @@ class BidCommentRow(Base):
     )
     parent_comment_id: Mapped[str | None] = mapped_column(String(36))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    deleted_by: Mapped[str | None] = mapped_column(String(36))
+    deleted_by_name: Mapped[str | None] = mapped_column(String(128))
     section_id: Mapped[str | None] = mapped_column(String(64))
     # Author/assignee identifiers are snapshots, not foreign keys: local
     # development uses a synthetic user, and deleting a user must not delete

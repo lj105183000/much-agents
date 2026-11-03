@@ -190,6 +190,30 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   const canEditBody = (comment: BidCommentView): boolean =>
     isAdmin || (user !== null && comment.author_id === user.id)
 
+  const remove = async (comment: BidCommentView) => {
+    const replyNote =
+      comments.some((item) => item.parent_comment_id === comment.comment_id)
+        ? '及其回复'
+        : ''
+    if (
+      !window.confirm(
+        `确定删除这条评论${replyNote}吗？删除后不可恢复。`,
+      )
+    ) {
+      return
+    }
+    setBusyId(comment.comment_id)
+    setError(null)
+    try {
+      await api.deleteBidComment(runId, comment.comment_id)
+      await load()
+    } catch (caught) {
+      setError(errorMessage(caught, '评论删除失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const toggleMention = (userId: string) => {
     setMentions((current) =>
       current.includes(userId)
@@ -557,6 +581,17 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                         }}
                       >
                         编辑正文
+                      </Button>
+                    ) : null}
+                    {authorCanEdit ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-300 hover:text-red-200"
+                        loading={busyId === comment.comment_id}
+                        onClick={() => void remove(comment)}
+                      >
+                        删除
                       </Button>
                     ) : null}
                   </div>

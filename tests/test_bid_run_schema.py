@@ -45,14 +45,21 @@ def test_comment_threads_and_user_email_columns() -> None:
     comment_columns = set(
         Base.metadata.tables["bid_comments"].columns.keys()
     )
-    assert {"parent_comment_id", "due_at"} <= comment_columns
+    assert {
+        "parent_comment_id",
+        "due_at",
+        "deleted_at",
+        "deleted_by",
+        "deleted_by_name",
+    } <= comment_columns
     assert "email" in Base.metadata.tables["users"].columns
 
-    due_indexes = {
+    comment_indexes = {
         index.name
         for index in Base.metadata.tables["bid_comments"].indexes
     }
-    assert "ix_bid_comments_due" in due_indexes
+    assert "ix_bid_comments_due" in comment_indexes
+    assert "ix_bid_comments_project_deleted" in comment_indexes
 
 
 def test_bid_runs_have_active_document_index() -> None:

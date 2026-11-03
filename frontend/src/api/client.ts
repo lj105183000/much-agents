@@ -66,6 +66,7 @@ import type {
   NotificationReadResponse,
   NotificationUnreadResponse,
   ParseUploadOptions,
+  ProjectBoard,
   ProjectMemberBriefListResponse,
   SearchRequest,
   SearchResponse,
@@ -1107,6 +1108,17 @@ export const api = {
         body: JSON.stringify(payload),
       },
     )
+  },
+
+  deleteBidComment(runId: string, commentId: string): Promise<void> {
+    return request<void>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  getProjectBoard(): Promise<ProjectBoard> {
+    return request<ProjectBoard>('/api/project-board')
   },
 
   approveBidRun(

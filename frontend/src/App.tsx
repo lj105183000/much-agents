@@ -21,6 +21,7 @@ import { useProject } from './project/useProject'
 import { AnalyticsView } from './views/AnalyticsView'
 import { AuditView } from './views/AuditView'
 import { BidView } from './views/BidView'
+import { BoardView } from './views/BoardView'
 import { CompaniesView } from './views/CompaniesView'
 import { EvaluationView } from './views/EvaluationView'
 import { HistoryView } from './views/HistoryView'
@@ -287,6 +288,12 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                     onSelectDoc={selectDocument}
                     onOpenRun={openRun}
                     onNavigate={navigate}
+                  />
+                ) : null}
+                {view === 'board' ? (
+                  <BoardView
+                    key={projectId ?? 'no-project'}
+                    onOpenRun={openNotificationRun}
                   />
                 ) : null}
                 {view === 'projects' ? <ProjectsView /> : null}

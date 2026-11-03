@@ -22,6 +22,9 @@ from api.bid_run_repo import (
     NotificationRecord,
     NotificationRecipient,
     OutlineSectionRecord,
+    ProjectBoardComment,
+    ProjectCommentAssigneeStat,
+    ProjectCommentSectionStat,
     QualitySnapshotRecord,
     RunUsageRecord,
     SectionStateRecord,
@@ -945,6 +948,9 @@ class FakeBidRunRepository:
             resolved_by=None,
             resolved_by_name=None,
             resolved_at=None,
+            deleted_at=None,
+            deleted_by=None,
+            deleted_by_name=None,
             created_at=now,
             updated_at=now,
         )
@@ -955,7 +961,11 @@ class FakeBidRunRepository:
         self, run_id: str, comment_id: str
     ) -> BidCommentRecord | None:
         record = self.comments.get(comment_id)
-        if record is None or record.run_id != run_id:
+        if (
+            record is None
+            or record.run_id != run_id
+            or record.deleted_at is not None
+        ):
             return None
         return record
 
@@ -971,6 +981,7 @@ class FakeBidRunRepository:
             record
             for record in self.comments.values()
             if record.run_id == run_id
+            and record.deleted_at is None
             and (status is None or record.status == status)
             and (section_id is None or record.section_id == section_id)
         ]
@@ -987,6 +998,7 @@ class FakeBidRunRepository:
             record
             for record in self.comments.values()
             if record.status == "open"
+            and record.deleted_at is None
             and record.due_at is not None
             and record.due_at <= before
         ]
@@ -1026,6 +1038,194 @@ class FakeBidRunRepository:
         updated = replace(record, **values)
         self.comments[comment_id] = updated
         return updated
+
+    async def soft_delete_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        deleted_by: str | None,
+        deleted_by_name: str | None,
+    ) -> tuple[BidCommentRecord, int] | None:
+        record = await self.get_comment(run_id, comment_id)
+        if record is None:
+            return None
+        now = datetime.now(timezone.utc)
+        updated = replace(
+            record,
+            deleted_at=now,
+            deleted_by=deleted_by,
+            deleted_by_name=deleted_by_name,
+            updated_at=now,
+        )
+        self.comments[comment_id] = updated
+        reply_count = 0
+        for other_id, other in list(self.comments.items()):
+            if (
+                other.run_id == run_id
+                and other.parent_comment_id == comment_id
+                and other.deleted_at is None
+            ):
+                self.comments[other_id] = replace(
+                    other,
+                    deleted_at=now,
+                    deleted_by=deleted_by,
+                    deleted_by_name=deleted_by_name,
+                    updated_at=now,
+                )
+                reply_count += 1
+        return updated, reply_count
+
+    async def project_comment_assignee_stats(
+        self,
+        project_id: str,
+        *,
+        now: datetime,
+        due_soon_before: datetime,
+    ) -> list[ProjectCommentAssigneeStat]:
+        groups: dict[
+            tuple[str | None, str | None], list[BidCommentRecord]
+        ] = {}
+        for record in self.comments.values():
+            if (
+                record.project_id != project_id
+                or record.deleted_at is not None
+            ):
+                continue
+            key = (record.assignee_id, record.assignee_name)
+            groups.setdefault(key, []).append(record)
+        stats: list[ProjectCommentAssigneeStat] = []
+        for (assignee_id, assignee_name), records in groups.items():
+            open_records = [
+                record for record in records if record.status == "open"
+            ]
+            stats.append(
+                ProjectCommentAssigneeStat(
+                    assignee_id=assignee_id,
+                    assignee_name=assignee_name,
+                    open_count=len(open_records),
+                    resolved_count=len(
+                        [
+                            record
+                            for record in records
+                            if record.status == "resolved"
+                        ]
+                    ),
+                    overdue_count=len(
+                        [
+                            record
+                            for record in open_records
+                            if record.due_at is not None
+                            and record.due_at <= now
+                        ]
+                    ),
+                    due_soon_count=len(
+                        [
+                            record
+                            for record in open_records
+                            if record.due_at is not None
+                            and now < record.due_at <= due_soon_before
+                        ]
+                    ),
+                )
+            )
+        stats.sort(
+            key=lambda stat: (
+                -stat.open_count,
+                stat.assignee_name or "",
+            )
+        )
+        return stats
+
+    async def project_comment_section_stats(
+        self,
+        project_id: str,
+        *,
+        now: datetime,
+        limit: int = 20,
+    ) -> list[ProjectCommentSectionStat]:
+        groups: dict[str | None, list[BidCommentRecord]] = {}
+        for record in self.comments.values():
+            if (
+                record.project_id != project_id
+                or record.status != "open"
+                or record.deleted_at is not None
+            ):
+                continue
+            groups.setdefault(record.section_id, []).append(record)
+        stats: list[ProjectCommentSectionStat] = []
+        for section_id, records in groups.items():
+            title = None
+            if section_id:
+                for section in self.sections.get(records[0].run_id, []):
+                    if section.section_id == section_id:
+                        title = section.title
+                        break
+            stats.append(
+                ProjectCommentSectionStat(
+                    section_id=section_id,
+                    section_title=title,
+                    open_count=len(records),
+                    overdue_count=len(
+                        [
+                            record
+                            for record in records
+                            if record.due_at is not None
+                            and record.due_at <= now
+                        ]
+                    ),
+                )
+            )
+        stats.sort(key=lambda stat: -stat.open_count)
+        return stats[: max(1, min(int(limit), 100))]
+
+    async def recent_project_comments(
+        self,
+        project_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[ProjectBoardComment]:
+        rows = [
+            record
+            for record in self.comments.values()
+            if record.project_id == project_id
+            and record.status == "open"
+            and record.deleted_at is None
+        ]
+        rows.sort(
+            key=lambda record: (
+                record.due_at is None,
+                record.due_at or datetime.max.replace(tzinfo=timezone.utc),
+                -record.created_at.timestamp(),
+            )
+        )
+        result: list[ProjectBoardComment] = []
+        for record in rows[: max(1, min(int(limit), 100))]:
+            run = self.runs.get(record.run_id)
+            title = None
+            if record.section_id:
+                for section in self.sections.get(record.run_id, []):
+                    if section.section_id == record.section_id:
+                        title = section.title
+                        break
+            result.append(
+                ProjectBoardComment(
+                    comment_id=record.comment_id,
+                    run_id=record.run_id,
+                    doc_id=run.doc_id if run is not None else "",
+                    project_name=run.project_name if run is not None else None,
+                    section_id=record.section_id,
+                    section_title=title,
+                    author_name=record.author_name,
+                    assignee_id=record.assignee_id,
+                    assignee_name=record.assignee_name,
+                    body=record.body,
+                    status=record.status,
+                    due_at=record.due_at,
+                    created_at=record.created_at,
+                )
+            )
+        return result
 
     async def get_notification_preferences(
         self, user_id: str

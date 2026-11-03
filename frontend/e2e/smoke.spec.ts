@@ -103,6 +103,17 @@ test('admin creates a bid run and resolves a review comment', async ({
   await logout(page)
 })
 
+test('admin opens the project board', async ({ page }) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await navigate(page, /项目看板/)
+  await expect(
+    page.getByRole('heading', { name: '项目看板', exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText('负责人负载')).toBeVisible()
+  await expect(page.getByText('最近待处理评论')).toBeVisible()
+  await logout(page)
+})
+
 test('viewer is read-only', async ({ page }) => {
   await login(page, VIEWER_USERNAME, VIEWER_PASSWORD)
   await navigate(page, /编写标书/)

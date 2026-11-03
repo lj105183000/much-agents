@@ -48,6 +48,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: 'history',
   },
   {
+    key: 'board',
+    label: '项目看板',
+    description: '待处理评论、逾期与 run 状态',
+    icon: 'message',
+  },
+  {
     key: 'projects',
     label: '项目管理',
     description: '切换项目、成员与访问范围',
@@ -122,6 +128,10 @@ export const VIEW_META: Record<
   history: {
     title: '任务历史',
     subtitle: '追踪本机提交的解析与投标任务',
+  },
+  board: {
+    title: '项目看板',
+    subtitle: '聚合当前项目的待处理评论、逾期风险与投标 run 状态',
   },
   projects: {
     title: '项目管理',

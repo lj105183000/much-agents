@@ -380,6 +380,68 @@ class BidCommentListResponse(BaseModel):
     comments: list[BidCommentView] = Field(default_factory=list)
 
 
+class ProjectBoardCommentTotals(BaseModel):
+    open: int = 0
+    resolved: int = 0
+    overdue: int = 0
+    due_soon: int = 0
+    unassigned: int = 0
+
+
+class ProjectBoardRunTotals(BaseModel):
+    total: int = 0
+    active: int = 0
+    assembled: int = 0
+    paused: int = 0
+    failed: int = 0
+    gate_blocked: int = 0
+
+
+class ProjectBoardAssignee(BaseModel):
+    user_id: str | None = None
+    display_name: str
+    open: int = 0
+    resolved: int = 0
+    overdue: int = 0
+    due_soon: int = 0
+
+
+class ProjectBoardSection(BaseModel):
+    section_id: str | None = None
+    section_title: str | None = None
+    open: int = 0
+    overdue: int = 0
+
+
+class ProjectBoardRecentComment(BaseModel):
+    comment_id: str
+    run_id: str
+    doc_id: str
+    project_name: str | None = None
+    section_id: str | None = None
+    section_title: str | None = None
+    author_name: str
+    assignee_id: str | None = None
+    assignee_name: str | None = None
+    body_excerpt: str = ""
+    due_at: datetime | None = None
+    created_at: datetime
+
+
+class ProjectBoardResponse(BaseModel):
+    project_id: str
+    generated_at: datetime
+    comments: ProjectBoardCommentTotals = Field(
+        default_factory=ProjectBoardCommentTotals
+    )
+    runs: ProjectBoardRunTotals = Field(default_factory=ProjectBoardRunTotals)
+    assignees: list[ProjectBoardAssignee] = Field(default_factory=list)
+    sections: list[ProjectBoardSection] = Field(default_factory=list)
+    recent_comments: list[ProjectBoardRecentComment] = Field(
+        default_factory=list
+    )
+
+
 class NotificationView(BaseModel):
     notification_id: str
     kind: str

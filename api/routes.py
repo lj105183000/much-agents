@@ -181,6 +181,7 @@ from .schemas import (
     NotificationUnreadResponse,
     NotificationView,
     PasswordResetRequest,
+    ProjectBoardResponse,
     ProjectCreateRequest,
     ProjectListResponse,
     ProjectMemberBrief,
@@ -2018,6 +2019,48 @@ def build_router() -> APIRouter:
                 ],
             )
         return result
+
+    @router.delete(
+        "/bid-runs/{run_id}/comments/{comment_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_bid_run_comment(
+        run_id: str,
+        comment_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> None:
+        reply_count = await service.delete_comment(
+            run_id,
+            comment_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            is_admin=user.role == "admin",
+        )
+        await _audit(
+            request,
+            "bid_run.comment.delete",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": comment_id,
+                "reply_count": reply_count,
+            },
+            required=True,
+        )
+
+    @router.get(
+        "/project-board",
+        response_model=ProjectBoardResponse,
+    )
+    async def get_project_board(
+        context: ProjectContext = Depends(require_project_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> ProjectBoardResponse:
+        return await service.project_board(context.project_id)
 
     @router.get(
         "/bid-runs/{run_id}/usage",

@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
-from api.bid_runs import BidRunService
+from api.bid_runs import BidRunError, BidRunService
 from api.jobs import JobStore
 from api.projects import DEFAULT_PROJECT_ID, ProjectService
 from api.runner import InlineRunner
@@ -399,3 +401,151 @@ def test_comment_replies_and_due_dates(tmp_path: Path) -> None:
         )
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["due_at"] is None
+
+
+def test_comment_soft_delete_cascades_replies(tmp_path: Path) -> None:
+    app, repo, _store, service = make_app(tmp_path)
+    with TestClient(app) as client:
+        run_id, section_id = create_run(client)
+        parent = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "父评论", "section_id": section_id},
+        )
+        assert parent.status_code == 201, parent.text
+        parent_id = parent.json()["comment_id"]
+        reply = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "回复", "parent_comment_id": parent_id},
+        )
+        assert reply.status_code == 201, reply.text
+        reply_id = reply.json()["comment_id"]
+
+        with pytest.raises(BidRunError) as forbidden:
+            asyncio.run(
+                service.delete_comment(
+                    run_id,
+                    reply_id,
+                    actor_id="someone-else",
+                    actor_name="其他人",
+                    is_admin=False,
+                )
+            )
+        assert forbidden.value.status_code == 403
+
+        deleted = client.delete(
+            f"/api/bid-runs/{run_id}/comments/{parent_id}"
+        )
+        assert deleted.status_code == 204, deleted.text
+        assert repo.comments[parent_id].deleted_at is not None
+        assert repo.comments[reply_id].deleted_at is not None
+        assert client.get(f"/api/bid-runs/{run_id}/comments").json()[
+            "comments"
+        ] == []
+        assert (
+            client.patch(
+                f"/api/bid-runs/{run_id}/comments/{parent_id}",
+                json={"status": "resolved"},
+            ).status_code
+            == 404
+        )
+        blocked_reply = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "回复已删除评论", "parent_comment_id": parent_id},
+        )
+        assert blocked_reply.status_code == 422
+        assert (
+            client.delete(
+                f"/api/bid-runs/{run_id}/comments/{parent_id}"
+            ).status_code
+            == 404
+        )
+
+
+def test_project_board_aggregates_comments_and_runs(tmp_path: Path) -> None:
+    app, _repo, _store, _service = make_app(tmp_path)
+    now = datetime.now(timezone.utc)
+    with TestClient(app) as client:
+        run_id, section_id = create_run(client)
+        overdue = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "逾期意见",
+                "section_id": section_id,
+                "assignee_id": "u-alice",
+                "due_at": (now - timedelta(hours=1)).isoformat(),
+            },
+        )
+        assert overdue.status_code == 201, overdue.text
+        reply = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "回复意见",
+                "parent_comment_id": overdue.json()["comment_id"],
+            },
+        )
+        assert reply.status_code == 201, reply.text
+        soon = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={
+                "body": "即将到期",
+                "due_at": (now + timedelta(hours=2)).isoformat(),
+            },
+        )
+        assert soon.status_code == 201, soon.text
+        resolved = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "已解决意见", "assignee_id": "u-bob"},
+        )
+        assert resolved.status_code == 201, resolved.text
+        resolved_id = resolved.json()["comment_id"]
+        assert (
+            client.patch(
+                f"/api/bid-runs/{run_id}/comments/{resolved_id}",
+                json={"status": "resolved"},
+            ).status_code
+            == 200
+        )
+
+        board = client.get("/api/project-board")
+        assert board.status_code == 200, board.text
+        payload = board.json()
+        assert payload["comments"] == {
+            "open": 3,
+            "resolved": 1,
+            "overdue": 1,
+            "due_soon": 1,
+            "unassigned": 2,
+        }
+        assert payload["runs"]["total"] == 1
+        assert payload["runs"]["active"] == 0
+
+        by_assignee = {
+            item["user_id"]: item for item in payload["assignees"]
+        }
+        assert by_assignee["u-alice"]["open"] == 1
+        assert by_assignee["u-alice"]["overdue"] == 1
+        assert by_assignee["u-bob"]["resolved"] == 1
+        assert by_assignee["u-bob"]["open"] == 0
+        assert by_assignee[None]["open"] == 2
+
+        sections = {item["section_id"]: item for item in payload["sections"]}
+        assert sections[section_id]["open"] == 2
+        assert sections[section_id]["section_title"]
+
+        recent = payload["recent_comments"]
+        assert [item["comment_id"] for item in recent] == [
+            overdue.json()["comment_id"],
+            soon.json()["comment_id"],
+            reply.json()["comment_id"],
+        ]
+        assert recent[0]["doc_id"] == "doc-1"
+        assert recent[0]["body_excerpt"] == "逾期意见"
+
+        deleted = client.delete(
+            f"/api/bid-runs/{run_id}/comments/{overdue.json()['comment_id']}"
+        )
+        assert deleted.status_code == 204
+        refreshed = client.get("/api/project-board").json()
+        assert refreshed["comments"]["open"] == 1
+        assert refreshed["comments"]["unassigned"] == 1
+        assert refreshed["comments"]["overdue"] == 0

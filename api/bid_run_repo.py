@@ -325,8 +325,46 @@ class BidCommentRecord:
     resolved_by: str | None
     resolved_by_name: str | None
     resolved_at: datetime | None
+    deleted_at: datetime | None
+    deleted_by: str | None
+    deleted_by_name: str | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCommentAssigneeStat:
+    assignee_id: str | None
+    assignee_name: str | None
+    open_count: int
+    resolved_count: int
+    overdue_count: int
+    due_soon_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCommentSectionStat:
+    section_id: str | None
+    section_title: str | None
+    open_count: int
+    overdue_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectBoardComment:
+    comment_id: str
+    run_id: str
+    doc_id: str
+    project_name: str | None
+    section_id: str | None
+    section_title: str | None
+    author_name: str
+    assignee_id: str | None
+    assignee_name: str | None
+    body: str
+    status: str
+    due_at: datetime | None
+    created_at: datetime
 
 
 def _run_record(row: BidRunRow) -> BidRunRecord:
@@ -459,6 +497,9 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         resolved_by=row.resolved_by,
         resolved_by_name=row.resolved_by_name,
         resolved_at=row.resolved_at,
+        deleted_at=row.deleted_at,
+        deleted_by=row.deleted_by,
+        deleted_by_name=row.deleted_by_name,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -1848,7 +1889,11 @@ class BidRunRepository:
     ) -> BidCommentRecord | None:
         async with self._session_factory() as session:
             row = await session.get(BidCommentRow, comment_id)
-        if row is None or row.run_id != run_id:
+        if (
+            row is None
+            or row.run_id != run_id
+            or row.deleted_at is not None
+        ):
             return None
         return _comment_record(row)
 
@@ -1862,7 +1907,10 @@ class BidRunRepository:
     ) -> list[BidCommentRecord]:
         statement = (
             select(BidCommentRow)
-            .where(BidCommentRow.run_id == run_id)
+            .where(
+                BidCommentRow.run_id == run_id,
+                BidCommentRow.deleted_at.is_(None),
+            )
             .order_by(BidCommentRow.created_at.desc())
             .limit(max(1, min(int(limit), 500)))
         )
@@ -1886,6 +1934,7 @@ class BidRunRepository:
                 BidCommentRow.status == "open",
                 BidCommentRow.due_at.is_not(None),
                 BidCommentRow.due_at <= before,
+                BidCommentRow.deleted_at.is_(None),
             )
             .order_by(BidCommentRow.due_at.asc())
             .limit(max(1, int(limit)))
@@ -1919,6 +1968,7 @@ class BidRunRepository:
             .where(
                 BidCommentRow.id == comment_id,
                 BidCommentRow.run_id == run_id,
+                BidCommentRow.deleted_at.is_(None),
             )
             .values(**values)
             .returning(BidCommentRow)
@@ -1929,6 +1979,218 @@ class BidRunRepository:
                 record = _comment_record(row) if row is not None else None
         return record
 
+    async def soft_delete_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        deleted_by: str | None,
+        deleted_by_name: str | None,
+    ) -> tuple[BidCommentRecord, int] | None:
+        """Soft-delete a comment and its direct replies in one transaction."""
+
+        now = _now()
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(
+                    BidCommentRow, comment_id, with_for_update=True
+                )
+                if (
+                    row is None
+                    or row.run_id != run_id
+                    or row.deleted_at is not None
+                ):
+                    return None
+                row.deleted_at = now
+                row.deleted_by = deleted_by
+                row.deleted_by_name = deleted_by_name
+                row.updated_at = now
+                replies = await session.execute(
+                    update(BidCommentRow)
+                    .where(
+                        BidCommentRow.run_id == run_id,
+                        BidCommentRow.parent_comment_id == comment_id,
+                        BidCommentRow.deleted_at.is_(None),
+                    )
+                    .values(
+                        deleted_at=now,
+                        deleted_by=deleted_by,
+                        deleted_by_name=deleted_by_name,
+                        updated_at=now,
+                    )
+                )
+                reply_count = int(replies.rowcount or 0)
+                await session.flush()
+                record = _comment_record(row)
+        return record, reply_count
+
+    async def project_comment_assignee_stats(
+        self,
+        project_id: str,
+        *,
+        now: datetime,
+        due_soon_before: datetime,
+    ) -> list[ProjectCommentAssigneeStat]:
+        open_condition = BidCommentRow.status == "open"
+        overdue_condition = and_(
+            open_condition,
+            BidCommentRow.due_at.is_not(None),
+            BidCommentRow.due_at <= now,
+        )
+        due_soon_condition = and_(
+            open_condition,
+            BidCommentRow.due_at.is_not(None),
+            BidCommentRow.due_at > now,
+            BidCommentRow.due_at <= due_soon_before,
+        )
+        open_count = func.count().filter(open_condition)
+        statement = (
+            select(
+                BidCommentRow.assignee_id,
+                BidCommentRow.assignee_name,
+                open_count.label("open_count"),
+                func.count()
+                .filter(BidCommentRow.status == "resolved")
+                .label("resolved_count"),
+                func.count()
+                .filter(overdue_condition)
+                .label("overdue_count"),
+                func.count()
+                .filter(due_soon_condition)
+                .label("due_soon_count"),
+            )
+            .where(
+                BidCommentRow.project_id == project_id,
+                BidCommentRow.deleted_at.is_(None),
+            )
+            .group_by(
+                BidCommentRow.assignee_id, BidCommentRow.assignee_name
+            )
+            .order_by(open_count.desc(), BidCommentRow.assignee_name.asc())
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            ProjectCommentAssigneeStat(
+                assignee_id=assignee_id,
+                assignee_name=assignee_name,
+                open_count=int(open_value or 0),
+                resolved_count=int(resolved or 0),
+                overdue_count=int(overdue or 0),
+                due_soon_count=int(due_soon or 0),
+            )
+            for (
+                assignee_id,
+                assignee_name,
+                open_value,
+                resolved,
+                overdue,
+                due_soon,
+            ) in rows
+        ]
+
+    async def project_comment_section_stats(
+        self,
+        project_id: str,
+        *,
+        now: datetime,
+        limit: int = 20,
+    ) -> list[ProjectCommentSectionStat]:
+        overdue_condition = and_(
+            BidCommentRow.due_at.is_not(None),
+            BidCommentRow.due_at <= now,
+        )
+        statement = (
+            select(
+                BidCommentRow.section_id,
+                func.max(BidOutlineSectionRow.title).label("section_title"),
+                func.count().label("open_count"),
+                func.count()
+                .filter(overdue_condition)
+                .label("overdue_count"),
+            )
+            .outerjoin(
+                BidOutlineSectionRow,
+                and_(
+                    BidOutlineSectionRow.run_id == BidCommentRow.run_id,
+                    BidOutlineSectionRow.section_id
+                    == BidCommentRow.section_id,
+                ),
+            )
+            .where(
+                BidCommentRow.project_id == project_id,
+                BidCommentRow.status == "open",
+                BidCommentRow.deleted_at.is_(None),
+            )
+            .group_by(BidCommentRow.section_id)
+            .order_by(func.count().desc())
+            .limit(max(1, min(int(limit), 100)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            ProjectCommentSectionStat(
+                section_id=section_id,
+                section_title=section_title,
+                open_count=int(open_value or 0),
+                overdue_count=int(overdue or 0),
+            )
+            for section_id, section_title, open_value, overdue in rows
+        ]
+
+    async def recent_project_comments(
+        self,
+        project_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[ProjectBoardComment]:
+        statement = (
+            select(
+                BidCommentRow,
+                BidRunRow.doc_id,
+                BidRunRow.project_name,
+                BidOutlineSectionRow.title.label("section_title"),
+            )
+            .join(BidRunRow, BidRunRow.id == BidCommentRow.run_id)
+            .outerjoin(
+                BidOutlineSectionRow,
+                and_(
+                    BidOutlineSectionRow.run_id == BidCommentRow.run_id,
+                    BidOutlineSectionRow.section_id
+                    == BidCommentRow.section_id,
+                ),
+            )
+            .where(
+                BidCommentRow.project_id == project_id,
+                BidCommentRow.status == "open",
+                BidCommentRow.deleted_at.is_(None),
+            )
+            .order_by(
+                BidCommentRow.due_at.asc().nulls_last(),
+                BidCommentRow.created_at.desc(),
+            )
+            .limit(max(1, min(int(limit), 100)))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            ProjectBoardComment(
+                comment_id=comment.id,
+                run_id=comment.run_id,
+                doc_id=doc_id,
+                project_name=project_name,
+                section_id=comment.section_id,
+                section_title=section_title,
+                author_name=comment.author_name,
+                assignee_id=comment.assignee_id,
+                assignee_name=comment.assignee_name,
+                body=comment.body,
+                status=comment.status,
+                due_at=comment.due_at,
+                created_at=comment.created_at,
+            )
+            for comment, doc_id, project_name, section_title in rows
+        ]
 
     async def get_notification_preferences(
         self, user_id: str
