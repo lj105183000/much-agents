@@ -733,6 +733,7 @@ class FakeBidRunRepository:
         self.feedback_events: list[FeedbackRecord] = []
         self.quality_snapshots: list[QualitySnapshotRecord] = []
         self.run_usage: dict[str, RunUsageRecord] = {}
+        self.llm_call_log: list[dict[str, Any]] = []
         self.external_usage: list[ExternalUsageRecord] = []
         self.project_monthly_budgets: dict[str, int | None] = {}
         self.project_month_costs: dict[str, float] = {}
@@ -1181,6 +1182,131 @@ class FakeBidRunRepository:
         self.quality_snapshots.append(record)
         return record
 
+    async def add_llm_usage(
+        self,
+        run_id: str,
+        records: list[dict[str, Any]],
+        *,
+        project_id: str,
+    ) -> int:
+        if not records:
+            return 0
+        self.llm_call_log.extend(
+            {**dict(record), "run_id": run_id, "project_id": project_id}
+            for record in records
+        )
+        usage = self.run_usage.get(run_id)
+        self.run_usage[run_id] = RunUsageRecord(
+            run_id=run_id,
+            project_id=project_id,
+            llm_calls=(usage.llm_calls if usage else 0) + len(records),
+            prompt_tokens=(usage.prompt_tokens if usage else 0)
+            + sum(int(record.get("prompt_tokens") or 0) for record in records),
+            completion_tokens=(usage.completion_tokens if usage else 0)
+            + sum(
+                int(record.get("completion_tokens") or 0)
+                for record in records
+            ),
+            total_tokens=(usage.total_tokens if usage else 0)
+            + sum(int(record.get("total_tokens") or 0) for record in records),
+            cost_cny=float(usage.cost_cny if usage else 0)
+            + sum(float(record.get("cost_cny") or 0) for record in records),
+            retries=(usage.retries if usage else 0)
+            + sum(int(record.get("retry_count") or 0) for record in records),
+            fallback_calls=(usage.fallback_calls if usage else 0)
+            + sum(1 for record in records if record.get("fallback")),
+            duration_ms=(usage.duration_ms if usage else 0)
+            + sum(int(record.get("latency_ms") or 0) for record in records),
+            updated_at=datetime.now(timezone.utc),
+        )
+        return len(records)
+
+    async def latest_quality_snapshot(
+        self, run_id: str
+    ) -> dict[str, Any] | None:
+        rows = [
+            row for row in self.quality_snapshots if row.run_id == run_id
+        ]
+        if not rows:
+            return None
+        return dict(rows[-1].summary or {})
+
+    async def run_section_costs(
+        self, run_id: str
+    ) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in self.llm_call_log:
+            if row.get("run_id") != run_id:
+                continue
+            section_id = str(row.get("section_id") or "")
+            item = grouped.setdefault(
+                section_id,
+                {
+                    "section_id": section_id,
+                    "title": "",
+                    "calls": 0,
+                    "tokens": 0,
+                    "cost_cny": 0.0,
+                },
+            )
+            item["calls"] += 1
+            item["tokens"] += int(row.get("total_tokens") or 0)
+            item["cost_cny"] += float(row.get("cost_cny") or 0)
+        return list(grouped.values())
+
+    async def run_unpriced_llm_calls(self, run_id: str) -> int:
+        return sum(
+            1
+            for row in self.llm_call_log
+            if row.get("run_id") == run_id
+            and row.get("cost_cny") is None
+        )
+
+    async def add_llm_call_log(
+        self, records: list[dict[str, Any]]
+    ) -> int:
+        self.llm_call_log.extend(dict(row) for row in records)
+        return len(records)
+
+    async def external_usage_summary(
+        self,
+        *,
+        project_id: str | None,
+        doc_id: str | None,
+    ) -> dict[str, Any]:
+        rows = [
+            row
+            for row in self.external_usage
+            if (project_id is None or row.project_id == project_id)
+            and (doc_id is None or row.doc_id == doc_id)
+        ]
+        by_provider: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = by_provider.setdefault(
+                row.provider,
+                {"records": 0, "units": 0, "cost_cny": 0.0},
+            )
+            item["records"] += 1
+            item["units"] += int(row.units or 0)
+            item["cost_cny"] += float(row.cost_cny or 0)
+        return {
+            "records": len(rows),
+            "units": sum(int(row.units or 0) for row in rows),
+            "cost_cny": round(
+                sum(float(row.cost_cny or 0) for row in rows), 4
+            ),
+            "unpriced_records": sum(
+                1 for row in rows if row.cost_cny is None
+            ),
+            "by_provider": {
+                provider: {
+                    **item,
+                    "cost_cny": round(item["cost_cny"], 4),
+                }
+                for provider, item in by_provider.items()
+            },
+        }
+
     async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
         return self.run_usage.get(run_id)
 
@@ -1400,6 +1526,35 @@ class FakeBidRunRepository:
                 quality_by_gate[snapshot.gate_status] = (
                     quality_by_gate.get(snapshot.gate_status, 0) + 1
                 )
+        latest_quality: dict[str, Any] = {}
+        for snapshot in self.quality_snapshots:
+            latest_quality[snapshot.run_id] = snapshot
+        characters = sum(
+            int((snapshot.summary or {}).get("characters") or 0)
+            for snapshot in latest_quality.values()
+        )
+        narrative_sections = sum(
+            int((snapshot.summary or {}).get("narrative_written") or 0)
+            for snapshot in latest_quality.values()
+        )
+        llm_cost = round(
+            sum(float(item.cost_cny or 0) for item in self.run_usage.values()),
+            4,
+        )
+        external_cost = round(
+            sum(float(item.cost_cny or 0) for item in self.external_usage), 4
+        )
+        total_cost = round(llm_cost + external_cost, 4)
+        approved_ids = {
+            run_id
+            for run_id, records in self.approvals.items()
+            if any(record.status == "approved" for record in records)
+        }
+        approved_cost = sum(
+            float(self.run_usage[run_id].cost_cny or 0)
+            for run_id in approved_ids
+            if run_id in self.run_usage
+        )
         return {
             "days": days,
             "runs": {
@@ -1410,6 +1565,43 @@ class FakeBidRunRepository:
                 "avg_duration_seconds": None,
             },
             "usage": {},
+            "cost_efficiency": {
+                "llm_cost_cny": llm_cost,
+                "external_cost_cny": external_cost,
+                "parse_llm_cost_cny": 0.0,
+                "total_cost_cny": total_cost,
+                "unpriced_llm_calls": sum(
+                    1
+                    for row in self.llm_call_log
+                    if row.get("cost_cny") is None
+                ),
+                "unpriced_external_records": sum(
+                    1
+                    for item in self.external_usage
+                    if item.cost_cny is None
+                ),
+                "parse_llm_calls": 0,
+                "characters": characters,
+                "narrative_sections": narrative_sections,
+                "cost_per_1k_chars": (
+                    round(total_cost / (characters / 1000.0), 6)
+                    if characters
+                    else None
+                ),
+                "cost_per_section": (
+                    round(total_cost / narrative_sections, 6)
+                    if narrative_sections
+                    else None
+                ),
+                "approved_runs": len(approved_ids),
+                "cost_per_approved_run": (
+                    round(approved_cost / len(approved_ids), 6)
+                    if approved_ids
+                    else None
+                ),
+                "pricing_ready": False,
+                "missing_price_models": [],
+            },
             "external": {
                 "records": len(self.external_usage),
                 "units": sum(item.units for item in self.external_usage),

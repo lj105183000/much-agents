@@ -114,6 +114,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
   const feedback = data?.feedback
   const quality = data?.quality
   const external = data?.external
+  const efficiency = data?.cost_efficiency
   const budgetAlerts = data?.budget_alerts ?? []
   const totalRuns = runs?.total ?? 0
   const gatePass = runs?.by_gate.pass ?? 0
@@ -189,11 +190,14 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               hint={`失败 ${runs?.failed ?? 0} 次`}
             />
             <Stat
-              label="模型 / 外部成本"
-              value={money((usage?.cost_cny ?? 0) + (external?.cost_cny ?? 0))}
-              hint={`LLM ${compact(usage?.llm_calls ?? 0)} 次 · 外部 ${
-                external?.records ?? 0
-              } 次`}
+              label="总成本"
+              value={money(
+                efficiency?.total_cost_cny ??
+                  (usage?.cost_cny ?? 0) + (external?.cost_cny ?? 0),
+              )}
+              hint={`LLM ${money(usage?.cost_cny)} · 外部 ${money(
+                external?.cost_cny,
+              )} · 解析 ${money(efficiency?.parse_llm_cost_cny)}`}
             />
             <Stat
               label="反馈 / 平均评分"
@@ -203,6 +207,59 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               hint={`${compact(usage?.total_tokens ?? 0)} tokens`}
             />
           </div>
+
+          {efficiency &&
+          (!efficiency.pricing_ready ||
+            efficiency.unpriced_llm_calls > 0 ||
+            efficiency.unpriced_external_records > 0) ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200">
+              {!efficiency.pricing_ready ? (
+                <p>
+                  价格表未完整配置
+                  {efficiency.missing_price_models.length
+                    ? `（缺 ${efficiency.missing_price_models.join(', ')}）`
+                    : ''}
+                  ：成本可能被低估，预算可能无法触发。
+                </p>
+              ) : null}
+              {efficiency.unpriced_llm_calls > 0 ? (
+                <p>
+                  有 {efficiency.unpriced_llm_calls} 次 LLM
+                  调用未计价。
+                </p>
+              ) : null}
+              {efficiency.unpriced_external_records > 0 ? (
+                <p>
+                  有 {efficiency.unpriced_external_records} 条外部用量未计价。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {efficiency ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Stat
+                label="成本 / 千字"
+                value={money(efficiency.cost_per_1k_chars)}
+                hint={`${compact(efficiency.characters)} 字`}
+              />
+              <Stat
+                label="成本 / 节"
+                value={money(efficiency.cost_per_section)}
+                hint={`${efficiency.narrative_sections} 节`}
+              />
+              <Stat
+                label="成本 / 已审批 run"
+                value={money(efficiency.cost_per_approved_run)}
+                hint={`${efficiency.approved_runs} 个已审批 run（非实际中标）`}
+              />
+              <Stat
+                label="解析 LLM"
+                value={money(efficiency.parse_llm_cost_cny)}
+                hint={`${compact(efficiency.parse_llm_calls)} 次调用`}
+              />
+            </div>
+          ) : null}
 
           {trend ? <BudgetTrendChart trend={trend} /> : null}
 

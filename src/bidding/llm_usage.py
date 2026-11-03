@@ -16,13 +16,14 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 
 from src.bidding.errors import BidLLMTruncatedError
 from src.observability.metrics import record_llm_usage
 
 logger = logging.getLogger(__name__)
 _price_warning_emitted = False
+_unpriced_warned: set[tuple[str, str]] = set()
 
 
 class _Metered(Protocol):
@@ -220,6 +221,44 @@ def load_price_table(
     return table
 
 
+def price_status(
+    models: Iterable[str] | None = None,
+    *,
+    as_of: date | None = None,
+    raw: str | None = None,
+) -> dict[str, Any]:
+    """Return whether every requested model has an effective price.
+
+    ``configured`` is true only when the table is non-empty and every requested
+    model has an effective entry.  ``models`` lists the models present in the
+    table; no price values are returned.
+    """
+
+    entries = load_price_entries(raw)
+    wanted = [str(model) for model in (models or ()) if str(model).strip()]
+    missing = [
+        model
+        for model in wanted
+        if select_price_entry(entries.get(model, []), as_of) is None
+    ]
+    return {
+        "configured": bool(entries) and not missing,
+        "missing_models": missing,
+        "models": sorted(entries),
+    }
+
+
+def missing_price_models(
+    models: Iterable[str] | None = None,
+    *,
+    as_of: date | None = None,
+    raw: str | None = None,
+) -> list[str]:
+    return list(
+        price_status(models, as_of=as_of, raw=raw)["missing_models"]
+    )
+
+
 def estimate_cost(
     model: str | None,
     prompt_tokens: int | None,
@@ -338,6 +377,28 @@ class MeteredChatClient:
             json_mode=bool(kwargs.get("json_mode")),
             system_fingerprint=usage.get("system_fingerprint"),
         )
+        if (
+            record.cost_cny is None
+            and (
+                record.total_tokens
+                or record.prompt_tokens
+                or record.completion_tokens
+            )
+        ):
+            warning_key = (
+                record.operation,
+                record.model_actual
+                or record.model_requested
+                or "unknown",
+            )
+            if warning_key not in _unpriced_warned:
+                _unpriced_warned.add(warning_key)
+                logger.warning(
+                    "unpriced LLM call: operation=%s model=%s; "
+                    "set LLM_PRICE_TABLE for cost and budget enforcement",
+                    warning_key[0],
+                    warning_key[1],
+                )
         record_usage(record)
         record_llm_usage(
             operation=record.operation,

@@ -1,6 +1,6 @@
 # LLM 基准测试、价格生效日期与成本对账
 
-> 状态：已实现（2026-11-02）。新增 `scripts/eval_benchmark.py`、`scripts/reconcile_costs.py`；`src/bidding/llm_usage.py` 的 `estimate_cost` 支持 `effective_from` 多版本价格。
+> 状态：已实现（2026-11-02）。新增 `scripts/eval_benchmark.py`、`scripts/reconcile_costs.py`；`src/bidding/llm_usage.py` 的 `estimate_cost` 支持 `effective_from` 多版本价格。2026-11-03 起，结构化抽取的 LLM 调用也写入 `llm_call_log`（`run_id=NULL`、带 `job_id`/`project_id`），并计入项目月度成本与运营看板；生产环境要求价格表覆盖当前模型（启用回退时含 `deepseek-chat`），除非显式设置 `ALLOW_UNPRICED_LLM=true`。
 
 ## 1. 真实 LLM 基准测试（预算封顶）
 

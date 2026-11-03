@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from src.parsing.config import Settings
+from src.parsing.extraction.llm import DeepSeekExtractor
+from src.parsing.errors import ExtractionError
 from src.parsing.extraction.fallback import (
     extract_evaluation_regex,
     extract_front_appendix_regex,
@@ -232,6 +238,109 @@ def test_extract_document_with_injected_extractor(
     assert meta["method"] == "llm+regex"
     assert result.project_overview.project_name == "LLM 项目"
     assert any(factor.max_score == 50.0 for factor in result.evaluation_factors)
+
+
+class UsageExtractor(FakeExtractor):
+    last_usage = {
+        "model_requested": "deepseek-flash",
+        "model_actual": "deepseek-flash",
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "finish_reason": "stop",
+        "latency_ms": 12,
+        "retry_count": 0,
+        "fallback": False,
+        "status": "ok",
+        "error_type": None,
+    }
+
+
+def test_extract_document_records_job_level_llm_usage(
+    settings: Settings,
+    document: ParsedDocument,
+) -> None:
+    _result, meta = extract_document(document, settings, UsageExtractor())
+
+    assert meta["llm_usage"]
+    usage = meta["llm_usage"][0]
+    assert usage["provider"] == "deepseek"
+    assert usage["operation"] == "extraction"
+    assert usage["prompt_tokens"] == 120
+    assert usage["completion_tokens"] == 30
+
+
+class _ExtractorCompletions:
+    def __init__(self, responses) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _extractor_response(content: str, model: str):
+    return SimpleNamespace(
+        model=model,
+        usage=SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+        ),
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+
+def test_extractor_falls_back_only_when_enabled(settings: Settings) -> None:
+    enabled = replace(
+        settings,
+        deepseek_allow_fallback=True,
+        deepseek_max_retries=1,
+    )
+    completions = _ExtractorCompletions(
+        [
+            Exception("model not found"),
+            _extractor_response('{"project_overview":{}}', "deepseek-chat"),
+        ]
+    )
+    extractor = DeepSeekExtractor(
+        enabled,
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=completions)
+        ),
+    )
+
+    extractor.extract(payload("evaluation", "评分办法"), "hint")
+
+    assert [call["model"] for call in completions.calls] == [
+        "deepseek-flash",
+        "deepseek-chat",
+    ]
+    assert extractor.last_usage is not None
+    assert extractor.last_usage["fallback"] is True
+
+    disabled = replace(enabled, deepseek_allow_fallback=False)
+    blocked = _ExtractorCompletions([Exception("model not found")])
+    extractor = DeepSeekExtractor(
+        disabled,
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=blocked)
+        ),
+    )
+
+    with pytest.raises(ExtractionError):
+        extractor.extract(payload("evaluation", "评分办法"), "hint")
+
+    assert [call["model"] for call in blocked.calls] == ["deepseek-flash"]
 
 
 def test_build_payloads_respects_budget(document: ParsedDocument) -> None:

@@ -378,6 +378,7 @@ def execute_parse_job(
     parse_func: ParseFunc,
     storage: Storage | None = None,
     external_usage_recorder: Callable[[Job, Any], None] | None = None,
+    llm_usage_recorder: Callable[[Job, Any], None] | None = None,
 ) -> None:
     """Run one parse job. Shared by the local dispatcher and the Celery task."""
     job = store.mark_running(job_id)
@@ -464,6 +465,15 @@ def execute_parse_job(
         except Exception:  # noqa: BLE001 - usage must not fail a parse
             logger.warning(
                 "could not record external usage for job %s",
+                job_id,
+                exc_info=True,
+            )
+    if llm_usage_recorder is not None:
+        try:
+            llm_usage_recorder(job, result)
+        except Exception:  # noqa: BLE001 - usage must not fail a parse
+            logger.warning(
+                "could not record LLM usage for job %s",
                 job_id,
                 exc_info=True,
             )

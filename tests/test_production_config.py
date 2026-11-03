@@ -30,6 +30,13 @@ PRODUCTION_ENV = {
     "MINIO_SECRET_KEY": "strong-minio-secret",
     "MCP_API_TOKEN": "0123456789abcdef0123456789abcdef",
     "MAX_PDF_PAGES": "200",
+    "BID_RUN_BUDGET_CENTS": "1000",
+    "LLM_PRICE_TABLE": (
+        '{"deepseek-flash":{"input_per_1k_cny":0.001,'
+        '"output_per_1k_cny":0.002},'
+        '"deepseek-chat":{"input_per_1k_cny":0.001,'
+        '"output_per_1k_cny":0.002}}'
+    ),
 }
 
 
@@ -108,6 +115,43 @@ def test_production_rejects_unsafe_defaults() -> None:
     for overrides, expected in cases:
         errors = production_settings(**overrides).production_errors()
         assert any(expected in error for error in errors), (overrides, errors)
+
+
+def test_production_requires_pricing_and_run_budget() -> None:
+    assert any(
+        "LLM pricing" in error
+        for error in production_settings(LLM_PRICE_TABLE="").production_errors()
+    )
+    assert any(
+        "BID_RUN_BUDGET_CENTS" in error
+        for error in production_settings(BID_RUN_BUDGET_CENTS="0").production_errors()
+    )
+    # Missing the fallback model is also unsafe because fallback calls can occur.
+    assert any(
+        "deepseek-chat" in error
+        for error in production_settings(
+            LLM_PRICE_TABLE=(
+                '{"deepseek-flash":{"input_per_1k_cny":0.001,'
+                '"output_per_1k_cny":0.002}}'
+            )
+        ).production_errors()
+    )
+
+
+def test_production_cost_escape_hatches() -> None:
+    unpriced = production_settings(
+        LLM_PRICE_TABLE="", ALLOW_UNPRICED_LLM="true"
+    )
+    assert not any("LLM pricing" in error for error in unpriced.production_errors())
+    assert unpriced.cost_guardrails_ok is True
+
+    unbudgeted = production_settings(
+        BID_RUN_BUDGET_CENTS="0", ALLOW_UNBUDGETED_RUNS="true"
+    )
+    assert not any(
+        "BID_RUN_BUDGET_CENTS" in error
+        for error in unbudgeted.production_errors()
+    )
 
 
 def test_create_app_fails_fast_on_unsafe_production(tmp_path: Path) -> None:

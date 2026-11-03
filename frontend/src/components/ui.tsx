@@ -113,7 +113,7 @@ export function Badge({
 interface ProgressBarProps {
   percent: number
   className?: string
-  tone?: 'cyan' | 'green' | 'red'
+  tone?: 'cyan' | 'green' | 'amber' | 'red'
 }
 
 export function ProgressBar({
@@ -125,9 +125,11 @@ export function ProgressBar({
   const toneClass =
     tone === 'green'
       ? 'bg-emerald-400'
-      : tone === 'red'
-        ? 'bg-red-400'
-        : 'bg-cyan-400'
+      : tone === 'amber'
+        ? 'bg-amber-400'
+        : tone === 'red'
+          ? 'bg-red-400'
+          : 'bg-cyan-400'
   return (
     <div
       className={cn('h-2 overflow-hidden rounded-full bg-slate-800', className)}

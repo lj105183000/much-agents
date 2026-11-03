@@ -18,6 +18,7 @@ from .external_usage import (
     build_external_usage,
     persist_external_usage,
 )
+from .llm_usage import build_parse_llm_usage, persist_parse_llm_usage
 from .redis_jobs import RedisJobStore
 from .service import execute_parse_job
 from .storage_runtime import build_runtime_storage
@@ -54,6 +55,12 @@ def parse_document_task(job_id: str) -> None:
                 persist_external_usage(
                     repo,
                     build_external_usage(current, result),
+                )
+            ),
+            llm_usage_recorder=lambda current, result: (
+                persist_parse_llm_usage(
+                    repo,
+                    build_parse_llm_usage(current, result),
                 )
             ),
         )

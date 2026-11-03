@@ -68,6 +68,8 @@ chmod 600 deploy/env.production
 | `MCP_API_TOKEN` | `openssl rand -hex 32`，至少 16 字符 |
 | `CORS_ORIGINS` | 实际访问地址，如 `https://much-agents.internal`；不能为 `*` |
 | `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `MINERU_API_KEY` | 按需填写；缺失只影响对应能力 |
+| `LLM_PRICE_TABLE` | 当前模型（启用回退时还包括 `deepseek-chat`）的生效价格；模板中的公开列表价必须替换为合同价 |
+| `BID_RUN_BUDGET_CENTS` | 正整数（分）；模板默认 500（¥5.00），按项目实际成本调整 |
 
 生产启动会执行 fail-fast，以下任一条件都会导致 API 拒绝启动：
 
@@ -75,6 +77,7 @@ chmod 600 deploy/env.production
 - `TASK_BACKEND` 不是 `celery` 或 `STORAGE_BACKEND` 不是 `minio`。
 - 数据库/Redis/MinIO 仍使用开发默认凭据或 `CHANGE_ME` 占位符，或 `MCP_API_TOKEN` 太短、仍是占位符。
 - `MAX_PDF_PAGES > 200`，或认证/Celery 时间参数超出合理范围。
+- 价格表未覆盖当前模型（及启用回退时的 `deepseek-chat`），或 `BID_RUN_BUDGET_CENTS` 不是正数。仅在明确接受成本风险时设置 `ALLOW_UNPRICED_LLM=true` / `ALLOW_UNBUDGETED_RUNS=true` 跳过对应检查。
 
 `deploy/env.production` 已被 gitignore，**不要提交**。请另存一份到加密的密钥管理系统；备份脚本不会复制它。
 

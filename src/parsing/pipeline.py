@@ -245,6 +245,7 @@ def parse_document(
     extraction_method: str | None = None
     extraction_status: str | None = None
     project_name = ""
+    llm_usage: list[dict[str, Any]] = []
     exit_code = EXIT_OK
     extraction_path = doc_dir / "extraction.json"
     started = time.perf_counter()
@@ -260,6 +261,7 @@ def parse_document(
             result, extraction_meta = extract_document(document, settings)
             extraction_method = extraction_meta["method"]
             extraction_status = extraction_meta["status"]
+            llm_usage = list(extraction_meta.get("llm_usage") or [])
             project_name = result.project_overview.project_name or ""
             payload = {
                 "schema_version": "1.0",
@@ -397,4 +399,5 @@ def parse_document(
         warnings=list(dict.fromkeys(warnings)),
         timings_seconds=timings,
         external_usage=external_usage,
+        llm_usage=llm_usage,
     )

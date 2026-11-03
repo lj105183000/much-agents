@@ -242,6 +242,11 @@ LLM_COST = REGISTRY.counter(
     "Estimated LLM cost in CNY by model.",
     ("model",),
 )
+LLM_UNPRICED_CALLS = REGISTRY.counter(
+    "much_agents_llm_unpriced_calls_total",
+    "LLM calls with tokens but no configured price, by operation and model.",
+    ("operation", "model"),
+)
 RUNS = REGISTRY.counter(
     "much_agents_runs_total",
     "Bid runs by terminal status.",
@@ -331,3 +336,8 @@ def record_llm_usage(
         LLM_TOKENS.inc(completion_tokens, model=model or "unknown", kind="completion")
     if cost_cny is not None:
         LLM_COST.inc(cost_cny, model=model or "unknown")
+    elif prompt_tokens is not None or completion_tokens is not None:
+        LLM_UNPRICED_CALLS.inc(
+            operation=operation or "unknown",
+            model=model or "unknown",
+        )

@@ -142,9 +142,15 @@ def upload(
 def test_health(client: TestClient) -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-    assert isinstance(response.json()["pdf_export_available"], bool)
-    assert isinstance(response.json()["doc_export_available"], bool)
+    body = response.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["pdf_export_available"], bool)
+    assert isinstance(body["doc_export_available"], bool)
+    assert body["llm_pricing_configured"] is False
+    assert "deepseek-flash" in body["missing_price_models"]
+    assert body["run_budget_cents"] is None
+    assert body["budget_enforcement"] == "warn"
+    assert body["cost_guardrails_ok"] is False
 
 
 def test_upload_and_poll_success(

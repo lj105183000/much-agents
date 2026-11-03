@@ -95,6 +95,7 @@ def extract_document(
         "invalid_items": 0,
     }
     warnings: list[str] = []
+    llm_usage: list[dict] = []
 
     if not settings.extraction_enabled:
         return StructuredExtraction(), {
@@ -103,6 +104,7 @@ def extract_document(
             "model": settings.deepseek_model,
             "stats": stats,
             "warnings": ["extraction disabled by EXTRACTION_ENABLED"],
+            "llm_usage": [],
         }
 
     llm_parts: list[StructuredExtraction] = []
@@ -123,7 +125,25 @@ def extract_document(
                     llm_parts.append(
                         structured_from_raw(raw, payload.name, warnings, stats)
                     )
+                    usage = getattr(extractor, "last_usage", None)
+                    if usage:
+                        llm_usage.append(
+                            {
+                                "provider": "deepseek",
+                                "operation": "extraction",
+                                **usage,
+                            }
+                        )
                 except Exception as exc:  # noqa: BLE001 - vendor errors vary
+                    usage = getattr(extractor, "last_usage", None)
+                    if usage:
+                        llm_usage.append(
+                            {
+                                "provider": "deepseek",
+                                "operation": "extraction",
+                                **usage,
+                            }
+                        )
                     warnings.append(
                         f"LLM extraction failed for {payload.name}"
                         f" (part {payload.part}): {str(exc)[:200]}"
@@ -150,5 +170,6 @@ def extract_document(
         "model": settings.deepseek_model,
         "stats": stats,
         "warnings": merged.warnings,
+        "llm_usage": llm_usage,
     }
     return merged, meta

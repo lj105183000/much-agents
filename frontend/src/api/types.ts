@@ -82,6 +82,11 @@ export interface HealthResponse {
   storage_ok: boolean
   pdf_export_available: boolean
   doc_export_available: boolean
+  llm_pricing_configured: boolean
+  missing_price_models: string[]
+  run_budget_cents: number | null
+  budget_enforcement: string
+  cost_guardrails_ok: boolean
 }
 
 export interface JobCreatedResponse {
@@ -877,6 +882,14 @@ export interface BidExternalUsageView {
   created_at: string
 }
 
+export interface BidSectionCostView {
+  section_id: string
+  title: string
+  calls: number
+  tokens: number
+  cost_cny: number
+}
+
 export interface BidUsageResponse {
   run_id: string
   doc_id: string
@@ -894,6 +907,18 @@ export interface BidUsageResponse {
   project_monthly_budget_cents: number | null
   project_month_cost_cny: number
   external: BidExternalUsageView[]
+  external_cost_cny: number
+  total_cost_cny: number
+  unpriced_llm_calls: number
+  unpriced_external_records: number
+  characters: number
+  narrative_written: number
+  cost_per_1k_chars: number | null
+  cost_per_section: number | null
+  wall_clock_ms: number | null
+  pricing_ready: boolean
+  missing_price_models: string[]
+  sections: BidSectionCostView[]
 }
 
 export interface BidFeedbackListResponse {
@@ -1003,6 +1028,24 @@ export interface AnalyticsDaily {
   cost_cny: number
 }
 
+export interface AnalyticsCostEfficiency {
+  llm_cost_cny: number
+  external_cost_cny: number
+  parse_llm_cost_cny: number
+  total_cost_cny: number
+  unpriced_llm_calls: number
+  unpriced_external_records: number
+  parse_llm_calls: number
+  characters: number
+  narrative_sections: number
+  cost_per_1k_chars: number | null
+  cost_per_section: number | null
+  approved_runs: number
+  cost_per_approved_run: number | null
+  pricing_ready: boolean
+  missing_price_models: string[]
+}
+
 export interface AnalyticsOverview {
   days: number
   runs: AnalyticsRuns
@@ -1013,6 +1056,7 @@ export interface AnalyticsOverview {
   projects: AnalyticsProject[]
   daily: AnalyticsDaily[]
   budget_alerts: AnalyticsBudgetAlert[]
+  cost_efficiency: AnalyticsCostEfficiency
 }
 
 export interface EvalCaseCounts {

@@ -689,6 +689,10 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert usage.json()["cost_cny"] == 0.5
         assert usage.json()["external"][0]["provider"] == "mineru"
         assert usage.json()["run_budget_cents"] is None
+        assert usage.json()["external_cost_cny"] == 0.2
+        assert usage.json()["total_cost_cny"] == 0.7
+        assert usage.json()["unpriced_llm_calls"] == 0
+        assert usage.json()["sections"] == []
         analytics = client.get("/api/analytics/overview?days=30")
         assert analytics.status_code == 200, analytics.text
         payload = analytics.json()
@@ -697,6 +701,7 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert payload["usage"]["llm_calls"] == 0
         assert payload["external"]["units"] == 10
         assert payload["external"]["cost_cny"] == 0.2
+        assert payload["cost_efficiency"]["total_cost_cny"] == 0.7
 
         feedback = client.post(
             f"/api/bid-runs/{run_id}/feedback",
@@ -755,6 +760,9 @@ def test_feedback_quality_snapshot_and_analytics(tmp_path: Path) -> None:
         assert "External" in exported.text
         assert "mineru" in exported.text
         assert "BudgetAlerts" in exported.text
+        assert "CostEfficiency" in exported.text
+        assert "cost_per_1k_chars" in exported.text
+        assert "cost_per_approved_run" in exported.text
 
 
 def test_bid_run_approval_is_required_for_export(tmp_path: Path) -> None:
@@ -1699,6 +1707,16 @@ def test_bid_run_fix_plan_uses_injected_llm(tmp_path: Path) -> None:
         ensure_ascii=False,
     )
     llm = FakeChatClient(json_response=response)
+    llm.last_usage = {
+        "model_requested": "deepseek-flash",
+        "model_actual": "deepseek-flash",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "finish_reason": "stop",
+        "retry_count": 0,
+        "fallback": False,
+    }
     app, repo, _store, _dispatcher = make_app(tmp_path, llm_factory=lambda: llm)
     with TestClient(app) as client:
         created = client.post(
@@ -1723,3 +1741,12 @@ def test_bid_run_fix_plan_uses_injected_llm(tmp_path: Path) -> None:
             entry["action"] == "manual" and entry["reason"] == "需人工核对营业执照"
             for entry in body["items"]
         )
+        assert repo.run_usage[run_id].llm_calls == 1
+        assert any(
+            row.get("operation") == "fix_plan"
+            for row in repo.llm_call_log
+        )
+        usage = client.get(f"/api/bid-runs/{run_id}/usage")
+        assert usage.status_code == 200, usage.text
+        assert usage.json()["sections"][0]["calls"] == 1
+        assert usage.json()["sections"][0]["title"] == "未归属/配图/修复方案"

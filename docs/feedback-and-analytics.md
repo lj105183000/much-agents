@@ -76,6 +76,7 @@ MinIO（大对象） + Prometheus（时序）
 | `status` / `latency_ms` / `usage_metadata` | 状态、耗时与模型/批次等元数据 |
 
 - 解析任务与附件任务结束后，`execute_parse_job`/`execute_attach_job` 通过 `api/external_usage.py` 写入账本；Celery 与本地 runner 都覆盖。
+- 结构化抽取的 DeepSeek 调用通过 `api/llm_usage.py` 写入 `llm_call_log`：`run_id=NULL`、带 `job_id`/`project_id`，按价格表估算 `cost_cny`，包含重试、fallback、耗时与 `finish_reason`。解析 LLM 成本计入项目月度成本与运营看板，但**不进入 run 预算**（解析不属于某个投标 run）。
 - MinerU：仅当实际使用 `mineru` 解析/OCR 时记录页数；PyMuPDF 回退不计外部用量。
 - Embedding：`ZhipuEmbedder` 从响应 `usage` 累计调用数、文本数、prompt/total tokens，写入 `ingest.json` 摘要并进入账本；缓存命中不重复计入。附件 PDF OCR 与附件 embedding 也计入。
 - 计价：`MINERU_PRICE_PER_PAGE_CNY`、`EMBEDDING_PRICE_PER_1K_TOKENS_CNY`，0 表示只记录用量不算成本。
@@ -89,13 +90,13 @@ BID_RUN_BUDGET_CENTS=500          # 500 分 = ¥5.00；0 关闭
 BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 ```
 
-- 预算基于 `run_usage.cost_cny` 累计；价格未配置时 LLM 成本为 0，无法触发预算。
+- 预算基于 `run_usage.cost_cny` 累计；价格未配置时 LLM 成本为 0，无法触发预算。生产环境要求价格表覆盖当前模型（启用回退时还包括 `deepseek-chat`）且 `BID_RUN_BUDGET_CENTS > 0`，否则 API 拒绝启动；仅明确接受风险时用 `ALLOW_UNPRICED_LLM=true` / `ALLOW_UNBUDGETED_RUNS=true` 跳过。
 - `warn`：达到预算后继续生成，在 run warnings 中追加提示。
 - `stop`：达到预算后停止继续调度新章节（已并发中的章节可完成），run 变为 `paused`，message/warnings 记录预算超限；`generate/resume/regenerate` 在预算仍超限时返回 409，需管理员调整预算或新建 run。
 - 单节重写/续跑同样受预算约束；预算检查为 best-effort，账本写入失败只 warning。
 - **预算告警**：run 与项目月度预算达到 80% 发 warning、100% 发 exceeded；收件人为项目 manager，走站内通知与可选 Webhook/SMTP。按 `(scope, run/项目+月份, level, budget)` 去重，调整预算后会重新触发；告警失败不影响生成。项目 manager 可在通知铃铛「通知设置」关闭预算类通知。
 
-**项目月度配额**：`projects.monthly_budget_cents`（迁移 `0019`，`NULL`/0 不限制），在「项目管理 → 编辑」中按元设置。`generate/resume/regenerate` 会累计当前自然月 `run_usage` + `external_usage` 成本，达到配额后拒绝新的生成/续跑（409）；已运行任务不受影响。运营看板项目表显示「本月成本 / 预算」。
+**项目月度配额**：`projects.monthly_budget_cents`（迁移 `0019`，`NULL`/0 不限制），在「项目管理 → 编辑」中按元设置。`generate/resume/regenerate` 会累计当前自然月 `run_usage` + `external_usage` + job 级解析 LLM 成本，达到配额后拒绝新的生成/续跑（409）；已运行任务不受影响。运营看板项目表显示「本月成本 / 预算」。
 
 ## 6. 运营看板
 
@@ -108,12 +109,15 @@ BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 - 质量：快照数、门禁分布、平均需求/引用覆盖率
 - 项目 Top 10：runs、调用、门禁阻断、成本
 - 最近 14 天：runs、门禁阻断、成本
+- 成本效率：LLM/外部/解析 LLM 分项成本、未计价调用/外部记录数、总成本、字符数与叙事节数、成本/千字、成本/节、已审批 run 数与成本/已审批 run
+
+`/api/bid-runs/{run_id}/usage` 还返回分项成本、未计价计数、字符/节数、成本/千字、成本/节、run 墙钟与按章节成本；解析 LLM 不计入单 run 成本。`GET /api/health` 返回 `llm_pricing_configured`、`missing_price_models`、`run_budget_cents`、`budget_enforcement` 与 `cost_guardrails_ok`，便于前端与运维在成本护栏缺失时提示。
 
 前端左侧「运营看板」仅管理员可见，支持 7/30/90 天切换与刷新。查询全部走 PostgreSQL 聚合，不新增外部服务。
 
 **预算趋势图**：`GET /api/analytics/budget-trend?days=7|30|90&project_id=`（admin，global 或单项目）返回本月每日 LLM/外部成本、每日累计月成本、月度预算（项目配额；未指定项目时为所有非空项目配额之和）与 `ok|warning|exceeded|none` 状态。前端手写 SVG：上方每日堆叠柱（LLM/外部）、下方本月累计线 + 预算横线，同一成本单位、非双轴；含悬停十字线/提示、图例、端点直标、数据表视图与键盘左右切换。图表范围最多回溯到本月 1 日，超出窗口的月内成本仍计入累计。
 
-`GET /api/analytics/export.csv?days=7|30|90`（仅 admin）导出 UTF-8 BOM CSV，包含 Summary、Daily、Projects（含本月成本/预算）、Feedback、External、BudgetAlerts 分节；所有单元格做 CSV 公式注入前缀转义。前端「导出 CSV」按钮下载。运营看板同时展示最近预算告警历史（kind/title/body/时间/已读）。
+`GET /api/analytics/export.csv?days=7|30|90`（仅 admin）导出 UTF-8 BOM CSV，包含 Summary、CostEfficiency、Daily、Projects（含本月成本/预算）、Feedback、External、BudgetAlerts 分节；所有单元格做 CSV 公式注入前缀转义。前端「导出 CSV」按钮下载。运营看板同时展示最近预算告警历史（kind/title/body/时间/已读）。
 
 `GET /api/bid-runs/{run_id}/usage`（项目只读）返回该 run 的 LLM 调用/token/成本/重试/耗时、run 预算与策略、项目本月成本/月度配额，以及该文档的 MinerU/Embedding 外部用量；前端「成本与预算」面板显示进度条与外部用量明细。
 
@@ -121,5 +125,6 @@ BID_BUDGET_ENFORCEMENT=warn       # warn | stop
 
 - 反馈 reason 可能含业务信息：仅管理员看板聚合展示 Top 原因；不进入审计 detail、日志或 Webhook。
 - 快照只存摘要和哈希，不存正文/profile。
-- 当前仍未实现：物化视图/预聚合、SQL 自由查询、按客户计费、配额历史与预算趋势图。
+- 当前仍未实现：物化视图/预聚合、SQL 自由查询、按客户计费、配额历史；预算趋势图已实现（见第 6 节）。
+- 预算检查是章节边界/可选步骤入口的 best-effort 检查，不是每次 LLM 调用前的硬拦截；并发中的章节可完成。
 - 数据量增长后先加索引/物化视图/定时聚合；达到 0.2 节触发条件再评估重型数据平台。

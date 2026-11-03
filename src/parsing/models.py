@@ -178,6 +178,7 @@ class ParseResult:
     timings_seconds: dict[str, float] = field(default_factory=dict)
     error: str | None = None
     external_usage: list[dict[str, Any]] = field(default_factory=list)
+    llm_usage: list[dict[str, Any]] = field(default_factory=list)
 
     def to_summary(self) -> dict[str, Any]:
         return {

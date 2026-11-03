@@ -359,7 +359,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 真实 LLM 预算封顶基准与夜间 workflow、价格 `effective_from` 多版本与发票成本对账
 - 站内通知与可选 Webhook/SMTP
 - 章节反馈/质量快照/运营看板与 CSV 报表
-- MinerU/Embedding（含附件）用量账本、run 预算/项目月度配额、80%/100% 阈值告警与预算趋势图
+- MinerU/Embedding（含附件）与解析 LLM 用量账本、run 预算/项目月度配额、80%/100% 阈值告警、预算趋势图与成本效率指标
 - L1 评测集 CSV 标注流程与 reviewed points 回归评分
 - L2 盲评工作簿与人工标签校准
 - DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览

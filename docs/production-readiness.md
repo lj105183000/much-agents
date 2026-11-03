@@ -220,7 +220,9 @@ API/Worker ──> PostgreSQL（明细：llm_call_log / run_usage / versions / f
 | `retrieval_snapshots` | 检索可追溯 | `run_id/section_id/query_text/query_sha256/mode/top_k/hits JSONB/evidence_chars/trace_key/created_at` | P1 |
 | `external_usage` | MinerU/Embedding 用量 | `provider/operation/project_id/doc_id/job_id/units/unit_type/cost_cny/status/latency_ms/created_at` | P1 |
 
-> 2026-11-02 进展：`bid_quality_snapshots`、`feedback_events` 已由迁移 `0017` 落地，`external_usage` 由 `0018` 落地，项目月度配额由 `0019` 落地；新增管理员「运营看板」、CSV 导出、`BID_RUN_BUDGET_CENTS`/`BID_BUDGET_ENFORCEMENT` warn/stop 与项目编辑中的月度预算。预算告警通知、配额历史和物化视图仍未实现。
+> 2026-11-02 进展：`bid_quality_snapshots`、`feedback_events` 已由迁移 `0017` 落地，`external_usage` 由 `0018` 落地，项目月度配额由 `0019` 落地；新增管理员「运营看板」、CSV 导出、`BID_RUN_BUDGET_CENTS`/`BID_BUDGET_ENFORCEMENT` warn/stop 与项目编辑中的月度预算。配额历史和物化视图仍未实现（预算告警通知已实现）。
+>
+> 2026-11-03 进展：生产 fail-fast 增加价格表与 run 预算检查（`ALLOW_UNPRICED_LLM`/`ALLOW_UNBUDGETED_RUNS` 为显式逃生口）；结构化抽取 LLM 调用写入 `llm_call_log`（`run_id=NULL`，计入项目月度成本）；修复方案/配图规划也走 metered 客户端；未计价调用计入 Prometheus 指标；运营看板与 run 用量增加成本效率指标（成本/千字、成本/节、成本/已审批 run）和按章节成本。
 
 ### 3.3 迁移建议
 
@@ -669,6 +671,10 @@ eval-data/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LLM_PRICE_TABLE` | 空（生产必须配置；当前生产 env 为公开估算，待合同价） | JSON/文件路径；模型输入/输出单价与 `effective_from` |
+| `ALLOW_UNPRICED_LLM` | `false` | 生产逃生口：明确接受未计价 LLM 调用时才设为 true |
+| `BID_RUN_BUDGET_CENTS` | 0（生产必须为正） | 单 run LLM 预算（分）；0 表示关闭 |
+| `BID_BUDGET_ENFORCEMENT` | `warn` | `warn` 告警 / `stop` 超预算暂停 |
+| `ALLOW_UNBUDGETED_RUNS` | `false` | 生产逃生口：明确接受无 run 预算时才设为 true |
 | `BUDGET_MONTHLY_CNY` | 空 | 全局月预算；空表示不限制 |
 | `PROJECT_MONTHLY_BUDGET_CNY` | 空 | 项目月预算 |
 | `BID_RUN_MAX_LLM_CALLS` | 空 | 单 run 调用上限 |

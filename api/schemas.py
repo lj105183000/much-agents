@@ -22,6 +22,11 @@ class HealthResponse(BaseModel):
     storage_ok: bool = True
     pdf_export_available: bool = False
     doc_export_available: bool = False
+    llm_pricing_configured: bool = False
+    missing_price_models: list[str] = Field(default_factory=list)
+    run_budget_cents: int | None = None
+    budget_enforcement: str = "warn"
+    cost_guardrails_ok: bool = False
 
 
 class JobCreatedResponse(BaseModel):
@@ -465,6 +470,14 @@ class BidExternalUsageView(BaseModel):
     created_at: datetime
 
 
+class BidSectionCostView(BaseModel):
+    section_id: str = ""
+    title: str = ""
+    calls: int = 0
+    tokens: int = 0
+    cost_cny: float = 0.0
+
+
 class BidUsageResponse(BaseModel):
     run_id: str
     doc_id: str
@@ -482,6 +495,18 @@ class BidUsageResponse(BaseModel):
     project_monthly_budget_cents: int | None = None
     project_month_cost_cny: float = 0.0
     external: list[BidExternalUsageView] = Field(default_factory=list)
+    external_cost_cny: float = 0.0
+    total_cost_cny: float = 0.0
+    unpriced_llm_calls: int = 0
+    unpriced_external_records: int = 0
+    characters: int = 0
+    narrative_written: int = 0
+    cost_per_1k_chars: float | None = None
+    cost_per_section: float | None = None
+    wall_clock_ms: int | None = None
+    pricing_ready: bool = False
+    missing_price_models: list[str] = Field(default_factory=list)
+    sections: list[BidSectionCostView] = Field(default_factory=list)
 
 
 class BidFeedbackView(BaseModel):
@@ -604,6 +629,24 @@ class AnalyticsBudgetAlert(BaseModel):
     created_at: datetime
 
 
+class AnalyticsCostEfficiency(BaseModel):
+    llm_cost_cny: float = 0.0
+    external_cost_cny: float = 0.0
+    parse_llm_cost_cny: float = 0.0
+    total_cost_cny: float = 0.0
+    unpriced_llm_calls: int = 0
+    unpriced_external_records: int = 0
+    parse_llm_calls: int = 0
+    characters: int = 0
+    narrative_sections: int = 0
+    cost_per_1k_chars: float | None = None
+    cost_per_section: float | None = None
+    approved_runs: int = 0
+    cost_per_approved_run: float | None = None
+    pricing_ready: bool = False
+    missing_price_models: list[str] = Field(default_factory=list)
+
+
 class AnalyticsOverview(BaseModel):
     days: int
     runs: AnalyticsRuns = Field(default_factory=AnalyticsRuns)
@@ -614,6 +657,9 @@ class AnalyticsOverview(BaseModel):
     projects: list[AnalyticsProject] = Field(default_factory=list)
     daily: list[AnalyticsDaily] = Field(default_factory=list)
     budget_alerts: list[AnalyticsBudgetAlert] = Field(default_factory=list)
+    cost_efficiency: AnalyticsCostEfficiency = Field(
+        default_factory=AnalyticsCostEfficiency
+    )
 
 
 class EvalCaseCounts(BaseModel):

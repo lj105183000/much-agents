@@ -115,6 +115,12 @@ class ApiSettings:
     eval_bids_dir: Path | None = None
     eval_baseline: Path | None = None
     eval_reports_dir: Path | None = None
+    allow_unpriced_llm: bool = False
+    allow_unbudgeted_runs: bool = False
+    llm_pricing_configured: bool = False
+    missing_price_models: tuple[str, ...] = ()
+    bid_run_budget_cents: int = 0
+    bid_budget_enforcement: str = "warn"
 
     @property
     def inbox_dir(self) -> Path:
@@ -127,6 +133,14 @@ class ApiSettings:
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def cost_guardrails_ok(self) -> bool:
+        pricing_ready = self.llm_pricing_configured or self.allow_unpriced_llm
+        budget_ready = (
+            self.bid_run_budget_cents > 0 or self.allow_unbudgeted_runs
+        )
+        return pricing_ready and budget_ready
 
     def production_errors(self) -> tuple[str, ...]:
         """Return unsafe production settings; empty means the config is usable."""
@@ -179,6 +193,17 @@ class ApiSettings:
             errors.append(
                 "AUTH_LOGIN_IP_WINDOW_SECONDS must be between 10 and 86400"
             )
+        if not self.llm_pricing_configured and not self.allow_unpriced_llm:
+            missing = ", ".join(self.missing_price_models) or "LLM_PRICE_TABLE"
+            errors.append(
+                "LLM pricing is required in production; configure "
+                f"LLM_PRICE_TABLE for {missing} or set ALLOW_UNPRICED_LLM=true"
+            )
+        if self.bid_run_budget_cents <= 0 and not self.allow_unbudgeted_runs:
+            errors.append(
+                "BID_RUN_BUDGET_CENTS must be positive in production "
+                "or set ALLOW_UNBUDGETED_RUNS=true"
+            )
         if self.celery_soft_time_limit_seconds >= self.celery_time_limit_seconds:
             errors.append(
                 "CELERY_SOFT_TIME_LIMIT_SECONDS must be below the hard limit"
@@ -222,6 +247,22 @@ class ApiSettings:
                 return default
             path = Path(raw)
             return path if path.is_absolute() else root / path
+
+        from src.bidding.llm_usage import price_status
+
+        required_models = [_str(env, "DEEPSEEK_MODEL", "deepseek-flash")]
+        if _bool(env, "DEEPSEEK_ALLOW_FALLBACK", True):
+            if "deepseek-chat" not in required_models:
+                required_models.append("deepseek-chat")
+        pricing = price_status(
+            required_models,
+            raw=_str(env, "LLM_PRICE_TABLE", ""),
+        )
+        budget_enforcement = (
+            _str(env, "BID_BUDGET_ENFORCEMENT", "warn").strip().lower()
+        )
+        if budget_enforcement not in {"warn", "stop"}:
+            budget_enforcement = "warn"
 
         return cls(
             project_root=root,
@@ -283,4 +324,14 @@ class ApiSettings:
             eval_reports_dir=_eval_path(
                 "EVAL_REPORTS_DIR", upload_dir / "eval-runs"
             ),
+            allow_unpriced_llm=_bool(env, "ALLOW_UNPRICED_LLM", False),
+            allow_unbudgeted_runs=_bool(
+                env, "ALLOW_UNBUDGETED_RUNS", False
+            ),
+            llm_pricing_configured=bool(pricing["configured"]),
+            missing_price_models=tuple(pricing["missing_models"]),
+            bid_run_budget_cents=_int(
+                env, "BID_RUN_BUDGET_CENTS", 0, minimum=0
+            ),
+            bid_budget_enforcement=budget_enforcement,
         )

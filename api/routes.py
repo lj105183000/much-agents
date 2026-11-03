@@ -612,6 +612,18 @@ def build_router() -> APIRouter:
                 status_value = "degraded"
         pdf_export_available = find_soffice() is not None
         PDF_EXPORT_AVAILABLE.set(1 if pdf_export_available else 0)
+        settings = request.app.state.api_settings
+        bid_settings = getattr(request.app.state, "bid_settings", None)
+        run_budget = getattr(
+            bid_settings,
+            "run_budget_cents",
+            settings.bid_run_budget_cents,
+        )
+        budget_enforcement = getattr(
+            bid_settings,
+            "budget_enforcement",
+            settings.bid_budget_enforcement,
+        )
         return HealthResponse(
             status=status_value,
             service="much-agents-api",
@@ -624,6 +636,11 @@ def build_router() -> APIRouter:
             storage_ok=storage_ok,
             pdf_export_available=pdf_export_available,
             doc_export_available=pdf_export_available,
+            llm_pricing_configured=settings.llm_pricing_configured,
+            missing_price_models=list(settings.missing_price_models),
+            run_budget_cents=run_budget if run_budget > 0 else None,
+            budget_enforcement=budget_enforcement,
+            cost_guardrails_ok=settings.cost_guardrails_ok,
         )
 
     @public_router.post("/auth/login", response_model=LoginResponse)
@@ -2713,6 +2730,29 @@ def build_router() -> APIRouter:
             payload.quality.avg_requirements_coverage,
         )
         row("citation_coverage", payload.quality.avg_citation_coverage)
+
+        writer.writerow([])
+        row("CostEfficiency")
+        row("metric", "value")
+        efficiency = payload.cost_efficiency
+        row("llm_cost_cny", efficiency.llm_cost_cny)
+        row("external_cost_cny", efficiency.external_cost_cny)
+        row("parse_llm_cost_cny", efficiency.parse_llm_cost_cny)
+        row("total_cost_cny", efficiency.total_cost_cny)
+        row("unpriced_llm_calls", efficiency.unpriced_llm_calls)
+        row("unpriced_external_records", efficiency.unpriced_external_records)
+        row("parse_llm_calls", efficiency.parse_llm_calls)
+        row("characters", efficiency.characters)
+        row("narrative_sections", efficiency.narrative_sections)
+        row("cost_per_1k_chars", efficiency.cost_per_1k_chars)
+        row("cost_per_section", efficiency.cost_per_section)
+        row("approved_runs", efficiency.approved_runs)
+        row("cost_per_approved_run", efficiency.cost_per_approved_run)
+        row("pricing_ready", efficiency.pricing_ready)
+        row(
+            "missing_price_models",
+            ",".join(efficiency.missing_price_models),
+        )
 
         writer.writerow([])
         row("Daily")

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.bidding import llm_usage as llm_usage_module
 from src.bidding.llm import DeepSeekChatClient
 from src.bidding.llm_usage import (
     LLMUsageRecord,
@@ -14,6 +15,8 @@ from src.bidding.llm_usage import (
     estimate_cost,
     load_price_entries,
     load_price_table,
+    missing_price_models,
+    price_status,
     select_price_entry,
     usage_scope,
 )
@@ -334,3 +337,40 @@ def test_price_entry_without_effective_date_always_applies() -> None:
     )
     table = load_price_table(raw, as_of=date(1999, 1, 1))
     assert estimate_cost("deepseek-chat", 1000, 500, table) == 0.004
+
+
+def test_price_status_reports_missing_models() -> None:
+    raw = json.dumps(
+        {
+            "deepseek-flash": {
+                "input_per_1k_cny": 0.001,
+                "output_per_1k_cny": 0.002,
+            }
+        }
+    )
+
+    status = price_status(["deepseek-flash", "deepseek-chat"], raw=raw)
+
+    assert status["configured"] is False
+    assert status["missing_models"] == ["deepseek-chat"]
+    assert missing_price_models(
+        ["deepseek-flash", "deepseek-chat"], raw=raw
+    ) == ["deepseek-chat"]
+    assert price_status([], raw=raw)["configured"] is True
+
+
+def test_unpriced_call_warns_once(monkeypatch, caplog) -> None:
+    monkeypatch.delenv("LLM_PRICE_TABLE", raising=False)
+    llm_usage_module._unpriced_warned.clear()
+    client = MeteredChatClient(_MeteredInner(), operation="test_unpriced")
+    caplog.set_level("WARNING")
+
+    client.complete_json(system="s", user="u", json_mode=True)
+    client.complete_json(system="s", user="u", json_mode=True)
+
+    messages = [
+        record.message
+        for record in caplog.records
+        if "unpriced LLM call" in record.message
+    ]
+    assert len(messages) == 1

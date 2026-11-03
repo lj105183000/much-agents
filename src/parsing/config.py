@@ -114,6 +114,7 @@ class Settings:
 
     pymupdf_tables: bool
     log_level: str
+    deepseek_allow_fallback: bool = True
 
     @classmethod
     def from_env(
@@ -186,4 +187,7 @@ class Settings:
             chunk_min_size=_int(env, "CHUNK_MIN_SIZE", 120, minimum=0),
             pymupdf_tables=_bool(env, "PYMUPDF_TABLES", False),
             log_level=_str(env, "LOG_LEVEL", "INFO"),
+            deepseek_allow_fallback=_bool(
+                env, "DEEPSEEK_ALLOW_FALLBACK", True
+            ),
         )

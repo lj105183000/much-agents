@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { BidUsageResponse } from '../api/types'
+import { formatDuration } from '../lib/format'
 import {
   Badge,
   Card,
@@ -26,8 +27,9 @@ function budgetPercent(spent: number, budgetCents: number | null): number {
   return Math.min(100, Math.round((spent * 10000) / budgetCents))
 }
 
-function budgetTone(percent: number): 'cyan' | 'green' | 'red' {
+function budgetTone(percent: number): 'cyan' | 'amber' | 'red' {
   if (percent >= 100) return 'red'
+  if (percent >= 80) return 'amber'
   return 'cyan'
 }
 
@@ -109,6 +111,29 @@ export function BidUsagePanel({
       {error ? (
         <p className="mt-2 text-[11px] text-red-300">{error}</p>
       ) : null}
+      {!data.pricing_ready ||
+      data.unpriced_llm_calls > 0 ||
+      data.unpriced_external_records > 0 ? (
+        <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-amber-200">
+          {!data.pricing_ready ? (
+            <p>
+              价格表未完整配置
+              {data.missing_price_models.length
+                ? `（缺 ${data.missing_price_models.join(', ')}）`
+                : ''}
+              ：成本可能被低估，预算可能无法触发。
+            </p>
+          ) : null}
+          {data.unpriced_llm_calls > 0 ? (
+            <p>有 {data.unpriced_llm_calls} 次 LLM 调用未计价。</p>
+          ) : null}
+          {data.unpriced_external_records > 0 ? (
+            <p>
+              有 {data.unpriced_external_records} 条外部用量未计价。
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label="LLM 成本"
@@ -116,7 +141,20 @@ export function BidUsagePanel({
           hint={`${data.llm_calls} 次 · ${data.total_tokens} tokens`}
         />
         <Stat
-          label="Run 预算"
+          label="外部成本"
+          value={money(data.external_cost_cny)}
+          hint={`${data.external.length} 条 · ${data.external
+            .slice(0, 2)
+            .map((item) => item.provider)
+            .join(' / ') || '暂无'}`}
+        />
+        <Stat
+          label="总成本"
+          value={money(data.total_cost_cny)}
+          hint="LLM + 外部（不含解析 LLM）"
+        />
+        <Stat
+          label="Run 预算（LLM）"
           value={
             data.run_budget_cents
               ? money(data.run_budget_cents / 100)
@@ -136,12 +174,25 @@ export function BidUsagePanel({
           }
         />
         <Stat
-          label="外部用量"
-          value={data.external.length}
-          hint={data.external
-            .slice(0, 2)
-            .map((item) => item.provider)
-            .join(' / ') || '暂无'}
+          label="成本 / 千字"
+          value={money(data.cost_per_1k_chars)}
+          hint={`${data.characters} 字`}
+        />
+        <Stat
+          label="成本 / 节"
+          value={money(data.cost_per_section)}
+          hint={`${data.narrative_written} 节`}
+        />
+        <Stat
+          label="Run 墙钟 / LLM 时延"
+          value={
+            data.wall_clock_ms === null
+              ? '—'
+              : formatDuration(data.wall_clock_ms / 1000)
+          }
+          hint={`累计调用 ${formatDuration(
+            (data.duration_ms || 0) / 1000,
+          )}`}
         />
       </div>
 
@@ -215,6 +266,51 @@ export function BidUsagePanel({
               ))}
             </tbody>
           </table>
+          <p className="border-t border-slate-800/70 px-3 py-2 text-right text-[11px] text-slate-400">
+            外部合计 {money(data.external_cost_cny)} · 未计价{' '}
+            {data.unpriced_external_records} 条
+          </p>
+        </div>
+      ) : null}
+
+      {data.sections.length ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-slate-300">
+            按章节成本
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-left text-[11px]">
+              <thead className="bg-slate-950/40 text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 font-medium">章节</th>
+                  <th className="px-3 py-2 text-right font-medium">调用</th>
+                  <th className="px-3 py-2 text-right font-medium">tokens</th>
+                  <th className="px-3 py-2 text-right font-medium">成本</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-300">
+                {data.sections.map((section) => (
+                  <tr
+                    key={`${section.section_id}:${section.title}`}
+                    className="border-t border-slate-800/70"
+                  >
+                    <td className="px-3 py-1.5">
+                      {section.title || section.section_id}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {section.calls}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {section.tokens}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {money(section.cost_cny)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : null}
     </Card>

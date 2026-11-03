@@ -7,11 +7,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, delete, func, select, text, update
+from sqlalchemy import and_, case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from src.bidding.content_hash import compute_section_content_sha256
+from src.bidding.cost_metrics import (
+    cost_per_1k_chars,
+    cost_per_approved_run,
+    cost_per_section,
+)
 
 from .database import (
     BidApprovalRow,
@@ -2188,6 +2193,21 @@ class BidRunRepository:
                 .group_by(external_day)
                 .order_by(external_day)
             )
+            job_llm_day = func.date_trunc(
+                text("'day'"), LlmCallLogRow.ts
+            )
+            job_llm_statement = (
+                select(
+                    job_llm_day,
+                    func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
+                )
+                .where(
+                    LlmCallLogRow.run_id.is_(None),
+                    LlmCallLogRow.ts >= month_start,
+                )
+                .group_by(job_llm_day)
+                .order_by(job_llm_day)
+            )
             if project_id:
                 llm_statement = llm_statement.where(
                     RunUsageRow.project_id == project_id
@@ -2195,9 +2215,15 @@ class BidRunRepository:
                 external_statement = external_statement.where(
                     ExternalUsageRow.project_id == project_id
                 )
+                job_llm_statement = job_llm_statement.where(
+                    LlmCallLogRow.project_id == project_id
+                )
             llm_rows = (await session.execute(llm_statement)).all()
             external_rows = (
                 await session.execute(external_statement)
+            ).all()
+            job_llm_rows = (
+                await session.execute(job_llm_statement)
             ).all()
 
         llm_by_day = {
@@ -2210,6 +2236,11 @@ class BidRunRepository:
             for day, cost in external_rows
             if day is not None
         }
+        for day, cost in job_llm_rows:
+            if day is None:
+                continue
+            key = day.date().isoformat()
+            llm_by_day[key] = llm_by_day.get(key, 0.0) + float(cost or 0)
         daily: list[dict[str, Any]] = []
         cumulative = 0.0
         current = month_start.date()
@@ -2294,7 +2325,204 @@ class BidRunRepository:
                     )
                 )
             ).scalar_one()
-        return float(run_cost or 0.0) + float(external_cost or 0.0)
+            job_llm_cost = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(LlmCallLogRow.cost_cny), 0.0
+                        )
+                    ).where(
+                        LlmCallLogRow.project_id == project_id,
+                        LlmCallLogRow.run_id.is_(None),
+                        LlmCallLogRow.ts >= month_start,
+                    )
+                )
+            ).scalar_one()
+        return (
+            float(run_cost or 0.0)
+            + float(external_cost or 0.0)
+            + float(job_llm_cost or 0.0)
+        )
+
+    async def add_llm_call_log(
+        self,
+        records: list[dict[str, Any]],
+    ) -> int:
+        """Persist job-level LLM calls without updating a run aggregate."""
+
+        if not records:
+            return 0
+        allowed = {
+            "ts",
+            "request_id",
+            "project_id",
+            "run_id",
+            "section_id",
+            "job_id",
+            "provider",
+            "model_requested",
+            "model_actual",
+            "operation",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cost_cny",
+            "latency_ms",
+            "retry_count",
+            "fallback",
+            "finish_reason",
+            "status",
+            "error_type",
+            "temperature",
+            "max_tokens",
+            "json_mode",
+            "system_fingerprint",
+        }
+        rows: list[LlmCallLogRow] = []
+        for raw in records:
+            data = {key: value for key, value in raw.items() if key in allowed}
+            data["run_id"] = None
+            data["project_id"] = data.get("project_id") or None
+            ts = data.get("ts")
+            if isinstance(ts, str):
+                try:
+                    data["ts"] = datetime.fromisoformat(ts)
+                except ValueError:
+                    data.pop("ts", None)
+            rows.append(LlmCallLogRow(**data))
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add_all(rows)
+        return len(rows)
+
+    async def latest_quality_snapshot(
+        self, run_id: str
+    ) -> dict[str, Any] | None:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(BidQualitySnapshotRow)
+                    .where(BidQualitySnapshotRow.run_id == run_id)
+                    .order_by(
+                        BidQualitySnapshotRow.created_at.desc(),
+                        BidQualitySnapshotRow.id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        return dict(row.summary or {})
+
+    async def run_section_costs(
+        self, run_id: str
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(
+                LlmCallLogRow.section_id,
+                BidOutlineSectionRow.title,
+                func.count(LlmCallLogRow.id),
+                func.coalesce(func.sum(LlmCallLogRow.total_tokens), 0),
+                func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
+                func.min(LlmCallLogRow.ts),
+            )
+            .select_from(LlmCallLogRow)
+            .outerjoin(
+                BidOutlineSectionRow,
+                and_(
+                    BidOutlineSectionRow.run_id == LlmCallLogRow.run_id,
+                    BidOutlineSectionRow.section_id
+                    == LlmCallLogRow.section_id,
+                ),
+            )
+            .where(LlmCallLogRow.run_id == run_id)
+            .group_by(
+                LlmCallLogRow.section_id,
+                BidOutlineSectionRow.title,
+            )
+            .order_by(func.min(LlmCallLogRow.ts))
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            {
+                "section_id": str(section_id or ""),
+                "title": str(title or ""),
+                "calls": int(calls or 0),
+                "tokens": int(tokens or 0),
+                "cost_cny": float(cost or 0.0),
+            }
+            for section_id, title, calls, tokens, cost, _ts in rows
+        ]
+
+    async def run_unpriced_llm_calls(self, run_id: str) -> int:
+        async with self._session_factory() as session:
+            value = (
+                await session.execute(
+                    select(func.count(LlmCallLogRow.id)).where(
+                        LlmCallLogRow.run_id == run_id,
+                        LlmCallLogRow.cost_cny.is_(None),
+                    )
+                )
+            ).scalar_one()
+        return int(value or 0)
+
+    async def external_usage_summary(
+        self,
+        *,
+        project_id: str | None,
+        doc_id: str | None,
+    ) -> dict[str, Any]:
+        filters = []
+        if project_id is not None:
+            filters.append(ExternalUsageRow.project_id == project_id)
+        if doc_id is not None:
+            filters.append(ExternalUsageRow.doc_id == doc_id)
+        async with self._session_factory() as session:
+            totals = (
+                await session.execute(
+                    select(
+                        func.count(ExternalUsageRow.id),
+                        func.coalesce(func.sum(ExternalUsageRow.units), 0),
+                        func.coalesce(func.sum(ExternalUsageRow.cost_cny), 0.0),
+                    ).where(*filters)
+                )
+            ).one()
+            unpriced = (
+                await session.execute(
+                    select(func.count(ExternalUsageRow.id)).where(
+                        *filters,
+                        ExternalUsageRow.cost_cny.is_(None),
+                    )
+                )
+            ).scalar_one()
+            provider_rows = (
+                await session.execute(
+                    select(
+                        ExternalUsageRow.provider,
+                        func.count(ExternalUsageRow.id),
+                        func.coalesce(func.sum(ExternalUsageRow.units), 0),
+                        func.coalesce(func.sum(ExternalUsageRow.cost_cny), 0.0),
+                    )
+                    .where(*filters)
+                    .group_by(ExternalUsageRow.provider)
+                    .order_by(ExternalUsageRow.provider)
+                )
+            ).all()
+        return {
+            "records": int(totals[0] or 0),
+            "units": int(totals[1] or 0),
+            "cost_cny": round(float(totals[2] or 0.0), 4),
+            "unpriced_records": int(unpriced or 0),
+            "by_provider": {
+                str(provider): {
+                    "records": int(records or 0),
+                    "units": int(units or 0),
+                    "cost_cny": round(float(cost or 0.0), 4),
+                }
+                for provider, records, units, cost in provider_rows
+            },
+        }
 
     async def get_run_usage(self, run_id: str) -> RunUsageRecord | None:
         async with self._session_factory() as session:
@@ -2465,6 +2693,76 @@ class BidRunRepository:
                     .group_by(ExternalUsageRow.provider)
                 )
             ).all()
+            unpriced_llm = (
+                await session.execute(
+                    select(func.count(LlmCallLogRow.id)).where(
+                        LlmCallLogRow.ts >= start,
+                        LlmCallLogRow.cost_cny.is_(None),
+                    )
+                )
+            ).scalar_one()
+            unpriced_external = (
+                await session.execute(
+                    select(func.count(ExternalUsageRow.id)).where(
+                        ExternalUsageRow.created_at >= start,
+                        ExternalUsageRow.cost_cny.is_(None),
+                    )
+                )
+            ).scalar_one()
+            job_llm = (
+                await session.execute(
+                    select(
+                        func.count(LlmCallLogRow.id),
+                        func.coalesce(func.sum(LlmCallLogRow.cost_cny), 0.0),
+                    ).where(
+                        LlmCallLogRow.run_id.is_(None),
+                        LlmCallLogRow.ts >= start,
+                    )
+                )
+            ).one()
+            latest_snapshots = (
+                await session.execute(
+                    select(
+                        BidQualitySnapshotRow.run_id,
+                        BidQualitySnapshotRow.summary,
+                    )
+                    .where(BidQualitySnapshotRow.created_at >= start)
+                    .distinct(BidQualitySnapshotRow.run_id)
+                    .order_by(
+                        BidQualitySnapshotRow.run_id,
+                        BidQualitySnapshotRow.created_at.desc(),
+                        BidQualitySnapshotRow.id.desc(),
+                    )
+                )
+            ).all()
+            approved_runs = (
+                await session.execute(
+                    select(
+                        func.count(func.distinct(BidApprovalRow.run_id))
+                    ).where(
+                        BidApprovalRow.status == "approved",
+                        BidApprovalRow.created_at >= start,
+                    )
+                )
+            ).scalar_one()
+            approved_run_ids = (
+                select(BidApprovalRow.run_id)
+                .where(
+                    BidApprovalRow.status == "approved",
+                    BidApprovalRow.created_at >= start,
+                )
+                .distinct()
+            )
+            approved_cost = (
+                await session.execute(
+                    select(
+                        func.coalesce(func.sum(RunUsageRow.cost_cny), 0.0)
+                    ).where(
+                        RunUsageRow.run_id.in_(approved_run_ids),
+                        RunUsageRow.updated_at >= start,
+                    )
+                )
+            ).scalar_one()
             quality = (
                 await session.execute(
                     select(
@@ -2651,6 +2949,44 @@ class BidRunRepository:
                 }
             )
         projects.sort(key=lambda item: (-item["runs"], -item["cost_cny"]))
+        characters = 0
+        narrative_sections = 0
+        for _run_id, summary in latest_snapshots:
+            if not isinstance(summary, dict):
+                continue
+            try:
+                characters += int(summary.get("characters") or 0)
+                narrative_sections += int(
+                    summary.get("narrative_written") or 0
+                )
+            except (TypeError, ValueError):
+                continue
+        llm_cost = float(usage[4] or 0.0)
+        external_cost = float(external[2] or 0.0)
+        parse_llm_cost = float(job_llm[1] or 0.0)
+        total_cost = llm_cost + external_cost + parse_llm_cost
+        approved_count = int(approved_runs or 0)
+        cost_efficiency = {
+            "llm_cost_cny": round(llm_cost, 4),
+            "external_cost_cny": round(external_cost, 4),
+            "parse_llm_cost_cny": round(parse_llm_cost, 4),
+            "total_cost_cny": round(total_cost, 4),
+            "unpriced_llm_calls": int(unpriced_llm or 0),
+            "unpriced_external_records": int(unpriced_external or 0),
+            "parse_llm_calls": int(job_llm[0] or 0),
+            "characters": characters,
+            "narrative_sections": narrative_sections,
+            "cost_per_1k_chars": cost_per_1k_chars(total_cost, characters),
+            "cost_per_section": cost_per_section(
+                total_cost, narrative_sections
+            ),
+            "approved_runs": approved_count,
+            "cost_per_approved_run": cost_per_approved_run(
+                float(approved_cost or 0.0), approved_count
+            ),
+            "pricing_ready": False,
+            "missing_price_models": [],
+        }
         daily: dict[str, dict[str, Any]] = {}
         for day, runs, blocked in daily_run_rows:
             key = day.date().isoformat() if day is not None else ""
@@ -2717,6 +3053,7 @@ class BidRunRepository:
                     for provider, records, units, cost in external_by_provider
                 },
             },
+            "cost_efficiency": cost_efficiency,
             "quality": {
                 "snapshots": int(quality[0] or 0),
                 "by_gate": {

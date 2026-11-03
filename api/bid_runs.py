@@ -38,6 +38,7 @@ from src.bidding.content_hash import (
     compute_section_content_sha256,
 )
 from src.bidding.context import TenderContext
+from src.bidding.cost_metrics import cost_per_1k_chars, cost_per_section
 from src.bidding.errors import BidContextError, BidInputError
 from src.bidding.figures import (
     ExternalRenderer,
@@ -50,6 +51,11 @@ from src.bidding.figures import (
 from src.bidding.fix_plan import generate_fix_plan
 from src.bidding.gate import evaluate_gate
 from src.bidding.llm import DeepSeekChatClient
+from src.bidding.llm_usage import (
+    MeteredChatClient,
+    price_status,
+    usage_scope,
+)
 from src.bidding.models import BidOutline
 from src.bidding.pdf_export import PdfExportError, convert_docx_to_pdf
 from src.bidding.template_preview import (
@@ -125,6 +131,7 @@ from .schemas import (
     BidCommentView,
     BidComplianceResponse,
     BidExternalUsageView,
+    BidSectionCostView,
     BidFeedbackCreate,
     BidFeedbackListResponse,
     BidFeedbackView,
@@ -603,6 +610,53 @@ class BidRunService:
         except Exception:  # noqa: BLE001 - plan falls back to deterministic
             logger.warning("could not create compliance LLM client", exc_info=True)
             return None
+
+    def _metered_llm(self, operation: str) -> Any | None:
+        client = self._llm_client()
+        if client is None:
+            return None
+        return MeteredChatClient(client, operation=operation)
+
+    def _pricing_status(self) -> dict[str, Any]:
+        base = self.bid_settings.base
+        models = [str(base.deepseek_model or "deepseek-flash")]
+        if (
+            getattr(base, "deepseek_allow_fallback", True)
+            and "deepseek-chat" not in models
+        ):
+            models.append("deepseek-chat")
+        return price_status(models)
+
+    async def _persist_usage_records(
+        self, run: BidRunRecord, records: list[Any]
+    ) -> None:
+        if not records:
+            return
+        try:
+            await self._repo().add_llm_usage(
+                run.run_id,
+                [record.to_dict() for record in records],
+                project_id=run.project_id,
+            )
+        except Exception:  # noqa: BLE001 - accounting must not break assembly
+            logger.warning(
+                "could not persist LLM usage for bid run %s",
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def _llm_budget_block(
+        self, run: BidRunRecord
+    ) -> str | None:
+        """Return a message when LLM-backed optional steps must be skipped."""
+
+        run_decision = await self._budget_decision(run.run_id)
+        if run_decision.stop:
+            return run_decision.message or "run budget exceeded"
+        project_decision = await self._project_budget_decision(run)
+        if project_decision.exceeded:
+            return project_decision.message or "project monthly budget exceeded"
+        return None
 
     async def create(
         self,
@@ -1223,6 +1277,13 @@ class BidRunService:
 
     async def analytics_overview(self, days: int = 30) -> AnalyticsOverview:
         payload = await self._repo().analytics_overview(days=days)
+        efficiency = dict(payload.get("cost_efficiency") or {})
+        pricing = self._pricing_status()
+        efficiency["pricing_ready"] = bool(pricing.get("configured"))
+        efficiency["missing_price_models"] = list(
+            pricing.get("missing_models") or []
+        )
+        payload["cost_efficiency"] = efficiency
         return AnalyticsOverview(**payload)
 
     async def budget_trend(
@@ -1244,10 +1305,45 @@ class BidRunService:
         external = await repo.list_external_usage(
             project_id=run.project_id, doc_id=run.doc_id, limit=50
         )
+        external_summary = await repo.external_usage_summary(
+            project_id=run.project_id, doc_id=run.doc_id
+        )
+        snapshot = await repo.latest_quality_snapshot(run_id)
+        unpriced_llm = await repo.run_unpriced_llm_calls(run_id)
+        section_costs = await repo.run_section_costs(run_id)
         project_budget = await repo.get_project_monthly_budget(
             run.project_id
         )
         project_cost = await repo.project_month_cost(run.project_id)
+        pricing = self._pricing_status()
+        llm_cost = round(usage.cost_cny, 4) if usage else 0.0
+        external_cost = float(external_summary.get("cost_cny") or 0.0)
+        total_cost = round(llm_cost + external_cost, 4)
+        characters = int((snapshot or {}).get("characters") or 0)
+        narrative_written = int(
+            (snapshot or {}).get("narrative_written") or 0
+        )
+        started = run.started_at or run.created_at
+        finished = run.finished_at or datetime.now(timezone.utc)
+        wall_clock_ms = (
+            max(0, int((finished - started).total_seconds() * 1000))
+            if started is not None
+            else None
+        )
+        sections = [
+            BidSectionCostView(
+                section_id=item.get("section_id") or "",
+                title=(
+                    item.get("title")
+                    or item.get("section_id")
+                    or "未归属/配图/修复方案"
+                ),
+                calls=int(item.get("calls") or 0),
+                tokens=int(item.get("tokens") or 0),
+                cost_cny=round(float(item.get("cost_cny") or 0.0), 4),
+            )
+            for item in section_costs
+        ]
         return BidUsageResponse(
             run_id=run_id,
             doc_id=run.doc_id,
@@ -1256,7 +1352,7 @@ class BidRunService:
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
-            cost_cny=round(usage.cost_cny, 4) if usage else 0.0,
+            cost_cny=llm_cost,
             retries=usage.retries if usage else 0,
             fallback_calls=usage.fallback_calls if usage else 0,
             duration_ms=usage.duration_ms if usage else 0,
@@ -1281,6 +1377,22 @@ class BidRunService:
                 )
                 for record in external
             ],
+            external_cost_cny=external_cost,
+            total_cost_cny=total_cost,
+            unpriced_llm_calls=unpriced_llm,
+            unpriced_external_records=int(
+                external_summary.get("unpriced_records") or 0
+            ),
+            characters=characters,
+            narrative_written=narrative_written,
+            cost_per_1k_chars=cost_per_1k_chars(total_cost, characters),
+            cost_per_section=cost_per_section(
+                total_cost, narrative_written
+            ),
+            wall_clock_ms=wall_clock_ms,
+            pricing_ready=bool(pricing.get("configured")),
+            missing_price_models=list(pricing.get("missing_models") or []),
+            sections=sections,
         )
 
     async def patch_outline(
@@ -2419,21 +2531,38 @@ class BidRunService:
             and "【待填写" not in value
             and len(value) <= 300
         }
+        llm = self._metered_llm("fix_plan")
+        if llm is not None:
+            budget_block = await self._llm_budget_block(run)
+            if budget_block:
+                raise BidRunError(409, budget_block)
+        fix_usage = None
         try:
-            plan = await asyncio.to_thread(
-                generate_fix_plan,
-                compliance=evaluation.compliance,
-                consistency=evaluation.consistency,
-                outline=outline,
-                section_markdowns=assembly.section_markdowns,
-                allowed=allowed,
-                known_facts=known_facts,
-                llm=self._llm_client(),
-                check_ids=list(payload.check_ids),
-                max_items=payload.max_items,
-            )
+            with usage_scope(
+                run_id=run.run_id,
+                job_id=run.job_id or "",
+                project_id=run.project_id,
+            ) as scope:
+                try:
+                    plan = await asyncio.to_thread(
+                        generate_fix_plan,
+                        compliance=evaluation.compliance,
+                        consistency=evaluation.consistency,
+                        outline=outline,
+                        section_markdowns=assembly.section_markdowns,
+                        allowed=allowed,
+                        known_facts=known_facts,
+                        llm=llm,
+                        check_ids=list(payload.check_ids),
+                        max_items=payload.max_items,
+                    )
+                finally:
+                    fix_usage = scope.records
         except ValueError as exc:
             raise BidRunError(422, str(exc)) from exc
+        finally:
+            if fix_usage:
+                await self._persist_usage_records(run, fix_usage)
         return BidFixPlanResponse(run_id=run_id, **plan)
 
     async def apply_fix(
@@ -2813,30 +2942,52 @@ class BidRunService:
             figure_warnings: list[str] = []
             figures_enabled = self.bid_settings.figures_enabled
             try:
-                figure_llm = (
-                    self._llm_client()
+                budget_block = (
+                    await self._llm_budget_block(run)
                     if self.bid_settings.figures_use_llm
                     else None
                 )
-                async with _external_figure_context(
-                    self.bid_settings, external_renderer
-                ) as (figure_renderer, mcp_warnings):
-                    manifest = await asyncio.to_thread(
-                        generate_figures,
-                        context=context,
-                        profile=profile,
-                        outline=outline,
-                        section_markdowns=base.section_markdowns,
-                        outputs=outputs,
-                        run_dir=run_dir,
-                        settings=self.bid_settings,
-                        llm=figure_llm,
-                        external_renderer=figure_renderer,
+                if budget_block:
+                    figure_warnings.append(
+                        f"{budget_block}; skipped LLM figure planning"
                     )
-                if mcp_warnings:
-                    updated_manifest = append_manifest_warnings(run_dir, mcp_warnings)
-                    if updated_manifest is not None:
-                        manifest = updated_manifest
+                figure_llm = None
+                if self.bid_settings.figures_use_llm and not budget_block:
+                    figure_llm = self._metered_llm("figure_planner")
+                figure_usage = None
+                try:
+                    async with _external_figure_context(
+                        self.bid_settings, external_renderer
+                    ) as (figure_renderer, mcp_warnings):
+                        with usage_scope(
+                            run_id=run.run_id,
+                            job_id=run.job_id or "",
+                            project_id=run.project_id,
+                        ) as scope:
+                            try:
+                                manifest = await asyncio.to_thread(
+                                    generate_figures,
+                                    context=context,
+                                    profile=profile,
+                                    outline=outline,
+                                    section_markdowns=base.section_markdowns,
+                                    outputs=outputs,
+                                    run_dir=run_dir,
+                                    settings=self.bid_settings,
+                                    llm=figure_llm,
+                                    external_renderer=figure_renderer,
+                                )
+                            finally:
+                                figure_usage = scope.records
+                    if mcp_warnings:
+                        updated_manifest = append_manifest_warnings(
+                            run_dir, mcp_warnings
+                        )
+                        if updated_manifest is not None:
+                            manifest = updated_manifest
+                finally:
+                    if figure_usage:
+                        await self._persist_usage_records(run, figure_usage)
                 figure_blocks = build_figure_blocks(manifest)
                 figure_stats = dict(manifest.stats)
                 figure_warnings = list(manifest.warnings)
@@ -2970,6 +3121,7 @@ class BidRunService:
         try:
             requirements_summary = dict(requirements.get("summary") or {})
             citations_summary = dict(citations.get("summary") or {})
+            report_stats = (result.get("report") or {}).get("stats") or {}
             check_counts: dict[str, int] = {}
             for check in gate.get("checks") or []:
                 status = str(check.get("status") or "unknown")
@@ -3001,6 +3153,8 @@ class BidRunService:
                     ),
                     "requirements": requirements_summary,
                     "citations": citations_summary,
+                    "characters": report_stats.get("characters"),
+                    "narrative_written": report_stats.get("narrative_written"),
                     "warning_count": len(warnings),
                     "page_limit": gate.get("page_limit"),
                 },
@@ -3122,6 +3276,19 @@ class BidRunService:
             allowed,
         ) = await self._load_validation_inputs(run)
         force = bool(payload.force) if payload is not None else True
+        budget_block = (
+            await self._llm_budget_block(run)
+            if self.bid_settings.figures_use_llm
+            else None
+        )
+        if budget_block:
+            raise BidRunError(409, budget_block)
+        figure_llm = (
+            self._metered_llm("figure_planner")
+            if self.bid_settings.figures_use_llm
+            else None
+        )
+        figure_usage = None
         try:
             base = assemble_staged_bid(
                 context=context,
@@ -3131,25 +3298,30 @@ class BidRunService:
                 allowed=allowed,
                 warnings=list(run.warnings),
             )
-            figure_llm = (
-                self._llm_client() if self.bid_settings.figures_use_llm else None
-            )
             async with _external_figure_context(
                 self.bid_settings, None
             ) as (figure_renderer, mcp_warnings):
-                manifest = await asyncio.to_thread(
-                    generate_figures,
-                    context=context,
-                    profile=profile,
-                    outline=outline,
-                    section_markdowns=base.section_markdowns,
-                    outputs=outputs,
-                    run_dir=run_dir,
-                    settings=self.bid_settings,
-                    llm=figure_llm,
-                    external_renderer=figure_renderer,
-                    force=force,
-                )
+                with usage_scope(
+                    run_id=run.run_id,
+                    job_id=run.job_id or "",
+                    project_id=run.project_id,
+                ) as scope:
+                    try:
+                        manifest = await asyncio.to_thread(
+                            generate_figures,
+                            context=context,
+                            profile=profile,
+                            outline=outline,
+                            section_markdowns=base.section_markdowns,
+                            outputs=outputs,
+                            run_dir=run_dir,
+                            settings=self.bid_settings,
+                            llm=figure_llm,
+                            external_renderer=figure_renderer,
+                            force=force,
+                        )
+                    finally:
+                        figure_usage = scope.records
             if mcp_warnings:
                 updated_manifest = append_manifest_warnings(run_dir, mcp_warnings)
                 if updated_manifest is not None:
@@ -3157,6 +3329,9 @@ class BidRunService:
         except Exception as exc:  # noqa: BLE001 - report a controlled API error
             logger.exception("could not regenerate figures for bid run %s", run_id)
             raise BidRunError(500, "figure regeneration failed") from exc
+        finally:
+            if figure_usage:
+                await self._persist_usage_records(run, figure_usage)
         updated = await repo.update_run(
             run_id,
             status="paused",

@@ -51,6 +51,7 @@ from .external_usage import (
     persist_external_usage,
 )
 from .jobs import JobStore, JobStoreError, JobStoreProtocol
+from .llm_usage import build_parse_llm_usage, persist_parse_llm_usage
 from .notifications import (
     NotificationError,
     NotificationService,
@@ -90,6 +91,17 @@ def create_app(
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
     api_settings.ensure_production_safe()
+    if not api_settings.llm_pricing_configured:
+        logger.warning(
+            "LLM pricing is incomplete (missing models: %s); "
+            "costs may be zero and budgets may not trigger",
+            ", ".join(api_settings.missing_price_models) or "LLM_PRICE_TABLE",
+        )
+    if api_settings.bid_run_budget_cents <= 0:
+        logger.warning(
+            "BID_RUN_BUDGET_CENTS is disabled; cost will be recorded but "
+            "run budgets cannot stop generation"
+        )
     parse_func_injected = parse_func is not None
     bid_func_injected = bid_func is not None
     backend = (
@@ -149,6 +161,12 @@ def create_app(
                         persist_external_usage(
                             bid_run_repo,
                             build_external_usage(current, result),
+                        )
+                    ),
+                    llm_usage_recorder=lambda current, result: (
+                        persist_parse_llm_usage(
+                            bid_run_repo,
+                            build_parse_llm_usage(current, result),
                         )
                     ),
                 )
