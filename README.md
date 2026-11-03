@@ -4,6 +4,14 @@
 
 [▶ 观看 60 秒产品介绍](https://lj105183000.github.io/much-agents/presentation/) · [源码](https://github.com/lj105183000/much-agents) · [生产验收边界](docs/m1-acceptance-report.md)
 
+**产品前端界面**（截图来自同一演示环境，使用合成演示数据）
+
+|  |  |
+|---|---|
+| **登录工作台**<br>[![登录工作台](docs/presentation/screenshots/login.jpg)](docs/presentation/screenshots/login.jpg) | **文档库**<br>[![文档库](docs/presentation/screenshots/document-library.jpg)](docs/presentation/screenshots/document-library.jpg) |
+| **编写标书与大纲**<br>[![编写标书与大纲](docs/presentation/screenshots/bid-outline.jpg)](docs/presentation/screenshots/bid-outline.jpg) | **企业资质**<br>[![企业资质](docs/presentation/screenshots/company-qualifications.jpg)](docs/presentation/screenshots/company-qualifications.jpg) |
+| **文档检索**<br>[![文档检索](docs/presentation/screenshots/document-search.jpg)](docs/presentation/screenshots/document-search.jpg) | **审计日志**<br>[![审计日志](docs/presentation/screenshots/audit-log.jpg)](docs/presentation/screenshots/audit-log.jpg) |
+
 > 本项目以 GNU Affero General Public License v3.0 or later（AGPL-3.0-or-later）发布。
 
 ## 目录
