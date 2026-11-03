@@ -48,6 +48,7 @@ export function useDocuments(
         setError(
           caught instanceof ApiError ? caught.message : '文档列表读取失败',
         )
+        setDocuments([])
         setLoadedKey(key)
       })
     return () => {

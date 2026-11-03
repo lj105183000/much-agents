@@ -52,7 +52,9 @@ export function Sidebar({
 }: SidebarProps) {
   const healthStyle = HEALTH_STYLES[health.state]
   const navItems = NAV_ITEMS.filter(
-    (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
+    (item) =>
+      (!item.adminOnly || user.role === 'admin') &&
+      (!item.requiresAuth || authEnabled),
   )
 
   return (

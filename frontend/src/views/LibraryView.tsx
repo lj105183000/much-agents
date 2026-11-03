@@ -114,6 +114,7 @@ export function LibraryView({
 
   const openAttachments = (document: DocumentSummary) => {
     stopPolling()
+    setAttachmentBusy(false)
     setAttachmentDoc(document)
     setAttachmentFile(null)
     setAttachmentJob(null)
@@ -123,6 +124,7 @@ export function LibraryView({
 
   const closeAttachments = () => {
     stopPolling()
+    setAttachmentBusy(false)
     setAttachmentDoc(null)
     setAttachmentFile(null)
     setAttachmentJob(null)

@@ -47,5 +47,10 @@ export function healthDependencySummary(health: HealthResponse): string {
   if (health.database_ok === false) {
     parts.push('PostgreSQL 异常')
   }
+  if (!health.llm_pricing_configured) {
+    parts.push('价格表未配置')
+  } else if (!health.cost_guardrails_ok) {
+    parts.push('成本护栏未配置')
+  }
   return parts.join(' · ')
 }

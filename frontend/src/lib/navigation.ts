@@ -7,6 +7,7 @@ export interface NavItem {
   description: string
   icon: IconName
   adminOnly?: boolean
+  requiresAuth?: boolean
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -79,6 +80,7 @@ export const NAV_ITEMS: NavItem[] = [
     description: '账号、角色与停用',
     icon: 'users',
     adminOnly: true,
+    requiresAuth: true,
   },
 ]
 

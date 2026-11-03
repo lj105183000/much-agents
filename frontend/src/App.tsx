@@ -219,7 +219,7 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
                 ) : null}
                 {view === 'bid' ? (
                   <BidView
-                    key={`${projectId ?? 'none'}:${selectedDocId ?? 'bid-new'}:${selectedCompanyId ?? 'no-company'}`}
+                    key={`${projectId ?? 'none'}:${selectedDocId ?? 'bid-new'}:${selectedCompanyId ?? 'no-company'}:${selectedRunId ?? 'run-new'}`}
                     apiBase={apiBase}
                     documents={documents.documents}
                     documentsLoading={documents.loading}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   BidApprovalListResponse,
   BidApprovalResponse,
@@ -110,11 +110,25 @@ export function BidGatePanel({
   const [approvalFormError, setApprovalFormError] = useState<string | null>(
     null,
   )
+  const [expiryNow, setExpiryNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!approval?.expires_at) return
+    const timer = window.setInterval(
+      () => setExpiryNow(Date.now()),
+      30_000,
+    )
+    return () => window.clearInterval(timer)
+  }, [approval?.expires_at])
   const canOverride = canManage && gate?.status === 'block'
+  const approvalExpired = Boolean(
+    approval?.expires_at &&
+      new Date(approval.expires_at).getTime() <= expiryNow,
+  )
   const approvalMatches =
     approval?.status === 'approved' &&
     Boolean(currentContentSha256) &&
-    approval.content_sha256 === currentContentSha256
+    approval.content_sha256 === currentContentSha256 &&
+    !approvalExpired
   const approvalStale =
     approval?.status === 'approved' &&
     Boolean(currentContentSha256) &&
@@ -236,6 +250,9 @@ export function BidGatePanel({
                 {approvalStale ? (
                   <Badge tone="amber">内容已变化，需重新审批</Badge>
                 ) : null}
+                {approvalExpired ? (
+                  <Badge tone="red">审批已过期，需重新审批</Badge>
+                ) : null}
                 <Badge
                   tone={
                     APPROVAL_TONE[
@@ -274,6 +291,11 @@ export function BidGatePanel({
             {approvalStale ? (
               <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[11px] leading-5 text-amber-200">
                 当前正文的 content_sha256 与最近一次审批不一致；严格导出前需重新审批。
+              </p>
+            ) : null}
+            {approvalExpired ? (
+              <p className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1.5 text-[11px] leading-5 text-red-200">
+                最近一次审批已超过有效期；严格导出会被后端拒绝，请重新审批。
               </p>
             ) : null}
             {approval?.reason ? (

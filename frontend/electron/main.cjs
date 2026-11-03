@@ -12,7 +12,7 @@ const PROD_INDEX_URL = pathToFileURL(
 
 function isAppUrl(url) {
   if (isDev) return url.startsWith(DEV_ORIGIN)
-  return url.startsWith('file://')
+  return isTrustedSender(url)
 }
 
 function isTrustedSender(url) {

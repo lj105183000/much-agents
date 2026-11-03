@@ -56,7 +56,7 @@ function roleTone(role: ProjectRole | null): 'cyan' | 'green' | 'amber' | 'neutr
 }
 
 export function ProjectsView() {
-  const { user } = useAuth()
+  const { user, authEnabled } = useAuth()
   const { isAdmin } = usePermissions()
   const { projects, current, loading, error, selectProject, refresh } =
     useProject()
@@ -409,14 +409,16 @@ export function ProjectsView() {
                         <Icon name="file" className="h-3.5 w-3.5" />
                         编辑
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void openMembers(project)}
-                      >
-                        <Icon name="users" className="h-3.5 w-3.5" />
-                        成员
-                      </Button>
+                      {authEnabled ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void openMembers(project)}
+                        >
+                          <Icon name="users" className="h-3.5 w-3.5" />
+                          成员
+                        </Button>
+                      ) : null}
                       <Button
                         variant="danger"
                         size="sm"

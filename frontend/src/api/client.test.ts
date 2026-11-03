@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   api,
+  normalizeApiBase,
   request,
   setAuthToken,
   setProjectId,
@@ -49,6 +50,23 @@ describe('bid approval endpoints', () => {
     expect(calls[1][1].method).toBe('POST')
     expect(JSON.parse(String(calls[1][1].body))).toEqual({ reason: 'ok' })
     expect(calls[2][0]).toContain('/api/bid-runs/run-1/reject')
+  })
+})
+
+describe('API base safety', () => {
+  it('allows loopback HTTP but rejects remote HTTP', () => {
+    expect(normalizeApiBase('http://127.0.0.1:8001')).toBe(
+      'http://127.0.0.1:8001',
+    )
+    expect(normalizeApiBase('http://localhost:8001')).toBe(
+      'http://localhost:8001',
+    )
+    expect(() => normalizeApiBase('http://api.example.com')).toThrow(
+      /https/,
+    )
+    expect(normalizeApiBase('https://api.example.com')).toBe(
+      'https://api.example.com',
+    )
   })
 })
 

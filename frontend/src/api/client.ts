@@ -76,6 +76,7 @@ const ENV_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || ''
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const UPLOAD_TIMEOUT_MS = 10 * 60_000
 const ARTIFACT_TIMEOUT_MS = 120_000
 
 let authToken: string | null = null
@@ -217,11 +218,25 @@ export class ApiError extends Error {
   }
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host.endsWith('.localhost')
+  )
+}
+
 export function normalizeApiBase(value: string): string {
   const raw = value.trim().replace(/\/+$/, '')
   if (!raw) return ''
   if (!/^https?:\/\/[^/\s]+/i.test(raw)) {
     throw new Error('API 地址必须以 http:// 或 https:// 开头，或留空使用同源 /api')
+  }
+  const parsed = new URL(raw)
+  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
+    throw new Error('远程 API 必须使用 https://；http:// 仅允许本机回环地址')
   }
   return raw
 }
@@ -297,10 +312,14 @@ function formatDetail(detail: unknown): string {
   return ''
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
   assertTrustedAbsoluteTarget(path)
   const generation = tokenGeneration
-  const response = await fetchWithTimeout(path, init, DEFAULT_TIMEOUT_MS)
+  const response = await fetchWithTimeout(path, init, timeoutMs)
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path, generation)
     let detail: unknown = response.statusText
@@ -510,10 +529,11 @@ export const api = {
     })
     const body = new FormData()
     body.append('file', file)
-    return request<JobCreatedResponse>(`/api/parse?${query.toString()}`, {
-      method: 'POST',
-      body,
-    })
+    return request<JobCreatedResponse>(
+      `/api/parse?${query.toString()}`,
+      { method: 'POST', body },
+      UPLOAD_TIMEOUT_MS,
+    )
   },
 
   submitBid(payload: BidRequest): Promise<BidCreatedResponse> {
@@ -548,6 +568,7 @@ export const api = {
     return request<JobCreatedResponse>(
       `/api/documents/${encodeURIComponent(docId)}/attachments?${query.toString()}`,
       { method: 'POST', body },
+      UPLOAD_TIMEOUT_MS,
     )
   },
 

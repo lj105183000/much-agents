@@ -59,7 +59,9 @@ export function Header({
   onOpenRun,
 }: HeaderProps) {
   const navItems = NAV_ITEMS.filter(
-    (item) => !item.adminOnly || (authEnabled && user.role === 'admin'),
+    (item) =>
+      (!item.adminOnly || user.role === 'admin') &&
+      (!item.requiresAuth || authEnabled),
   )
   const currentProject =
     projects.find((project) => project.id === currentProjectId) ?? null
