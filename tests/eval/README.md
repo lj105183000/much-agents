@@ -119,10 +119,23 @@ Do not add real tender text, real company/profile data, or L1 labels here.
 `.github/workflows/eval-nightly.yml` is disabled unless the repository variable
 `EVAL_NIGHTLY_ENABLED=true` and a self-hosted runner provides
 `EVAL_DATA_DIR`, `EVAL_BIDS_DIR`, `EVAL_BASELINE`, plus the model secrets.
-It validates the private dataset, runs `scripts.eval_generate` (one section per
-case), then `scripts.eval_regression --require-baseline` against the baseline.
-A missing baseline, or a baseline without L1 fields when L1 cases are ready,
-fails instead of silently passing.
+It validates the private dataset, checks `EVAL_BASELINE` with
+`scripts.eval_regression --check-baseline --require-l1`, runs
+`scripts.eval_generate` with `EVAL_SECTIONS` (default 1), then compares with
+`--require-baseline`. If the baseline is missing or incomplete, the workflow
+bootstraps it from the current runs with `--update-baseline`, uploads it as the
+`eval-baseline` artifact, and skips comparison for that run. Manual dispatch can
+set `refresh_baseline=true` to rebuild it intentionally. `EVAL_SECTIONS` must
+match the baseline; changing it requires a refresh.
+
+```bash
+# Rebuild the baseline manually (same section count as the nightly run)
+uv run python -m scripts.eval_regression \
+  --data-dir "$EVAL_DATA_DIR" \
+  --bids-dir "$EVAL_BIDS_DIR" \
+  --baseline "$EVAL_BASELINE" \
+  --update-baseline --require-l1
+```
 
 Reviewed labels feed L1 scoring: must-cover points are matched against
 `bid.md`/`sections/*.md` with deterministic 2-gram coverage, facts by value

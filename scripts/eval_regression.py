@@ -61,9 +61,14 @@ def collect(
     l1_citations: list[float] = []
     l1_ready = 0
     for case in list_cases(data_dir):
-        doc_id = str(case.get("doc_id") or case["case_id"])
+        case_id = str(case.get("case_id") or case["case_id"])
+        doc_id = str(case.get("doc_id") or case_id)
         l1 = score_case(
-            data_dir, bids_dir, doc_id, threshold=l1_threshold
+            data_dir,
+            bids_dir,
+            case_id,
+            doc_id=doc_id,
+            threshold=l1_threshold,
         )
         if l1.get("status") == "ok":
             l1_ready += 1
@@ -80,7 +85,12 @@ def collect(
         latest = _latest_report(bids_dir, doc_id)
         if latest is None:
             cases.append(
-                {"doc_id": doc_id, "status": "missing_run", "l1": l1}
+                {
+                    "case_id": case_id,
+                    "doc_id": doc_id,
+                    "status": "missing_run",
+                    "l1": l1,
+                }
             )
             continue
         path, report = latest
@@ -91,6 +101,7 @@ def collect(
         densities.append(float(metrics["placeholders"]["density_per_1k_chars"]))
         cases.append(
             {
+                "case_id": case_id,
                 "doc_id": doc_id,
                 "status": "ok",
                 "report": str(path),
@@ -228,17 +239,19 @@ def validate_baseline(
     for key in ("avg_weighted_coverage", "avg_placeholder_density_per_1k_chars"):
         if summary.get(key) is None:
             return f"baseline is missing {key}"
-    if require_l1 and current is not None:
-        current_summary = current.get("summary") or {}
-        l1_ready = int(current_summary.get("l1_cases_ready") or 0)
-        if l1_ready > 0:
-            for key in (
-                "l1_cases_ready",
-                "avg_point_recall",
-                "avg_fact_coverage",
-            ):
-                if summary.get(key) is None:
-                    return f"baseline is missing L1 field {key}"
+    if require_l1:
+        if current is not None:
+            current_summary = current.get("summary") or {}
+            l1_ready = int(current_summary.get("l1_cases_ready") or 0)
+            if l1_ready <= 0:
+                return None
+        for key in (
+            "l1_cases_ready",
+            "avg_point_recall",
+            "avg_fact_coverage",
+        ):
+            if summary.get(key) is None:
+                return f"baseline is missing L1 field {key}"
     return None
 
 
@@ -257,13 +270,83 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail with exit 2 when the baseline is missing or lacks required L1 fields",
     )
+    parser.add_argument(
+        "--check-baseline",
+        action="store_true",
+        help="only validate the baseline and exit; do not collect or compare runs",
+    )
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="collect current runs and write them as the baseline, then exit",
+    )
+    parser.add_argument(
+        "--require-l1",
+        action="store_true",
+        help="with --check-baseline/--update-baseline, require reviewed L1 cases",
+    )
     args = parser.parse_args(argv)
+
+    if args.check_baseline:
+        baseline_path = Path(args.baseline)
+        baseline = _load(baseline_path) if baseline_path.is_file() else {}
+        problem = validate_baseline(
+            baseline,
+            None,
+            require_l1=args.require_l1,
+        )
+        if problem:
+            print(f"regression: {problem}", file=sys.stderr)
+            return 2
+        print("regression: baseline is complete")
+        return 0
 
     current = collect(
         Path(args.data_dir),
         Path(args.bids_dir),
         l1_threshold=args.l1_threshold,
     )
+    summary = current["summary"]
+    if args.update_baseline:
+        l1_ready = int(summary.get("l1_cases_ready") or 0)
+        required_l1 = ("l1_cases_ready", "avg_point_recall", "avg_fact_coverage")
+        if args.require_l1 and (
+            l1_ready <= 0
+            or any(summary.get(key) is None for key in required_l1)
+        ):
+            print(
+                "regression: reviewed L1 cases are not ready; cannot update baseline",
+                file=sys.stderr,
+            )
+            return 2
+        baseline_summary = {
+            **summary,
+            "avg_placeholder_density_per_1k_chars": summary.get(
+                "avg_placeholder_density"
+            ),
+        }
+        payload = {
+            "generated_at": current["generated_at"],
+            "summary": baseline_summary,
+            "cases": current["cases"],
+        }
+        output = Path(args.baseline)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            "regression: baseline updated "
+            f"cases={summary['cases']} "
+            f"runs={summary['runs_found']} "
+            f"l1_ready={summary['l1_cases_ready']} "
+            f"weighted={summary['avg_weighted_coverage']} "
+            f"point_recall={summary['avg_point_recall']}"
+        )
+        print(f"written: {output}")
+        return 0
+
     baseline_path = Path(args.baseline)
     baseline = _load(baseline_path) if baseline_path.is_file() else {}
     if args.require_baseline:
@@ -283,7 +366,6 @@ def main(argv: list[str] | None = None) -> int:
     output.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    summary = current["summary"]
     print(
         "regression: "
         f"ok={result['ok']} "

@@ -123,13 +123,16 @@ def score_case(
     bids_dir: Path,
     case_id: str,
     *,
+    doc_id: str | None = None,
     threshold: float = 0.6,
 ) -> dict[str, Any]:
     labels, label_warnings = _reviewed_labels(data_dir, case_id)
-    run_dir = _latest_run_dir(bids_dir, case_id)
+    run_id = doc_id or case_id
+    run_dir = _latest_run_dir(bids_dir, run_id)
     if run_dir is None:
         return {
             "case_id": case_id,
+            "doc_id": run_id,
             "status": "missing_run",
             "labels_ready": bool(labels and labels["ready"]),
             "warnings": label_warnings,
@@ -139,7 +142,7 @@ def score_case(
     if not labels or not labels["ready"]:
         return {
             "case_id": case_id,
-            "doc_id": case_id,
+            "doc_id": run_id,
             "run_id": run_dir.name,
             "run_dir": str(run_dir),
             "status": "labels_not_ready",
@@ -211,7 +214,7 @@ def score_case(
     facts_total = len(fact_rows)
     return {
         "case_id": case_id,
-        "doc_id": case_id,
+        "doc_id": run_id,
         "run_id": run_dir.name,
         "run_dir": str(run_dir),
         "status": "ok",

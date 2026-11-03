@@ -100,6 +100,7 @@ uv run python -m scripts.eval_regression \
 - 同时读取 `requirements.json`（加权覆盖率）与 `citations.json`（覆盖率/无效编号），并保留 L0 指标。
 - 汇总输出 `l1_cases_ready`、`avg_point_recall`、`avg_weighted_point_recall`、`avg_fact_coverage`、`avg_requirement_coverage`、`avg_citation_coverage`；回归比较新增 `l1_cases_ready` 与上述指标的下降检查（`--max-l1-drop`）。
 - `scripts.baseline_metrics` 现在也收集 L1 指标，基线 JSON 可直接用于回归比较。
+- 夜间基线：`eval_regression --update-baseline` 从最新 run 生成包含 L1 字段的基线；`--check-baseline --require-l1` 只校验完整性。夜间 workflow 在基线缺失/不完整时自动 bootstrap 并上传 artifact，手动 `refresh_baseline=true` 可强制重建；`EVAL_SECTIONS` 必须与基线生成时一致。
 
 **这是词面代理，不是语义判断**：同义表达、跨句推理会漏判；L2 judge/人工复核仍是质量结论的权威。阈值与权重仅在 reviewed 标注上生效。
 

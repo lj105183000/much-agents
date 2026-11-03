@@ -4,10 +4,24 @@ name: eval-nightly
 #   EVAL_DATA_DIR, EVAL_BIDS_DIR, EVAL_BASELINE
 # and repository secrets DEEPSEEK_API_KEY/ZHIPU_API_KEY.
 # Enable with repository variable EVAL_NIGHTLY_ENABLED=true.
+#
+# EVAL_SECTIONS (default 1) must match the section count used to build the
+# baseline. Manual dispatch can set refresh_baseline=true to rebuild the
+# baseline from the current runs and skip comparison; a missing or incomplete
+# baseline is bootstrapped automatically on the first run.
 on:
   schedule:
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      refresh_baseline:
+        description: "Rebuild EVAL_BASELINE from the current runs and skip comparison"
+        type: boolean
+        default: false
+      sections:
+        description: "Narrative sections per eval case (must match the baseline)"
+        type: number
+        default: 1
 
 permissions:
   contents: read
@@ -16,6 +30,12 @@ jobs:
   regression:
     if: ${{ vars.EVAL_NIGHTLY_ENABLED == 'true' }}
     runs-on: [self-hosted, eval]
+    defaults:
+      run:
+        shell: bash
+    env:
+      EVAL_SECTIONS: ${{ github.event.inputs.sections || vars.EVAL_SECTIONS || '1' }}
+      REFRESH_BASELINE: ${{ github.event.inputs.refresh_baseline == 'true' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -23,6 +43,17 @@ jobs:
           version: "0.12.12"
           enable-cache: true
       - run: uv sync --frozen
+      - name: Check runner eval paths
+        run: |
+          : "${EVAL_DATA_DIR:?EVAL_DATA_DIR is required}"
+          : "${EVAL_BIDS_DIR:?EVAL_BIDS_DIR is required}"
+          : "${EVAL_BASELINE:?EVAL_BASELINE is required}"
+          case "${EVAL_SECTIONS:-1}" in
+            ''|*[!0-9]*) echo "EVAL_SECTIONS must be a positive integer"; exit 2 ;;
+          esac
+          if [ "${EVAL_SECTIONS:-1}" -lt 1 ]; then
+            echo "EVAL_SECTIONS must be >= 1"; exit 2
+          fi
       - name: Validate private eval dataset
         run: |
           uv run python -m scripts.eval_dataset validate --data-dir "$EVAL_DATA_DIR"
@@ -34,8 +65,42 @@ jobs:
           uv run python -m scripts.eval_generate \
             --data-dir "$EVAL_DATA_DIR" \
             --bids-dir "$EVAL_BIDS_DIR" \
-            --max-sections 1
+            --max-sections "$EVAL_SECTIONS"
+      - name: Check baseline
+        id: baseline
+        if: ${{ env.REFRESH_BASELINE != 'true' }}
+        run: |
+          if uv run python -m scripts.eval_regression \
+               --check-baseline --require-l1 \
+               --baseline "$EVAL_BASELINE"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Baseline is missing or incomplete; it will be initialized."
+          fi
+      - name: Refresh baseline (manual)
+        if: ${{ env.REFRESH_BASELINE == 'true' }}
+        run: |
+          uv run python -m scripts.eval_regression \
+            --data-dir "$EVAL_DATA_DIR" \
+            --bids-dir "$EVAL_BIDS_DIR" \
+            --baseline "$EVAL_BASELINE" \
+            --update-baseline \
+            --require-l1
+          cp "$EVAL_BASELINE" "$RUNNER_TEMP/eval-baseline.json"
+      - name: Bootstrap baseline
+        if: ${{ env.REFRESH_BASELINE != 'true' && steps.baseline.outputs.ready != 'true' }}
+        run: |
+          uv run python -m scripts.eval_regression \
+            --data-dir "$EVAL_DATA_DIR" \
+            --bids-dir "$EVAL_BIDS_DIR" \
+            --baseline "$EVAL_BASELINE" \
+            --update-baseline \
+            --require-l1
+          cp "$EVAL_BASELINE" "$RUNNER_TEMP/eval-baseline.json"
+          echo "Baseline initialized from the current runs; the next nightly run will compare."
       - name: Compare against baseline
+        if: ${{ env.REFRESH_BASELINE != 'true' && steps.baseline.outputs.ready == 'true' }}
         run: |
           uv run python -m scripts.eval_regression \
             --data-dir "$EVAL_DATA_DIR" \
@@ -44,11 +109,19 @@ jobs:
             --require-baseline \
             --output "$RUNNER_TEMP/regression.json"
       - name: Upload regression report
-        if: always()
+        if: ${{ always() && env.REFRESH_BASELINE != 'true' && steps.baseline.outputs.ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: eval-regression
           path: ${{ runner.temp }}/regression.json
+          if-no-files-found: warn
+      - name: Upload baseline
+        if: ${{ always() && (env.REFRESH_BASELINE == 'true' || steps.baseline.outputs.ready != 'true') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-baseline
+          path: ${{ runner.temp }}/eval-baseline.json
+          if-no-files-found: warn
 
   benchmark:
     # Budget-capped real-LLM latency/token/cost benchmark.

@@ -108,7 +108,12 @@ def collect(
     l1_cases: list[dict[str, Any]] = []
     if data_dir is not None and data_dir.is_dir():
         l1_cases = [
-            score_case(data_dir, bids_dir, str(case.get("case_id")))
+            score_case(
+                data_dir,
+                bids_dir,
+                str(case.get("case_id")),
+                doc_id=case.get("doc_id") or case.get("case_id"),
+            )
             for case in list_cases(data_dir)
         ]
 

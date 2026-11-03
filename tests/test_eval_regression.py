@@ -5,6 +5,14 @@ import json
 from scripts.eval_regression import collect, compare, main, validate_baseline
 
 
+def _write_json(path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_case(tmp_path, *, placeholder_count: int = 2):
     labels = tmp_path / "eval-data" / "labels" / "doc-1"
     labels.mkdir(parents=True)
@@ -165,3 +173,141 @@ def test_require_baseline_missing_file_exits_2(tmp_path, capsys) -> None:
 
     assert code == 2
     assert "baseline" in capsys.readouterr().err.lower()
+
+
+def test_check_baseline_requires_l1_fields_without_current(tmp_path, capsys) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    _write_json(
+        baseline_path,
+        {
+            "summary": {
+                "avg_weighted_coverage": 0.5,
+                "avg_placeholder_density_per_1k_chars": 1.0,
+            }
+        },
+    )
+
+    code = main(
+        [
+            "--check-baseline",
+            "--require-l1",
+            "--baseline",
+            str(baseline_path),
+        ]
+    )
+
+    assert code == 2
+    assert "L1" in capsys.readouterr().err
+
+
+def test_update_baseline_writes_comparable_baseline(tmp_path) -> None:
+    _write_case(tmp_path)
+    data_dir = tmp_path / "eval-data"
+    bids_dir = tmp_path / "bids"
+    baseline_path = tmp_path / "baseline.json"
+
+    assert main(
+        [
+            "--update-baseline",
+            "--data-dir",
+            str(data_dir),
+            "--bids-dir",
+            str(bids_dir),
+            "--baseline",
+            str(baseline_path),
+        ]
+    ) == 0
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline["summary"]["avg_placeholder_density"] == 2.0
+    assert baseline["summary"]["avg_placeholder_density_per_1k_chars"] == 2.0
+    assert main(
+        ["--check-baseline", "--baseline", str(baseline_path)]
+    ) == 0
+    assert main(
+        [
+            "--data-dir",
+            str(data_dir),
+            "--bids-dir",
+            str(bids_dir),
+            "--baseline",
+            str(baseline_path),
+            "--require-baseline",
+            "--output",
+            str(tmp_path / "regression.json"),
+        ]
+    ) == 0
+
+
+def test_update_baseline_requires_reviewed_l1(tmp_path, capsys) -> None:
+    _write_case(tmp_path)
+
+    code = main(
+        [
+            "--update-baseline",
+            "--require-l1",
+            "--data-dir",
+            str(tmp_path / "eval-data"),
+            "--bids-dir",
+            str(tmp_path / "bids"),
+            "--baseline",
+            str(tmp_path / "baseline.json"),
+        ]
+    )
+
+    assert code == 2
+    assert "L1" in capsys.readouterr().err
+
+
+def test_collect_separates_case_labels_from_doc_runs(tmp_path) -> None:
+    labels = tmp_path / "eval-data" / "labels" / "case-1"
+    _write_json(
+        labels / "manifest.json",
+        {"case_id": "case-1", "doc_id": "doc-1", "label_status": "reviewed"},
+    )
+    _write_json(
+        labels / "evaluation_factors.json",
+        {
+            "status": "reviewed",
+            "factors": [{"id": "EVAL-001", "max_score": 10, "status": "reviewed"}],
+        },
+    )
+    _write_json(
+        labels / "must_cover_points.json",
+        {
+            "status": "reviewed",
+            "points": [
+                {
+                    "id": "POINT-1",
+                    "factor_id": "EVAL-001",
+                    "text": "施工方案包含基坑支护与降水",
+                    "status": "reviewed",
+                }
+            ],
+        },
+    )
+    _write_json(
+        labels / "key_facts.json",
+        {"status": "reviewed", "facts": []},
+    )
+    run_dir = tmp_path / "bids" / "doc-1" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "bid.md").write_text(
+        "施工方案包含基坑支护与降水", encoding="utf-8"
+    )
+    _write_json(
+        run_dir / "report.json",
+        {
+            "coverage": {"items": []},
+            "placeholders": {"count": 0},
+            "stats": {"characters": 20, "narrative_sections": 1},
+            "issues": [],
+        },
+    )
+
+    current = collect(tmp_path / "eval-data", tmp_path / "bids")
+
+    assert current["cases"][0]["case_id"] == "case-1"
+    assert current["cases"][0]["doc_id"] == "doc-1"
+    assert current["cases"][0]["l1"]["status"] == "ok"
+    assert current["cases"][0]["l1"]["point_recall"] == 1.0
