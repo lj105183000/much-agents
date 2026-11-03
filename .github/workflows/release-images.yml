@@ -144,12 +144,15 @@ jobs:
           set -euo pipefail
           identity="^https://github.com/${WORKFLOW_REPOSITORY}/.github/workflows/release-images.yml@refs/"
           issuer="https://token.actions.githubusercontent.com"
+          # verify-attestation prints the full SBOM payload; a GitHub Actions
+          # runner's secret scanning can stall on that huge line, so discard
+          # stdout and bound each call.
           for ref in "$API_REF" "$WEB_REF"; do
-            cosign verify "$ref" \
+            timeout 120 cosign verify "$ref" \
               --certificate-oidc-issuer "$issuer" \
-              --certificate-identity-regexp "$identity"
-            cosign verify-attestation "$ref" \
+              --certificate-identity-regexp "$identity" > /dev/null
+            timeout 120 cosign verify-attestation "$ref" \
               --type spdxjson \
               --certificate-oidc-issuer "$issuer" \
-              --certificate-identity-regexp "$identity"
+              --certificate-identity-regexp "$identity" > /dev/null
           done

@@ -44,6 +44,10 @@ def test_release_workflow_can_push_and_sign_keylessly() -> None:
     assert "cosign verify-attestation " in run_scripts
     assert "token.actions.githubusercontent.com" in run_scripts
     assert "release-images.yml@refs/" in run_scripts
+    # Printing the full attestation payload can stall the Actions runner's
+    # secret scanning; verification output must be discarded.
+    assert "> /dev/null" in run_scripts
+    assert "timeout 120" in run_scripts
 
 
 def test_release_workflow_publishes_to_ghcr_by_digest() -> None:
