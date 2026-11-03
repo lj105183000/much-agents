@@ -363,7 +363,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：公司级模板/模板版本历史、资质扫描件图片格式与 profile 自动合并、评论附件预览/病毒扫描、物化视图预聚合、自由 SQL 与配额历史、模型网关/数据边界重构、Alertmanager 实际 webhook/SMTP 值（渲染器与校验已就绪）、L1/L2 实际标注数据与发布门禁校准、首次发布 tag 的 Cosign 远端签名验证（工作流已就绪）、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、评测控制台在线标注编辑/L2 judge 触发。
+- **待办**：公司级模板/模板版本历史、资质扫描件图片格式与 profile 自动合并、评论附件预览/病毒扫描、物化视图预聚合、自由 SQL 与配额历史、模型网关/数据边界重构、Alertmanager 实际 webhook/SMTP 值（渲染器与校验已就绪）、L1/L2 实际标注数据与发布门禁校准、用修复后的工作流重跑 tag 触发 run（`v0.1.0` 的 Cosign 签名与 SBOM attestation 已手动验证）、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、评测控制台在线标注编辑/L2 judge 触发。
 
 ### 配置与数据
 

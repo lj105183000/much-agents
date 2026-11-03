@@ -373,7 +373,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 评论附件在线预览/病毒扫描与看板任意日期范围
 - Alertmanager 真实通知渠道（渲染器/校验已就绪，需部署方提供 webhook/SMTP）
 - MCP OAuth 与前端配置 UI
-- Cosign 发布镜像签名（工作流已就绪，需打 `v*` tag 验证一次）
+- Cosign 发布镜像签名（`v0.1.0` 镜像签名与 SBOM attestation 已验证；还需用修复后的工作流重跑一次 tag 触发 run）
 - L1 实际标注数据与 L2 评测校准
 
 ## License

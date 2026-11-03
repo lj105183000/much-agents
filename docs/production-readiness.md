@@ -58,12 +58,14 @@
 
 **基线结果（2026-11-01，方向性基线）**：3/4 份解析文档完整；3 份真实标书各跑 1 节（`--max-sections 1 --no-chroma`，纯关键词检索），加 1 个历史 2 节 run，共 4 个 run。平均加权覆盖率 0.5398；55 因素标书的叙事覆盖率约 0.76–0.80（13 个非模板因素），32 因素标书仅 1 个非模板因素（叙事覆盖率 1.0 但样本过窄），1 因素标书没有非模板因素；占位符密度约 20/千字，加权审查问题约 1.2/节。该基线可作趋势对照，但不代表完整 11 节 + Chroma 语义检索的生产质量。原始报告在 gitignored 的 `upload/baseline/latest.md`。回归比较已跑：`ok=True`，3/3 个案例有 run，加权覆盖率 0.525 vs 基线 0.5398（下降 0.0148，未超过 0.02 阈值）。
 
-**生产验收资产补强（2026-11-03）**：新增 `scripts/render_alertmanager.py`，从 `deploy/env.production` 渲染 `deploy/alertmanager/alertmanager.yml`（gitignored、0600；拒绝占位 webhook、无效收件人、隐式 TLS 与空渠道），CI Docker job 用 `amtool check-config` 校验；`scripts/acceptance_check.py` 新增 `monitoring` 检查与 `--require-monitoring`。新增 `.github/workflows/release-images.yml`：`v*` tag 或手动触发时推送 GHCR，用 GitHub Actions OIDC 做 Cosign 无密钥签名、SPDX SBOM attestation 并校验；`ci.yml` 移除旧的静态密钥签名步骤。真实 webhook/SMTP 值与首次发布 tag 仍需部署方执行。
+**生产验收资产补强（2026-11-03）**：新增 `scripts/render_alertmanager.py`，从 `deploy/env.production` 渲染 `deploy/alertmanager/alertmanager.yml`（gitignored、0600；拒绝占位 webhook、无效收件人、隐式 TLS 与空渠道），CI Docker job 用 `amtool check-config` 校验；`scripts/acceptance_check.py` 新增 `monitoring` 检查与 `--require-monitoring`。新增 `.github/workflows/release-images.yml`：`v*` tag 或手动触发时推送 GHCR，用 GitHub Actions OIDC 做 Cosign 无密钥签名、SPDX SBOM attestation 并校验；`ci.yml` 移除旧的静态密钥签名步骤。真实 webhook/SMTP 值仍需部署方执行。
+
+**发布签名验证（2026-11-03）**：`v0.1.0` 镜像已推送到 GHCR。首次 tag 触发的 run 在 `cosign verify-attestation` 阶段被 GitHub Actions 对超长 SBOM 输出的 secret scanning 卡住并取消（已知 cosign/GHA 交互问题），修复为丢弃 stdout 并加 `timeout 120` 后，手动触发的 `Release images`（run `41628354933`）4m17s 全绿，Cosign 签名与 SPDX attestation 校验通过。剩余：用修复后的工作流重跑一次 tag 触发 run。
 
 仍待实施（按优先级）：
 
 - force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
-- 发布镜像的 Cosign 无密钥签名已落地到 `.github/workflows/release-images.yml`（推送 `v*` tag 或手动触发；OIDC + GHCR + SBOM attestation，无长期私钥）；剩余动作是打发布 tag 并验证一次远端签名。
+- 发布镜像的 Cosign 无密钥签名已落地并验证（OIDC + GHCR + SBOM attestation，无长期私钥）；剩余动作是用修复后的工作流重跑一次 tag 触发 run。
 - Alertmanager 配置渲染器、CI `amtool check-config` 与验收检查已落地；实际 webhook/SMTP 地址与凭据仍需部署方在 `deploy/env.production` 提供。
 - L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具、复核清单与夜间 workflow 骨架已落地）。
 - MinerU/Embedding 配额、PITR。
