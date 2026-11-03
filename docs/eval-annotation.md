@@ -108,3 +108,15 @@ uv run python -m scripts.eval_regression \
 - 标注仅覆盖评分因素、关键事实与必须覆盖点；章节 1–5 分人工样本仍可单独保存。
 - 没有 Web UI；流程以 CLI + CSV 为主。
 - L1 评分为确定性词面匹配，不做语义理解；需要 L2/人工校准。
+
+## 8. L0 合成 fixture 与普通 CI
+
+L0 规则基线使用 `tests/eval/fixtures/l0/` 的合成 `report.json`，不读取真实标书或 L1 标注，普通 CI 每次提交运行：
+
+```bash
+uv run python -m scripts.eval_rule_baseline check \
+  --fixtures tests/eval/fixtures/l0 \
+  --baseline tests/eval/fixtures/l0/baseline.json
+```
+
+覆盖加权/叙事覆盖率、占位符/问题密度、事实一致率、合规/一致性/gate 计数、需求/引用覆盖与无效引用。真实 L1 数据仍走 `eval-data/` 与夜间 `eval_regression`；两者不要混用。基线更新使用 `build` 子命令，并随 fixture 变更一起评审。

@@ -1,6 +1,6 @@
 # Much Agents 线上生产就绪与评测路线图
 
-> 状态：草案（2026-11-01）
+> 状态：草案（2026-11-01；2026-11-03 补充 L0 CI 规则基线）
 > 适用形态：单机 / 私有化 / 单租户，Docker Compose 部署，小团队内网使用
 > 关联文档：[产品化路线图](productization-roadmap.md)、[生产部署与运维](deployment.md)、[M1 生产验收报告](m1-acceptance-report.md)
 > 本文只做诊断与分阶段规划，不代表已实施；功能现状以代码与 `CLAUDE.md` 为准。
@@ -10,6 +10,7 @@
 已落地：
 
 - L0 指标模块与离线基线脚本：`src/bidding/metrics.py`、`scripts/baseline_metrics.py`；报告新增 `coverage.weighted`、`coverage.reviewer_gap`。
+- L0 合成 fixture 规则基线：`src/evaluation/rule_baseline.py`、`scripts/eval_rule_baseline.py`、`tests/eval/fixtures/l0/`；普通 CI 每次提交检查覆盖率、占位符/问题密度、事实一致率、合规/一致性/gate/引用计数，不调用 LLM，真实数据仍只留在私有目录。
 - 私有评测集构建/校验：`src/evaluation/dataset.py`、`scripts/eval_dataset.py`；真实标书写入 gitignored 的 `eval-data/`。
 - LLM 调用账本与成本计量：`src/bidding/llm_usage.py`、迁移 `0006`、`llm_call_log`/`run_usage`；记录实际模型、token、延迟、重试、fallback、finish_reason。
 - 单节重试上限与 regenerate 绕过修复：`BID_SECTION_MAX_ATTEMPTS`。
@@ -696,7 +697,8 @@ eval-data/
 - [ ] worker 崩溃自动 paused；旧 token 写入失败；取消不显示 succeeded。
 - [ ] `/metrics`、JSON 日志、request_id、Chroma readiness 全部可用。
 - [ ] report 含加权覆盖率、reviewer 覆盖点、model/prompt/git sha、实际调用数和耗时。
-- [ ] 3 份标书标注完成；L0 CI 通过；L1 基线报告归档。
+- [x] L0 合成 fixture 规则基线进入普通 CI（`scripts/eval_rule_baseline.py`）。
+- [ ] 3 份标书标注完成；L1 基线报告归档。
 - [ ] 未审批不可导出；force 有 reason/审批/审计/24h 失效。
 - [ ] 每日加密备份 + 异地副本 + 季度恢复演练。
 - [ ] 镜像无 `latest`；SBOM/扫描通过。

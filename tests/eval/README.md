@@ -82,6 +82,38 @@ per-dimension MAE/±1 and overall MAE, and fails with `--require-ready` until
 sample size and thresholds pass. Single-section `eval_judge` and pair-based
 `eval_calibrate` remain available. See `docs/l2-judge-calibration.md`.
 
+## L0 synthetic fixture and CI gate
+
+`tests/eval/fixtures/l0/` is checked in and contains only synthetic data:
+
+```text
+tests/eval/fixtures/l0/
+  bids/case-l0/run-l0/report.json
+  baseline.json
+```
+
+The normal CI backend job runs:
+
+```bash
+uv run python -m scripts.eval_rule_baseline check \
+  --fixtures tests/eval/fixtures/l0 \
+  --baseline tests/eval/fixtures/l0/baseline.json
+```
+
+The scorecard reads persisted `report.json` only. It checks weighted/narrative
+coverage, placeholder and issue density, fact consistency, compliance and
+consistency counts, gate blocks, requirement/citation coverage, and invalid
+citations. Update the baseline only after an intentional fixture or metric
+change:
+
+```bash
+uv run python -m scripts.eval_rule_baseline build \
+  --fixtures tests/eval/fixtures/l0 \
+  --output tests/eval/fixtures/l0/baseline.json
+```
+
+Do not add real tender text, real company/profile data, or L1 labels here.
+
 ## Nightly regression
 
 `.github/workflows/eval-nightly.yml` is disabled unless the repository variable

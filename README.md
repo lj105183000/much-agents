@@ -276,6 +276,11 @@ uv run python scripts/run_e2e.py --load-test --load-max-p95-ms 2000
 # 只读 HTTP/SSE 压测（token 从环境变量读取）
 uv run python -m scripts.load_test --endpoint health --endpoint runs
 
+# L0 合成 fixture 规则基线（普通 CI 同款，不调用 LLM）
+uv run python -m scripts.eval_rule_baseline check \
+  --fixtures tests/eval/fixtures/l0 \
+  --baseline tests/eval/fixtures/l0/baseline.json
+
 # 真实 LLM 预算封顶基准（需 DEEPSEEK_API_KEY 与 LLM_PRICE_TABLE）
 uv run python -m scripts.eval_benchmark --dry-run
 uv run python -m scripts.eval_benchmark --max-cost-cny 0.5 --baseline eval-data/benchmarks/llm-baseline.json
@@ -284,7 +289,7 @@ uv run python -m scripts.eval_benchmark --max-cost-cny 0.5 --baseline eval-data/
 uv run python -m scripts.reconcile_costs --since 2026-11-01 --llm-invoice-cny 12.34
 ```
 
-详见 [`docs/e2e-and-load-testing.md`](docs/e2e-and-load-testing.md) 与 [`docs/llm-benchmark-and-cost-reconciliation.md`](docs/llm-benchmark-and-cost-reconciliation.md)。
+详见 [`docs/e2e-and-load-testing.md`](docs/e2e-and-load-testing.md)、[`docs/llm-benchmark-and-cost-reconciliation.md`](docs/llm-benchmark-and-cost-reconciliation.md) 与 [`tests/eval/README.md`](tests/eval/README.md)。
 
 ## 文档
 
@@ -340,6 +345,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 评审评论/@提及/指派与 SSE 实时进度
 - 需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）
 - 浏览器 E2E（Playwright，隔离 PostgreSQL 栈）与 CI 内置只读 HTTP/SSE 压测 p95 门禁
+- L0 合成 fixture 规则基线进入普通 CI，覆盖覆盖率、占位符/问题密度、事实一致率、合规/一致性/gate 与引用
 - 真实 LLM 预算封顶基准与夜间 workflow、价格 `effective_from` 多版本与发票成本对账
 - 站内通知与可选 Webhook/SMTP
 - 章节反馈/质量快照/运营看板与 CSV 报表
