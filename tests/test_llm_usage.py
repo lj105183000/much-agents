@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -308,6 +309,18 @@ def test_price_entries_honour_effective_from() -> None:
     )
     table = load_price_table(raw, as_of=date(2026, 7, 2))
     assert table["deepseek-flash"]["input_per_1k_cny"] == 3.0
+
+
+def test_price_entries_parse_inline_json_when_path_check_raises(monkeypatch) -> None:
+    def _raise(self: Path) -> None:
+        raise OSError(36, "File name too long")
+
+    monkeypatch.setattr(Path, "is_file", _raise)
+    entries = load_price_entries(
+        '{"models": {"deepseek-flash": {"input_per_1k_cny": 1.0}}}'
+    )
+
+    assert entries["deepseek-flash"][0]["input_per_1k_cny"] == 1.0
 
 
 def test_price_entry_without_effective_date_always_applies() -> None:

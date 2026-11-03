@@ -123,10 +123,14 @@ def _load_price_payload(raw: str | None) -> dict[str, Any] | None:
             _price_warning_emitted = True
         return None
     try:
-        if Path(value).is_file():
-            text = Path(value).read_text(encoding="utf-8")
-        else:
-            text = value
+        path = Path(value)
+        try:
+            is_file = path.is_file()
+        except OSError:
+            # Long inline JSON can exceed the platform path limit; parse it as
+            # a string instead of treating the failed stat as invalid input.
+            is_file = False
+        text = path.read_text(encoding="utf-8") if is_file else value
         payload = json.loads(text)
     except (OSError, ValueError) as exc:
         logger.warning("invalid LLM_PRICE_TABLE: %s", exc)
