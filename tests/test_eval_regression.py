@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import json
 
-from scripts.eval_regression import collect, compare, main, validate_baseline
+from scripts.eval_regression import (
+    collect,
+    compare,
+    main,
+    validate_baseline,
+    write_baseline,
+)
 
 
 def _write_json(path, payload) -> None:
@@ -311,3 +317,24 @@ def test_collect_separates_case_labels_from_doc_runs(tmp_path) -> None:
     assert current["cases"][0]["doc_id"] == "doc-1"
     assert current["cases"][0]["l1"]["status"] == "ok"
     assert current["cases"][0]["l1"]["point_recall"] == 1.0
+
+
+def test_write_baseline_maps_placeholder_density_key(tmp_path) -> None:
+    target = write_baseline(
+        {
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "cases": [],
+            "summary": {
+                "cases": 1,
+                "runs_found": 1,
+                "avg_weighted_coverage": 0.5,
+                "avg_placeholder_density": 2.0,
+            },
+        },
+        tmp_path / "baseline.json",
+    )
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["summary"]["avg_placeholder_density"] == 2.0
+    assert payload["summary"]["avg_placeholder_density_per_1k_chars"] == 2.0
+    assert payload["generated_at"] == "2026-01-01T00:00:00+00:00"

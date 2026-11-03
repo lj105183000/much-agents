@@ -431,6 +431,55 @@ def calibrate_l2(
     }
 
 
+def list_calibrations(data_dir: Path) -> list[dict[str, Any]]:
+    """Return aggregate calibration rows without reading sample text."""
+
+    root = data_dir / "l2"
+    if not root.is_dir():
+        return []
+    results: list[dict[str, Any]] = []
+    for workbook in sorted(root.iterdir()):
+        if not workbook.is_dir():
+            continue
+        calibration_path = workbook / "calibration.json"
+        if not calibration_path.is_file():
+            continue
+        try:
+            calibration = _load(calibration_path)
+        except L2Error:
+            continue
+        if not isinstance(calibration, dict):
+            continue
+        manifest: dict[str, Any] = {}
+        manifest_path = workbook / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                loaded = _load(manifest_path)
+            except L2Error:
+                loaded = {}
+            if isinstance(loaded, dict):
+                manifest = loaded
+        results.append(
+            {
+                "run_id": str(manifest.get("run_id") or workbook.name),
+                "doc_id": str(manifest.get("doc_id") or ""),
+                "n": int(calibration.get("n") or 0),
+                "agreement": calibration.get("agreement"),
+                "cohens_kappa": calibration.get("cohens_kappa"),
+                "ready": bool(calibration.get("ready")),
+                "generated_at": calibration.get("generated_at"),
+                "thresholds": calibration.get("thresholds") or {},
+                "dimensions": calibration.get("dimensions") or {},
+                "overall": calibration.get("overall") or {},
+            }
+        )
+    results.sort(
+        key=lambda item: str(item.get("generated_at") or ""),
+        reverse=True,
+    )
+    return results
+
+
 def render_calibration(report: dict[str, Any]) -> str:
     lines = [
         "# L2 judge 校准报告",
@@ -472,5 +521,6 @@ __all__ = [
     "load_human_sheet",
     "load_judge_results",
     "load_samples",
+    "list_calibrations",
     "render_calibration",
 ]

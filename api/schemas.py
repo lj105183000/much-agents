@@ -616,6 +616,184 @@ class AnalyticsOverview(BaseModel):
     budget_alerts: list[AnalyticsBudgetAlert] = Field(default_factory=list)
 
 
+class EvalCaseCounts(BaseModel):
+    factors: int = 0
+    factors_reviewed: int = 0
+    factors_with_points: int = 0
+    points: int = 0
+    points_reviewed: int = 0
+    facts: int = 0
+    facts_reviewed: int = 0
+
+
+class EvalL1Summary(BaseModel):
+    status: str | None = None
+    run_id: str | None = None
+    point_recall: float | None = None
+    weighted_point_recall: float | None = None
+    fact_coverage: float | None = None
+    requirement_coverage: float | None = None
+    citation_coverage: float | None = None
+    invalid_citations: int | None = None
+
+
+class EvalCaseSummary(BaseModel):
+    case_id: str
+    doc_id: str = ""
+    label_status: str = "draft"
+    ready: bool = False
+    counts: EvalCaseCounts = Field(default_factory=EvalCaseCounts)
+    validation_ok: bool | None = None
+    warnings: list[str] = Field(default_factory=list)
+    l1: EvalL1Summary | None = None
+    weighted_coverage: float | None = None
+    placeholder_density: float | None = None
+
+
+class EvalFactorView(BaseModel):
+    id: str
+    category: str = ""
+    factor: str = ""
+    max_score: float | None = None
+    scoring_criteria: str = ""
+    source_page: int | None = None
+    source_section: str = ""
+    status: str = "draft"
+
+
+class EvalPointView(BaseModel):
+    id: str
+    factor_id: str = ""
+    text: str = ""
+    status: str = "draft"
+    source: str = ""
+
+
+class EvalFactView(BaseModel):
+    id: str
+    key: str = ""
+    label: str = ""
+    value: str = ""
+    source_page: int | None = None
+    source_section: str = ""
+    status: str = "draft"
+
+
+class EvalCaseDetail(EvalCaseSummary):
+    factors: list[EvalFactorView] = Field(default_factory=list)
+    points: list[EvalPointView] = Field(default_factory=list)
+    facts: list[EvalFactView] = Field(default_factory=list)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalCaseListResponse(BaseModel):
+    available: bool = True
+    message: str | None = None
+    cases: list[EvalCaseSummary] = Field(default_factory=list)
+
+
+class EvalBaselineSummary(BaseModel):
+    available: bool = False
+    valid: bool = False
+    generated_at: str | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+    message: str | None = None
+
+
+class EvalOverviewMetrics(BaseModel):
+    cases: int = 0
+    ready: int = 0
+    runs_found: int = 0
+    l1_cases_ready: int = 0
+    avg_weighted_coverage: float | None = None
+    avg_placeholder_density: float | None = None
+    avg_point_recall: float | None = None
+    avg_weighted_point_recall: float | None = None
+    avg_fact_coverage: float | None = None
+    avg_requirement_coverage: float | None = None
+    avg_citation_coverage: float | None = None
+
+
+class EvalRunSummary(BaseModel):
+    id: str
+    created_at: str
+    created_by: str = ""
+    ok: bool | None = None
+    baseline_ready: bool = False
+    updated_baseline: bool = False
+    summary: dict[str, Any] = Field(default_factory=dict)
+    failed_checks: int = 0
+
+
+class EvalCheck(BaseModel):
+    id: str
+    ok: bool
+    baseline: Any = None
+    current: Any = None
+    delta: float | None = None
+    increase: float | None = None
+    threshold: Any = None
+
+
+class EvalRunCase(BaseModel):
+    case_id: str
+    doc_id: str = ""
+    status: str
+    weighted_coverage: float | None = None
+    narrative_ratio: float | None = None
+    placeholder_density: float | None = None
+    issues_per_section: float | None = None
+    l1: EvalL1Summary | None = None
+
+
+class EvalRunReport(EvalRunSummary):
+    cases: list[EvalRunCase] = Field(default_factory=list)
+    checks: list[EvalCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class EvalRunListResponse(BaseModel):
+    runs: list[EvalRunSummary] = Field(default_factory=list)
+
+
+class EvalRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    update_baseline: bool = False
+    confirm: bool = False
+    l1_threshold: float = Field(0.6, ge=0.0, le=1.0)
+
+
+class EvalL2Summary(BaseModel):
+    run_id: str
+    doc_id: str = ""
+    n: int = 0
+    agreement: float | None = None
+    cohens_kappa: float | None = None
+    ready: bool = False
+    generated_at: str | None = None
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+    dimensions: dict[str, Any] = Field(default_factory=dict)
+    overall: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalL2ListResponse(BaseModel):
+    calibrations: list[EvalL2Summary] = Field(default_factory=list)
+
+
+class EvalOverview(BaseModel):
+    available: bool = True
+    message: str | None = None
+    data_dir_ready: bool = False
+    bids_dir_ready: bool = False
+    cases: EvalOverviewMetrics = Field(default_factory=EvalOverviewMetrics)
+    baseline: EvalBaselineSummary = Field(default_factory=EvalBaselineSummary)
+    last_run: EvalRunSummary | None = None
+    l2: list[EvalL2Summary] = Field(default_factory=list)
+    generated_at: str
+
+
 class BidRunEventSection(BaseModel):
     section_id: str
     title: str

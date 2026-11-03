@@ -8,6 +8,7 @@ cross-references, and reports completion. Real tender text is never printed.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import re
 from datetime import datetime, timezone
@@ -148,11 +149,14 @@ def annotation_status(data_dir: Path, case_id: str) -> dict[str, Any]:
     }
 
 
-def export_annotation_sheet(
-    data_dir: Path,
-    case_id: str,
-    output_dir: Path | None = None,
-) -> Path:
+def _safe_cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
+
+
+def _annotation_rows(data_dir: Path, case_id: str) -> list[dict[str, Any]]:
     labels = _labels_dir(data_dir, case_id)
     factors_payload = _load(labels / "evaluation_factors.json")
     points_payload = (
@@ -181,63 +185,87 @@ def export_annotation_sheet(
     for point in points:
         by_factor.setdefault(str(point.get("factor_id") or ""), []).append(point)
 
+    rows: list[dict[str, Any]] = []
+    for factor in factors:
+        factor_id = str(factor.get("id") or "")
+        rows.append(
+            {
+                "kind": "factor",
+                "id": factor_id,
+                "category": factor.get("category") or "",
+                "factor": factor.get("factor") or "",
+                "max_score": (
+                    factor.get("max_score")
+                    if factor.get("max_score") is not None
+                    else ""
+                ),
+                "text": factor.get("scoring_criteria") or "",
+                "status": factor.get("status") or "draft",
+            }
+        )
+        factor_points = by_factor.get(factor_id) or []
+        if not factor_points:
+            rows.append(
+                {
+                    "kind": "point",
+                    "factor_id": factor_id,
+                    "status": "draft",
+                }
+            )
+        for point in factor_points:
+            rows.append(
+                {
+                    "kind": "point",
+                    "id": point.get("id") or "",
+                    "factor_id": factor_id,
+                    "text": point.get("text") or "",
+                    "status": point.get("status") or "draft",
+                }
+            )
+    for fact in facts:
+        rows.append(
+            {
+                "kind": "fact",
+                "id": fact.get("id") or "",
+                "label": fact.get("label") or fact.get("key") or "",
+                "value": fact.get("value") or "",
+                "page": (
+                    fact.get("source_page")
+                    if fact.get("source_page") is not None
+                    else ""
+                ),
+                "status": fact.get("status") or "draft",
+            }
+        )
+    return rows
+
+
+def render_annotation_csv(data_dir: Path, case_id: str) -> bytes:
+    """Render a formula-safe UTF-8 BOM annotation sheet in memory."""
+
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=CSV_HEADERS,
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for row in _annotation_rows(data_dir, case_id):
+        writer.writerow(
+            {key: _safe_cell(row.get(key)) for key in CSV_HEADERS}
+        )
+    return output.getvalue().encode("utf-8-sig")
+
+
+def export_annotation_sheet(
+    data_dir: Path,
+    case_id: str,
+    output_dir: Path | None = None,
+) -> Path:
     target_dir = output_dir or (data_dir / "annotations")
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{case_id}.csv"
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS)
-        writer.writeheader()
-        for factor in factors:
-            factor_id = str(factor.get("id") or "")
-            writer.writerow(
-                {
-                    "kind": "factor",
-                    "id": factor_id,
-                    "category": factor.get("category") or "",
-                    "factor": factor.get("factor") or "",
-                    "max_score": (
-                        factor.get("max_score")
-                        if factor.get("max_score") is not None
-                        else ""
-                    ),
-                    "text": factor.get("scoring_criteria") or "",
-                    "status": factor.get("status") or "draft",
-                }
-            )
-            factor_points = by_factor.get(factor_id) or []
-            if not factor_points:
-                writer.writerow(
-                    {
-                        "kind": "point",
-                        "factor_id": factor_id,
-                        "status": "draft",
-                    }
-                )
-            for point in factor_points:
-                writer.writerow(
-                    {
-                        "kind": "point",
-                        "id": point.get("id") or "",
-                        "factor_id": factor_id,
-                        "text": point.get("text") or "",
-                        "status": point.get("status") or "draft",
-                    }
-                )
-        for fact in facts:
-            writer.writerow(
-                {
-                    "kind": "fact",
-                    "id": fact.get("id") or "",
-                    "label": fact.get("label") or fact.get("key") or "",
-                    "value": fact.get("value") or "",
-                    "page": (
-                        fact.get("source_page")
-                        if fact.get("source_page") is not None
-                        else ""
-                    ),
-                    "status": fact.get("status") or "draft",
-                }
-            )
+    path.write_bytes(render_annotation_csv(data_dir, case_id))
     return path
 
 

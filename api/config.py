@@ -111,6 +111,10 @@ class ApiSettings:
     celery_time_limit_seconds: int = 3600
     mcp_api_token: str = ""
     mcp_default_project_id: str = ""
+    eval_data_dir: Path | None = None
+    eval_bids_dir: Path | None = None
+    eval_baseline: Path | None = None
+    eval_reports_dir: Path | None = None
 
     @property
     def inbox_dir(self) -> Path:
@@ -212,6 +216,13 @@ class ApiSettings:
         ) or ("*",)
         broker = _str(env, "CELERY_BROKER_URL", "")
 
+        def _eval_path(key: str, default: Path | None) -> Path | None:
+            raw = _str(env, key, "").strip()
+            if not raw:
+                return default
+            path = Path(raw)
+            return path if path.is_absolute() else root / path
+
         return cls(
             project_root=root,
             upload_dir=upload_dir,
@@ -264,4 +275,12 @@ class ApiSettings:
             ),
             mcp_api_token=_str(env, "MCP_API_TOKEN", ""),
             mcp_default_project_id=_str(env, "MCP_DEFAULT_PROJECT_ID", ""),
+            eval_data_dir=_eval_path("EVAL_DATA_DIR", root / "eval-data"),
+            eval_bids_dir=_eval_path("EVAL_BIDS_DIR", None),
+            eval_baseline=_eval_path(
+                "EVAL_BASELINE", upload_dir / "baseline/latest.json"
+            ),
+            eval_reports_dir=_eval_path(
+                "EVAL_REPORTS_DIR", upload_dir / "eval-runs"
+            ),
         )

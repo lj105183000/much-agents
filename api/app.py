@@ -45,6 +45,7 @@ from .companies import CompanyService
 from .config import ApiSettings
 from .db import Database
 from .dispatch import CeleryDispatcher, LocalDispatcher
+from .eval_console import EvalConsoleError, EvalConsoleService
 from .external_usage import (
     build_external_usage,
     persist_external_usage,
@@ -84,6 +85,7 @@ def create_app(
     auth_service: AuthService | None = None,
     project_service: ProjectService | None = None,
     audit_service: AuditService | None = None,
+    eval_console_service: EvalConsoleService | None = None,
     storage: Storage | None = None,
 ) -> FastAPI:
     api_settings = api_settings or ApiSettings.from_env()
@@ -241,6 +243,15 @@ def create_app(
         storage=storage,
         notifier=notification_service,
     )
+    eval_console_service = eval_console_service or EvalConsoleService(
+        data_dir=api_settings.eval_data_dir
+        or (api_settings.project_root / "eval-data"),
+        bids_dir=api_settings.eval_bids_dir or bid_settings.bids_dir,
+        baseline_path=api_settings.eval_baseline
+        or (api_settings.upload_dir / "baseline" / "latest.json"),
+        reports_dir=api_settings.eval_reports_dir
+        or (api_settings.upload_dir / "eval-runs"),
+    )
     resolved_auth_service = auth_service
     if resolved_auth_service is None and api_settings.auth_enabled:
         if database.session_factory is not None:
@@ -327,6 +338,7 @@ def create_app(
     )
     app.state.project_service = project_service
     app.state.audit_service = audit_service
+    app.state.eval_console_service = eval_console_service
     app.state.storage = storage
     app.state.ready_cache = (0.0, None)
     app.add_middleware(
@@ -374,6 +386,16 @@ def create_app(
         _request: Request, exc: BidRunError
     ) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(EvalConsoleError)
+    async def handle_eval_console_error(
+        _request: Request, exc: EvalConsoleError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.exception_handler(NotificationError)
     async def handle_notification_error(

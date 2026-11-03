@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.storage.keys import is_safe_id
+
 REQUIRED_TENDER_FILES = ("extraction.json", "toc.json", "chunks.jsonl", "full.md")
 REQUIRED_LABEL_FILES = (
     "evaluation_factors.json",
@@ -301,6 +303,34 @@ def list_cases(data_dir: Path) -> list[dict[str, Any]]:
                 }
             )
     return cases
+
+
+def load_case_labels(data_dir: Path, case_id: str) -> dict[str, Any]:
+    """Load persisted labels for one case without reading tender text."""
+
+    if not is_safe_id(case_id):
+        raise EvalDatasetError(f"invalid case_id: {case_id!r}")
+    labels_root = (data_dir / "labels").resolve()
+    labels_dir = (labels_root / case_id).resolve()
+    if not labels_dir.is_relative_to(labels_root):
+        raise EvalDatasetError(f"invalid case_id: {case_id!r}")
+    if not labels_dir.is_dir():
+        raise EvalDatasetError(f"case labels are missing: {case_id}")
+
+    factors = _load_json(labels_dir / "evaluation_factors.json")
+    points_path = labels_dir / "must_cover_points.json"
+    facts_path = labels_dir / "key_facts.json"
+    manifest_path = labels_dir / "manifest.json"
+    points = _load_json(points_path) if points_path.is_file() else {"points": []}
+    facts = _load_json(facts_path) if facts_path.is_file() else {"facts": []}
+    manifest = _load_json(manifest_path) if manifest_path.is_file() else {}
+    return {
+        "case_id": case_id,
+        "factors": factors if isinstance(factors, dict) else {},
+        "points": points if isinstance(points, dict) else {},
+        "facts": facts if isinstance(facts, dict) else {},
+        "manifest": manifest if isinstance(manifest, dict) else {},
+    }
 
 
 def validate_case(data_dir: Path, case_id: str) -> dict[str, Any]:

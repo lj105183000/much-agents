@@ -80,6 +80,7 @@ from .companies import (
     CompanyService,
 )
 from .documents import list_documents
+from .eval_console import build_eval_router
 from .jobs import JobStoreError
 from .notifications import (
     COMMENT_ASSIGNED,
@@ -3436,6 +3437,7 @@ def build_router() -> APIRouter:
     root.include_router(public_router)
     root.include_router(auth_router)
     root.include_router(admin_router)
+    root.include_router(build_eval_router())
     root.include_router(project_router)
     root.include_router(router)
     return root
