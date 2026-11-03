@@ -20,6 +20,7 @@ from .context import TenderContext
 from .docx_export import markdown_to_docx
 from .errors import BidGenerationError, BidInputError
 from .graph import build_bid_graph
+from .citations import strip_citation_markers
 from .llm import ChatClient, DeepSeekChatClient
 from .models import BidResult, SectionDraft
 from .outline import build_brief, build_outline
@@ -146,11 +147,14 @@ def run_bid_writing(
     started = time.perf_counter()
     atomic_write_json(output_dir / "outline.json", outline.to_dict())
     for section in outline.selected_narratives:
-        body = assembly.section_markdowns.get(section.id, "")
+        body = strip_citation_markers(
+            assembly.section_markdowns.get(section.id, "")
+        )
         atomic_write_text(output_dir / "sections" / f"{section.id}.md", body)
-    atomic_write_text(output_dir / "bid.md", assembly.markdown)
+    deliverable_markdown = strip_citation_markers(assembly.markdown)
+    atomic_write_text(output_dir / "bid.md", deliverable_markdown)
     docx = markdown_to_docx(
-        assembly.markdown,
+        deliverable_markdown,
         output_dir / "bid.docx",
         title=f"{context.facts.project_name} 投标文件",
         template_path=settings.docx_template or None,

@@ -148,7 +148,7 @@ Much Agents 已经具备一条完整的标书生产链路：PDF 解析 → 结�
 
 **做什么**
 
-- 把 `DeepSeekChatClient` 重构为 `OpenAICompatibleChatClient`：`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_FALLBACK_MODELS`；保留 DeepSeek 默认值，现有 `.env` 不改也能跑。让现有 `LLM_PROVIDER` 真正生效。
+- 把 `DeepSeekChatClient` 重构为 `OpenAICompatibleChatClient`：`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_FALLBACK_MODELS`；保留 DeepSeek 默认值，现有 `.env` 不改也能跑；不再保留无效的 `LLM_PROVIDER` 示例键。
 - 新增 `EmbeddingProvider` 协议：`ZhipuEmbedder` 保留，新增 OpenAI 兼容 `/v1/embeddings` 实现；`EMBEDDING_PROVIDER`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIM`。
 - 向量集合带模型/维度版本（如 `bidding_documents__<model>__<dim>`），切模型时新建集合并后台重建；提供 reindex 命令。
 - 数据出境清单：`docs/data-boundary.md` 列明发送到外部的内容（招标文本、提示词、检索片段）与关闭方式；`MCP_CLIENT_ENABLED` / `BID_FIGURES_EXTERNAL` 默认关闭不变。

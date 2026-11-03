@@ -266,7 +266,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - profile 隐私不变：DB 只存 `profile_source/profile_sha256/profile_relpath` 与缺失字段标签；Redis/Celery payload 只有 `run_id/generation_token/section_ids/assemble/mode`；`profile.json` 只存私有对象 key，不在 artifact allowlist、MCP 输出、下载 URL 或 Redis/Celery payload 中。
 - minio 模式在 create/generate/assemble/edit/regenerate/export 前 hydration parsed 与 run，写后同步产物；人工编辑/重写/大纲失效会清理远程过期报告、门禁、合规、一致性、配图与 `bid.pdf` 对象，但保留 `bid.md` 与私有 profile。
 - `POST /api/bids`、CLI、旧 artifact 接口保持兼容；staged job 的 artifact 目录通过 job payload 的 `run_id` 解析（`job_id != run_id`）。
-- 仍未实现：DOC（97-2003）导出、Celery beat；失败章节用现有「重试失败章节」，不做任意章节增删。
+- 已实现 DOC（97-2003）导出与 Celery beat stale reaper；失败章节用现有「重试失败章节」，不做任意章节增删。
 
 ### 评审评论、指派与 SSE（P2，`api/bid_runs.py`、`api/sse.py`、迁移 `0014`）
 
@@ -274,7 +274,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 接口：`GET /api/project-members`（当前项目成员摘要，供 @ 与指派选择）；`GET /api/bid-runs/{id}/comments`（`status`/`section_id`/`limit`）；`POST .../comments`；`PATCH .../comments/{comment_id}`（正文仅作者或 admin，可解决/重开/指派/取消指派）。读需项目只读，写需全局与项目 review。提及/处理人必须是项目成员；成员目录不可用时不带提及/指派的评论仍可创建，带提及/指派返回 503。审计只记录 id/状态/处理人等元数据，不记录正文。
 - 前端 `BidCommentsPanel` 支持筛选（待处理/已解决/全部）、章节与处理人下拉、@成员多选、作者编辑正文、指派给我与取消指派；只读角色隐藏写操作。
 - SSE：`GET /api/bid-runs/{id}/events` 每 1.5 秒推送快照（run 状态/阶段/百分比/门禁/内容哈希、章节计数与逐节状态、Redis/Celery job 视图、`terminal`），每 15 秒心跳，单连接最长 30 分钟。前端用 `fetch` + `ReadableStream` 消费而不是 `EventSource`，因为后者无法携带 `Authorization`；token 绝不进入 URL。`useBidRunEvents` 断线 3 秒重连，`useBidRun` 轮询仍为事实来源与兜底。响应带 `X-Accel-Buffering: no`，避免 Nginx 缓冲。
-- 当前边界：无站内通知/SMTP/Webhook、评论删除/线程回复、截止时间、项目看板、编辑租约；SSE 是快照流，没有 `run_events` 追加表或 `Last-Event-ID` 续传。详见 `docs/collaboration.md`。
+- 当前边界：评论删除/线程回复、截止时间、项目看板、编辑租约仍未实现；站内通知/SMTP/Webhook 已实现。SSE 是快照流，没有 `run_events` 追加表或 `Last-Event-ID` 续传。详见 `docs/collaboration.md`。
 
 ### 浏览器 E2E 与压测（`scripts/run_e2e.py`、`frontend/e2e/`、`scripts/load_test.py`）
 
@@ -358,7 +358,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 
 ### 尚未实现（后续阶段）
 
-- **待办**：模板变量/公司级模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与配额历史/预算趋势图、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1/L2 实际标注数据与发布门禁校准、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、评测控制台在线标注编辑/L2 judge 触发/报告保留清理策略。
+- **待办**：模板变量/公司级模板、资质扫描件上传与到期自动通知、评论线程/回复/删除与截止时间/项目看板、物化视图预聚合、自由 SQL 与配额历史、模型网关/数据边界重构、替换 Alertmanager 占位 webhook、L1/L2 实际标注数据与发布门禁校准、启用 Cosign 签名、文生图/配图审批流、MCP OAuth 与前端 MCP 配置 UI、评测控制台在线标注编辑/L2 judge 触发。
 
 ### 配置与数据
 
@@ -378,7 +378,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 生产部署：`deploy/env.production` 从 `deploy/env.production.example` 复制（真实文件已 gitignore），其中 `ENVIRONMENT=production` 触发 fail-fast；TLS 证书放在 `deploy/nginx/certs/{fullchain.pem,privkey.pem}`（已 gitignore，可用 `generate-self-signed.sh` 生成）。生产只通过 `docker compose -f docker-compose.prod.yml` 启动，详见 `docs/deployment.md`。
 - 前端 http(s) 页面默认同源 `/api`，Electron `file://` 默认 `http://127.0.0.1:8001`；可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，或在界面「API 连接设置」中覆盖（保存到 localStorage；留空恢复同源）。
 - PostgreSQL：`DATABASE_URL` 指向 `much-agents-postgres`；`companies` 表由 Alembic `0001` 基线创建，`bid_runs`/`bid_outline_sections`/`bid_section_states` 由 `0002` 创建，`users`/`user_sessions` 由 `0003` 创建，项目/文档注册表由 `0004` 创建，`audit_events` 由 `0005` 创建，`llm_call_log`/`run_usage` 由 `0006` 创建，章节 `generation_token`/`last_heartbeat_at` 由 `0007` 增加，`bid_runs.content_sha256` 由 `0008` 增加，`bid_approvals` 由 `0009` 创建，`retrieval_snapshots` 由 `0010` 创建，`prompt_registry` 由 `0011` 创建，`bid_section_versions` 由 `0012` 创建，`outline_revision`/`review_summary` 由 `0013` 增加，`bid_comments` 由 `0014` 创建，`notifications` 由 `0015` 创建，`company_qualifications` 由 `0016` 创建，`feedback_events`/`bid_quality_snapshots` 由 `0017` 创建，`external_usage` 由 `0018` 创建，`projects.monthly_budget_cents` 由 `0019` 增加，`notification_preferences` 由 `0020` 创建，`bid_templates` 由 `0021` 创建，`bid_runs.assembly_token` 与 `(status, updated_at)` 索引由 `0022` 增加。API 启动默认执行 `alembic upgrade head`（advisory lock 防并发迁移），worker 不迁移。数据库不可用时公司/run/用户/认证接口返回 503，不影响解析与 legacy 标书任务；pytest 使用内存 fake，不连接真实数据库。已有只含 `companies` 的开发库先 `alembic stamp 0001` 再 `upgrade head`。
-- LLM 默认 `LLM_PROVIDER=deepseek`、`DEEPSEEK_MODEL=deepseek-flash`；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
+- LLM 默认 `DEEPSEEK_MODEL=deepseek-flash`（`DEEPSEEK_BASE_URL` 可指向 OpenAI 兼容端点）；嵌入模型 `EMBEDDING_MODEL=embedding-3`（智谱）。
 - 检索：`BID_USE_CHROMA=true` 且 `ZHIPU_API_KEY` 可用时启用语义；`auto` 不可用或空结果时回退关键词。`BID_RETRIEVAL_TOP_K` 只控制标书 Writer，搜索 top_k 由请求参数控制（1–30）。
 - `pyproject.toml` 将阿里云 PyPI 镜像配置为默认 index；Python 固定 `>=3.12,<3.13`，由 `.python-version` 约束。
 - 数据目录（均已 gitignore）：`chroma_db/` 向量库；`upload/` 是本地输入/产物目录（`upload/inbox/<job_id>/source.pdf` 为 API 上传，`upload/parsed/<doc_id>/` 为解析输出，`upload/bids/<doc_id>/<run_id>/` 为投标文件产物，配图在 `.../figures/`）——minio 模式下它是工作缓存，权威对象在 MinIO bucket；Docker 数据卷 `much-agents-minio-data` 保存 MinIO 对象；`.run/` 保存一键启动的 PID 状态（POSIX 上还有各服务日志）；`.e2e/` 保存 E2E 隔离上传/解析/产物、seed.json 与 API/Vite 日志，`frontend/playwright-report/`、`frontend/test-results/` 保存 Playwright 报告（均已 gitignore）；`backups/` 保存 `scripts/backup.sh` 输出；`deploy/nginx/certs/` 下的证书与私钥永不入库。

@@ -18,6 +18,29 @@ from tests.fakes import (
 )
 
 
+def test_legacy_runner_strips_citation_markers(tmp_path: Path) -> None:
+    write_parsed_fixture(tmp_path)
+    settings = make_bid_settings(tmp_path)
+    result = run_bid_writing(
+        "doc-1",
+        profile=BidderProfile.empty(),
+        max_sections=1,
+        settings=settings,
+        run_id="run-citations",
+        llm=FakeChatClient(response="施工方案与质量措施。[E1]"),
+        retriever=FakeRetriever(),
+    )
+
+    markdown = result.bid_markdown.read_text(encoding="utf-8")
+    assert "[E1]" not in markdown
+    for path in result.sections_dir.glob("*.md"):
+        assert "[E1]" not in path.read_text(encoding="utf-8")
+    document = Document(str(result.bid_docx))
+    assert "[E1]" not in "\n".join(
+        paragraph.text for paragraph in document.paragraphs
+    )
+
+
 def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:
     write_parsed_fixture(tmp_path)
     settings = make_bid_settings(tmp_path)
