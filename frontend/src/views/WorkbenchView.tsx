@@ -157,7 +157,7 @@ export function WorkbenchView({
           <Icon name="play" className="h-4 w-4" />
           开始解析
         </Button>
-        <p className="mt-2 text-center text-[11px] text-slate-600">
+        <p className="mt-2 text-center text-[11px] text-slate-400">
           上传后任务在后台运行，可切换到任务历史继续查看。
         </p>
         {!canWrite ? (

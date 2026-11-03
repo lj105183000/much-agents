@@ -381,7 +381,7 @@ export function ProjectsView() {
                 <p className="mt-3 line-clamp-2 min-h-8 text-xs leading-5 text-slate-400">
                   {project.description || '暂无项目描述'}
                 </p>
-                <p className="mt-2 text-[10px] text-slate-600">
+                <p className="mt-2 text-[10px] text-slate-400">
                   {project.member_count} 位成员
                   {project.monthly_budget_cents !== null
                     ? ` · 月度预算 ¥${(

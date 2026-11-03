@@ -70,6 +70,9 @@ test('admin creates a bid run and resolves a review comment', async ({
   await expect(
     page.getByRole('heading', { name: '评审评论与指派', exact: true }),
   ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: '成本与预算', exact: true }),
+  ).toBeVisible()
 
   const body = `E2E 评审意见 ${Date.now()}`
   await page.getByTestId('comment-body').fill(body)

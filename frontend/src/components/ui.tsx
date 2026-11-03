@@ -15,7 +15,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   secondary:
     'border border-slate-700 bg-slate-900/70 text-slate-100 hover:border-slate-500 hover:bg-slate-800 disabled:text-slate-500',
   ghost:
-    'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100 disabled:text-slate-600',
+    'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100 disabled:text-slate-500',
   danger:
     'border border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20 disabled:text-red-300/50',
 }
@@ -152,7 +152,7 @@ export function ProgressBar({
 
 interface FieldProps {
   label: string
-  htmlFor?: string
+  htmlFor: string
   hint?: string
   error?: string
   children: ReactNode
@@ -177,19 +177,30 @@ export function Field({
       </label>
       {children}
       {error ? (
-        <p className="text-[11px] text-red-300">{error}</p>
+        <p
+          id={`${htmlFor}-error`}
+          role="alert"
+          className="text-[11px] text-red-300"
+        >
+          {error}
+        </p>
       ) : hint ? (
-        <p className="text-[11px] text-slate-500">{hint}</p>
+        <p
+          id={`${htmlFor}-hint`}
+          className="text-[11px] text-slate-500"
+        >
+          {hint}
+        </p>
       ) : null}
     </div>
   )
 }
 
 export const inputClass =
-  'h-10 w-full rounded-xl border border-slate-700 bg-slate-950/50 px-3 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/10'
+  'h-10 w-full rounded-xl border border-slate-700 bg-slate-950/50 px-3 text-sm text-slate-100 placeholder:text-slate-400 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/10'
 
 export const textareaClass =
-  'w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/10'
+  'w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-400 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/10'
 
 export const selectClass =
   'h-10 w-full appearance-none rounded-xl border border-slate-700 bg-slate-950/50 px-3 text-sm text-slate-100 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/10'

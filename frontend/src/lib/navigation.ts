@@ -84,6 +84,17 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
+export function visibleNavItems(
+  role: string,
+  authEnabled: boolean,
+): NavItem[] {
+  return NAV_ITEMS.filter(
+    (item) =>
+      (!item.adminOnly || role === 'admin') &&
+      (!item.requiresAuth || authEnabled),
+  )
+}
+
 export const VIEW_META: Record<
   ViewKey,
   { title: string; subtitle: string }

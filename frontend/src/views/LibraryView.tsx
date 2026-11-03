@@ -216,7 +216,7 @@ export function LibraryView({
           <div className="relative min-w-[15rem] flex-1">
             <Icon
               name="folder"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
             />
             <input
               className={`${inputClass} pl-9`}
@@ -281,7 +281,7 @@ export function LibraryView({
                     {document.doc_id}
                     {document.tenderer ? ` · ${document.tenderer}` : ''}
                   </p>
-                  <p className="mt-1 text-[11px] text-slate-600">
+                  <p className="mt-1 text-[11px] text-slate-400">
                     {document.parsed_at
                       ? `解析于 ${formatDate(document.parsed_at)}`
                       : '解析时间未知'}
@@ -367,7 +367,7 @@ export function LibraryView({
                     </div>
                   ))}
                   {document.bid_runs.length > 3 ? (
-                    <p className="text-[10px] text-slate-600">
+                    <p className="text-[10px] text-slate-400">
                       仅显示最近 3 份，共 {document.bid_runs.length} 份
                     </p>
                   ) : null}

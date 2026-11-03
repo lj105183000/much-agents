@@ -5,6 +5,7 @@ import type {
   BidGateResponse,
 } from '../api/types'
 import { usePermissions } from '../hooks/usePermissions'
+import { isApprovalExpired } from '../lib/approval'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, SectionHeader, Spinner } from './ui'
 import { Icon } from './icons'
@@ -120,9 +121,9 @@ export function BidGatePanel({
     return () => window.clearInterval(timer)
   }, [approval?.expires_at])
   const canOverride = canManage && gate?.status === 'block'
-  const approvalExpired = Boolean(
-    approval?.expires_at &&
-      new Date(approval.expires_at).getTime() <= expiryNow,
+  const approvalExpired = isApprovalExpired(
+    approval?.expires_at,
+    expiryNow,
   )
   const approvalMatches =
     approval?.status === 'approved' &&

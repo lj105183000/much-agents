@@ -2,7 +2,7 @@ import type { AuthUser, ProjectSummary, ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import type { Theme } from '../hooks/useTheme'
 import { cn } from '../lib/cn'
-import { NAV_ITEMS } from '../lib/navigation'
+import { visibleNavItems } from '../lib/navigation'
 import {
   PROJECT_ROLE_LABELS,
   ROLE_LABELS,
@@ -58,11 +58,7 @@ export function Header({
   apiBase,
   onOpenRun,
 }: HeaderProps) {
-  const navItems = NAV_ITEMS.filter(
-    (item) =>
-      (!item.adminOnly || user.role === 'admin') &&
-      (!item.requiresAuth || authEnabled),
-  )
+  const navItems = visibleNavItems(user.role, authEnabled)
   const currentProject =
     projects.find((project) => project.id === currentProjectId) ?? null
 

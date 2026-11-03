@@ -194,7 +194,7 @@ export function SearchView({
             <div className="relative min-w-0 flex-1">
               <Icon
                 name="search"
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
               />
               <input
                 className={`${inputClass} h-11 pl-10`}
@@ -352,11 +352,11 @@ export function SearchView({
               {response.results.length} 条结果 · {Math.round(response.elapsed_ms)} ms
             </span>
             {selectedDocument ? (
-              <span className="text-[11px] text-slate-600">
+              <span className="text-[11px] text-slate-400">
                 范围：{selectedDocument.project_name || selectedDocument.doc_id}
               </span>
             ) : (
-              <span className="text-[11px] text-slate-600">范围：全部文档</span>
+              <span className="text-[11px] text-slate-400">范围：全部文档</span>
             )}
           </div>
 
@@ -373,7 +373,7 @@ export function SearchView({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[11px] text-slate-600">
+                        <span className="text-[11px] text-slate-400">
                           #{index + 1}
                         </span>
                         <span className="truncate text-sm font-semibold text-slate-100">

@@ -214,7 +214,7 @@ function CheckRow({ check }: { check: BidComplianceCheck }) {
                 </span>
               ) : null}
               {evidence.quote ? (
-                <span className="block text-slate-600">{evidence.quote}</span>
+                <span className="block text-slate-400">{evidence.quote}</span>
               ) : null}
             </li>
           ))}
@@ -278,7 +278,7 @@ function LedgerRow({ fact }: { fact: BidConsistencyFact }) {
                 · {occurrence.section_title} · {occurrence.source}
               </span>
               {occurrence.quote ? (
-                <span className="block text-slate-600">{occurrence.quote}</span>
+                <span className="block text-slate-400">{occurrence.quote}</span>
               ) : null}
             </li>
           ))}
@@ -712,7 +712,7 @@ export function BidCompliancePanel({
               <LedgerRow key={fact.key} fact={fact} />
             ))}
           </ul>
-          <p className="text-[10px] leading-5 text-slate-600">
+          <p className="text-[10px] leading-5 text-slate-400">
             「资料值」来自招标文件抽取结果与投标人资料；正文中的同一事实应与其保持一致。缺失资料不会阻止导出，但会作为警告提示。
           </p>
         </div>

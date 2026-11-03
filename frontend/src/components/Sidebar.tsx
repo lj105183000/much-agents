@@ -2,7 +2,7 @@ import type { AuthUser, ViewKey } from '../api/types'
 import type { HealthState } from '../hooks/useHealth'
 import { cn } from '../lib/cn'
 import { healthDependencySummary } from '../lib/health'
-import { NAV_ITEMS } from '../lib/navigation'
+import { visibleNavItems } from '../lib/navigation'
 import { ROLE_LABELS } from '../lib/roles'
 import { Icon } from './icons'
 
@@ -51,11 +51,7 @@ export function Sidebar({
   onLogout,
 }: SidebarProps) {
   const healthStyle = HEALTH_STYLES[health.state]
-  const navItems = NAV_ITEMS.filter(
-    (item) =>
-      (!item.adminOnly || user.role === 'admin') &&
-      (!item.requiresAuth || authEnabled),
-  )
+  const navItems = visibleNavItems(user.role, authEnabled)
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950/70 px-4 py-5 lg:flex">
@@ -129,7 +125,7 @@ export function Sidebar({
               <Icon name="refresh" className="h-3.5 w-3.5" />
             </button>
           </div>
-          <p className="mt-2 break-all text-[10px] leading-4 text-slate-600">
+          <p className="mt-2 break-all text-[10px] leading-4 text-slate-400">
             {apiBase || '同源 /api'}
           </p>
           {health.health ? (

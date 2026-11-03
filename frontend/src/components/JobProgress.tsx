@@ -123,7 +123,7 @@ export function JobProgress({ job, error }: JobProgressProps) {
                   ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-200'
                   : current
                     ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-100'
-                    : 'border-slate-800 bg-slate-950/30 text-slate-600',
+                    : 'border-slate-800 bg-slate-950/30 text-slate-400',
               )}
             >
               <span

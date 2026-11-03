@@ -351,7 +351,7 @@ export function HistoryView({
                   <span className="block text-sm font-semibold text-slate-300">
                     {percentLabel(entry.percent)}
                   </span>
-                  <span className="text-[10px] text-slate-600">
+                  <span className="text-[10px] text-slate-400">
                     {entry.status === 'failed' && entry.error
                       ? '查看错误'
                       : '查看详情'}
@@ -361,7 +361,7 @@ export function HistoryView({
               <button
                 type="button"
                 onClick={() => onRemove(entry.jobId)}
-                className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-800 hover:text-red-300"
+                className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-red-300"
                 aria-label="删除任务记录"
               >
                 <Icon name="trash" className="h-4 w-4" />

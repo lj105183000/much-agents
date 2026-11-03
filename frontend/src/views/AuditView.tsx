@@ -361,7 +361,7 @@ export function AuditView() {
                       <tr className="align-top hover:bg-slate-900/40">
                         <td className="whitespace-nowrap px-4 py-3 text-[11px] text-slate-400">
                           {formatDate(event.ts)}
-                          <span className="mt-0.5 block text-[10px] text-slate-600">
+                          <span className="mt-0.5 block text-[10px] text-slate-400">
                             #{event.id}
                           </span>
                         </td>
@@ -375,7 +375,7 @@ export function AuditView() {
                             {event.actor_username ?? '匿名/未知'}
                           </p>
                           {event.actor_id ? (
-                            <p className="mt-0.5 font-mono text-[10px] text-slate-600">
+                            <p className="mt-0.5 font-mono text-[10px] text-slate-400">
                               {event.actor_id.slice(0, 8)}…
                             </p>
                           ) : null}
@@ -408,7 +408,7 @@ export function AuditView() {
                         >
                           <p className="font-mono">{event.ip ?? '—'}</p>
                           <p
-                            className="mt-0.5 truncate font-mono text-slate-600"
+                            className="mt-0.5 truncate font-mono text-slate-400"
                             title={event.request_id}
                           >
                             {event.request_id || '—'}

@@ -153,7 +153,7 @@ export function CompaniesView({
           <div className="relative min-w-[15rem] flex-1">
             <Icon
               name="building"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
             />
             <input
               className={`${inputClass} pl-9`}
@@ -234,19 +234,19 @@ export function CompaniesView({
 
               <dl className="mt-4 grid gap-2 text-[11px] text-slate-400 sm:grid-cols-2">
                 <div>
-                  <dt className="text-slate-600">地址</dt>
+                  <dt className="text-slate-400">地址</dt>
                   <dd className="mt-0.5 truncate">{company.address || '—'}</dd>
                 </div>
                 <div>
-                  <dt className="text-slate-600">电话</dt>
+                  <dt className="text-slate-400">电话</dt>
                   <dd className="mt-0.5 truncate">{company.phone || '—'}</dd>
                 </div>
                 <div>
-                  <dt className="text-slate-600">开户银行</dt>
+                  <dt className="text-slate-400">开户银行</dt>
                   <dd className="mt-0.5 truncate">{company.bank_name || '—'}</dd>
                 </div>
                 <div>
-                  <dt className="text-slate-600">银行账号</dt>
+                  <dt className="text-slate-400">银行账号</dt>
                   <dd className="mt-0.5 truncate">
                     {company.bank_account || '—'}
                   </dd>
@@ -254,7 +254,7 @@ export function CompaniesView({
               </dl>
 
               <div className="mt-auto flex items-center justify-between gap-2 border-t border-slate-800/80 pt-3">
-                <span className="text-[10px] text-slate-600">
+                <span className="text-[10px] text-slate-400">
                   更新于 {formatDate(company.updated_at)}
                 </span>
                 <div className="flex items-center gap-1">

@@ -287,7 +287,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {Object.entries(runs?.by_gate ?? {}).length === 0 ? (
-                      <span className="text-[11px] text-slate-600">
+                      <span className="text-[11px] text-slate-400">
                         尚未组装
                       </span>
                     ) : (
@@ -310,7 +310,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                 </div>
                 <dl className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
                   <div>
-                    <dt className="text-slate-600">平均耗时</dt>
+                    <dt className="text-slate-400">平均耗时</dt>
                     <dd>
                       {runs?.avg_duration_seconds
                         ? `${Math.round(
@@ -320,13 +320,13 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-slate-600">重试 / 回退</dt>
+                    <dt className="text-slate-400">重试 / 回退</dt>
                     <dd>
                       {usage?.retries ?? 0} / {usage?.fallback_calls ?? 0}
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-slate-600">外部用量</dt>
+                    <dt className="text-slate-400">外部用量</dt>
                     <dd>
                       {external?.units ?? 0} 单位 ·{' '}
                       {money(external?.cost_cny)}
@@ -342,7 +342,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                     ),
                   )}
                   {Object.keys(external?.by_provider ?? {}).length === 0 ? (
-                    <span className="text-[11px] text-slate-600">
+                    <span className="text-[11px] text-slate-400">
                       暂无 MinerU/Embedding 用量
                     </span>
                   ) : null}
@@ -442,7 +442,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                   </tbody>
                 </table>
                 {data.projects.length === 0 ? (
-                  <p className="py-3 text-[11px] text-slate-600">
+                  <p className="py-3 text-[11px] text-slate-400">
                     当前窗口没有项目数据。
                   </p>
                 ) : null}
@@ -453,7 +453,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               <SectionHeader title="反馈与原因" />
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {Object.entries(feedback?.by_type ?? {}).length === 0 ? (
-                  <span className="text-[11px] text-slate-600">
+                  <span className="text-[11px] text-slate-400">
                     暂无反馈
                   </span>
                 ) : (
@@ -481,7 +481,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                   </li>
                 ))}
                 {feedback?.top_reasons.length === 0 ? (
-                  <li className="text-[11px] text-slate-600">
+                  <li className="text-[11px] text-slate-400">
                     暂无带原因的反馈。
                   </li>
                 ) : null}
@@ -495,7 +495,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
               description="最近窗口内触发的 run/项目月度预算 80%/100% 告警（管理员可见）。"
             />
             {budgetAlerts.length === 0 ? (
-              <p className="mt-3 text-[11px] text-slate-600">
+              <p className="mt-3 text-[11px] text-slate-400">
                 当前窗口没有预算告警。
               </p>
             ) : (
@@ -516,7 +516,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                       <span className="text-[11px] font-medium text-slate-200">
                         {alert.title}
                       </span>
-                      <span className="text-[10px] text-slate-600">
+                      <span className="text-[10px] text-slate-400">
                         {formatDate(alert.created_at)}
                         {alert.read ? ' · 已读' : ' · 未读'}
                       </span>
@@ -569,7 +569,7 @@ export function AnalyticsView({ apiBase }: { apiBase: string }) {
                 </tbody>
               </table>
               {daily.length === 0 ? (
-                <p className="py-3 text-[11px] text-slate-600">
+                <p className="py-3 text-[11px] text-slate-400">
                   当前窗口没有按日数据。
                 </p>
               ) : null}

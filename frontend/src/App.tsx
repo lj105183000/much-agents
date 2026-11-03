@@ -143,7 +143,10 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
         <main className="flex-1 overflow-y-auto px-4 py-6 md:px-7">
           <div className="mx-auto w-full max-w-6xl space-y-5">
             {health.state === 'offline' ? (
-              <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs leading-6 text-red-200">
+              <div
+                role="alert"
+                className="flex flex-wrap items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs leading-6 text-red-200"
+              >
                 <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
                   <p className="font-medium">无法连接后端 API</p>
@@ -158,7 +161,10 @@ function AuthenticatedApp({ user }: { user: AuthUser }) {
               </div>
             ) : null}
             {health.state === 'degraded' ? (
-              <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-6 text-amber-200">
+              <div
+                role="status"
+                className="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-6 text-amber-200"
+              >
                 <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
                   <p className="font-medium">后端已连接，但状态降级</p>

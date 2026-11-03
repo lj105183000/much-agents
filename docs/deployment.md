@@ -297,23 +297,14 @@ docker compose -f docker-compose.prod.yml ps
 ## 9. 安全基线
 
 - 仅 Nginx 发布 80/443；Postgres/Redis/MinIO/Chroma 不映射到主机。
-- TLS 1.2/1.3、HSTS、CSP（内联主题脚本按 SHA-256 固定）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`server_tokens off`。
+- TLS 1.2/1.3、HSTS、CSP（主题脚本已外置为 `theme-init.js`，`script-src 'self'`）、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`server_tokens off`。
 - `/docs`、`/redoc`、`/openapi.json` 在生产返回 404；`DOCS_ENABLED=false` 双保险。
 - 登录：Nginx `limit_req` + 应用内按 IP 失败窗口 + 账号锁定；Argon2 并发受限。
 - 生产 fail-fast 拒绝弱配置；`AUTH_ENABLED=false` 不能在生产启动。
 - 项目 ACL、角色守卫、审计哈希链、产物私有边界（`profile.json` 永不可下载）默认生效。
 - 容器非 root、只读根文件系统、`no-new-privileges`；密钥只通过 `env_file` 注入。
 
-如修改 `frontend/index.html` 的内联主题脚本，必须重新计算 CSP hash：
-
-```bash
-python - <<'PY'
-import base64, hashlib, re
-html = open('frontend/index.html', encoding='utf-8').read()
-body = re.search(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S).group(1)
-print('sha256-' + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode())
-PY
-```
+主题初始化脚本位于 `frontend/public/theme-init.js`，构建时复制到 `dist/theme-init.js`；Nginx 与 Electron 构建产物都只允许 `'self'`/`file:` 脚本，不再维护内联 SHA-256。`npm run build` 末尾会运行 `scripts/check-csp.mjs` 校验构建产物的 CSP meta 与外置脚本。
 
 然后更新 `deploy/nginx/conf.d/default.conf` 中的 `script-src`。
 

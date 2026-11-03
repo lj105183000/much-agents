@@ -173,7 +173,7 @@ export function NotificationBell({
                           {notification.body}
                         </span>
                       ) : null}
-                      <span className="mt-1 block text-[10px] text-slate-600">
+                      <span className="mt-1 block text-[10px] text-slate-400">
                         {notification.actor_name
                           ? `${notification.actor_name} · `
                           : ''}

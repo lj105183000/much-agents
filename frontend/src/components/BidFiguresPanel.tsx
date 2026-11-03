@@ -300,7 +300,7 @@ export function BidFiguresPanel({
                       {SOURCE_LABEL[figure.source] ?? figure.source} ·{' '}
                       {figure.section_title}
                     </p>
-                    <p className="truncate text-[10px] text-slate-600">
+                    <p className="truncate text-[10px] text-slate-400">
                       {figure.file} · 版心宽 {figure.width_cm} cm
                     </p>
                     {figure.warnings.length ? (

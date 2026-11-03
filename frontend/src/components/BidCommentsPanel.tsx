@@ -228,8 +228,9 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
 
       {canReview ? (
         <div className="mt-4 space-y-3 rounded-2xl border border-slate-800 bg-slate-950/30 p-3">
-          <Field label="发表评论">
+          <Field label="发表评论" htmlFor="comment-body">
             <textarea
+              id="comment-body"
               data-testid="comment-body"
               className={cn(textareaClass, 'min-h-20')}
               value={body}
@@ -239,8 +240,9 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
             />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="关联章节">
+            <Field label="关联章节" htmlFor="comment-section">
               <select
+                id="comment-section"
                 className={selectClass}
                 value={sectionId}
                 onChange={(event) => setSectionId(event.target.value)}
@@ -256,9 +258,11 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
             </Field>
             <Field
               label="指派给"
+              htmlFor="comment-assignee"
               hint={memberError ?? '选择项目成员作为处理人'}
             >
               <select
+                id="comment-assignee"
                 data-testid="comment-assignee"
                 className={selectClass}
                 value={assigneeId}
@@ -355,7 +359,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                   <span className="text-[11px] text-slate-400">
                     {comment.author_name}
                   </span>
-                  <span className="text-[10px] text-slate-600">
+                  <span className="text-[10px] text-slate-400">
                     {formatDate(comment.created_at)}
                   </span>
                 </div>
@@ -409,10 +413,10 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                       指派：{assigned?.display_name ?? comment.assignee_name}
                     </span>
                   ) : (
-                    <span className="text-[10px] text-slate-600">未指派</span>
+                    <span className="text-[10px] text-slate-400">未指派</span>
                   )}
                   {comment.resolved_by_name ? (
-                    <span className="text-[10px] text-slate-600">
+                    <span className="text-[10px] text-slate-400">
                       {comment.resolved_by_name} 解决于{' '}
                       {comment.resolved_at
                         ? formatDate(comment.resolved_at)
