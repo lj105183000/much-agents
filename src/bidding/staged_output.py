@@ -11,7 +11,7 @@ from src.parsing.artifacts import atomic_write_json, atomic_write_text, ensure_d
 from .assemble import assemble_bid
 from .checks import AllowedFacts
 from .context import TenderContext
-from .docx_export import markdown_to_docx
+from .docx_export import markdown_to_docx, template_variables
 from .docx_quality import check_docx
 from .models import (
     BidAssembly,
@@ -134,6 +134,7 @@ def write_staged_outputs(
     assembly: BidAssembly,
     outline: BidOutline,
     output_dir: str | Path,
+    profile: BidderProfile | None = None,
     gate: dict[str, Any] | None = None,
     outline_data: dict[str, Any] | None = None,
     extra_report: dict[str, Any] | None = None,
@@ -154,6 +155,9 @@ def write_staged_outputs(
         asset_dir=root,
         image_width_cm=image_width_cm,
         template_path=docx_template or None,
+        template_values=template_variables(
+            context, profile or BidderProfile.empty()
+        ),
     )
     report = dict(assembly.report)
     if extra_report:

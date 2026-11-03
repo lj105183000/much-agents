@@ -3129,6 +3129,7 @@ class BidRunService:
                 assembly=assembly,
                 outline=outline,
                 output_dir=run_dir,
+                profile=profile,
                 gate=gate,
                 outline_data=outline_data,
                 extra_report={

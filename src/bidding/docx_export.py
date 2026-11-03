@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from typing import Mapping
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -16,7 +19,9 @@ from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 from PIL import Image
 
+from .context import TenderContext
 from .errors import BidExportError
+from .profile import BidderProfile
 
 BODY_FONT_EAST_ASIA = "宋体"
 BODY_FONT_ASCII = "Times New Roman"
@@ -307,6 +312,176 @@ def _add_page_number_footer(document) -> None:
     _add_field(paragraph, "PAGE", "1")
 
 
+_TEMPLATE_VAR_RE = re.compile(r"{{\s*([A-Za-z0-9_]+)\s*}}")
+_CONTENT_MARKER = "{{content}}"
+TEMPLATE_VARIABLES: dict[str, str] = {
+    "project_name": "项目名称",
+    "project_code": "项目编号",
+    "bid_section": "标段名称",
+    "tenderer": "招标人",
+    "agency": "招标代理机构",
+    "location": "建设地点",
+    "scope": "招标范围",
+    "duration_days": "计划工期",
+    "quality_requirement": "质量要求",
+    "max_price_text": "最高投标限价",
+    "bid_deadline": "投标截止时间",
+    "bid_open_time": "开标时间",
+    "planned_start": "计划开工日期",
+    "planned_end": "计划竣工日期",
+    "bid_validity_days": "投标有效期",
+    "company_name": "投标人名称",
+    "legal_representative": "法定代表人",
+    "authorized_agent": "委托代理人",
+    "project_manager": "项目经理",
+    "date": "日期",
+}
+
+
+def template_variables(
+    context: TenderContext, profile: BidderProfile
+) -> dict[str, str]:
+    """Return the allowlisted values available to a DOCX template."""
+
+    facts = context.facts
+
+    def value(raw: str | None, label: str) -> str:
+        text = (raw or "").strip()
+        return text or f"【待填写：{label}】"
+
+    return {
+        "project_name": value(facts.project_name, "项目名称"),
+        "project_code": value(facts.project_code, "项目编号"),
+        "bid_section": value(facts.bid_section, "标段名称"),
+        "tenderer": value(facts.tenderer, "招标人"),
+        "agency": value(facts.agency, "招标代理机构"),
+        "location": value(facts.location, "建设地点"),
+        "scope": value(facts.scope, "招标范围"),
+        "duration_days": value(facts.duration_days, "计划工期"),
+        "quality_requirement": value(facts.quality_requirement, "质量要求"),
+        "max_price_text": value(facts.max_price_text, "最高投标限价"),
+        "bid_deadline": value(facts.bid_deadline, "投标截止时间"),
+        "bid_open_time": value(facts.bid_open_time, "开标时间"),
+        "planned_start": value(facts.planned_start, "计划开工日期"),
+        "planned_end": value(facts.planned_end, "计划竣工日期"),
+        "bid_validity_days": value(facts.bid_validity_days, "投标有效期"),
+        "company_name": value(profile.company_name(), "投标人名称"),
+        "legal_representative": value(
+            profile.legal_representative.name, "法定代表人"
+        ),
+        "authorized_agent": value(
+            profile.authorized_agent.name, "委托代理人"
+        ),
+        "project_manager": value(
+            profile.project_manager.name, "项目经理"
+        ),
+        "date": date.today().strftime("%Y年%m月%d日"),
+    }
+
+
+def _template_paragraphs(document) -> list:
+    paragraphs = list(document.paragraphs)
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs.extend(cell.paragraphs)
+                for nested in cell.tables:
+                    for nested_row in nested.rows:
+                        for nested_cell in nested_row.cells:
+                            paragraphs.extend(nested_cell.paragraphs)
+    for section in document.sections:
+        for container in (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+        ):
+            paragraphs.extend(container.paragraphs)
+            for table in container.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        paragraphs.extend(cell.paragraphs)
+    return paragraphs
+
+
+def _replace_paragraph_text(paragraph, replace) -> None:
+    if not paragraph.runs:
+        paragraph.text = replace(paragraph.text)
+        return
+    for run in paragraph.runs:
+        run.text = replace(run.text)
+    if "{{" in paragraph.text:
+        # A placeholder was split across runs; fall back to one formatted run.
+        template = paragraph.runs[0]
+        paragraph.text = replace(paragraph.text)
+        if paragraph.runs:
+            paragraph.runs[0].style = template.style
+            paragraph.runs[0].font.name = template.font.name
+            paragraph.runs[0].font.size = template.font.size
+
+
+def _apply_template_variables(
+    document,
+    variables: Mapping[str, str],
+    *,
+    validate_only: bool = False,
+) -> set[str]:
+    unknown: set[str] = set()
+    paragraphs = _template_paragraphs(document)
+    for paragraph in paragraphs:
+        for match in _TEMPLATE_VAR_RE.finditer(paragraph.text):
+            name = match.group(1)
+            if name != "content" and name not in TEMPLATE_VARIABLES:
+                unknown.add(name)
+    if unknown:
+        raise BidExportError(
+            "unknown DOCX template variables: " + ", ".join(sorted(unknown))
+        )
+    if validate_only:
+        return unknown
+    for paragraph in paragraphs:
+        if "{{" not in paragraph.text:
+            continue
+        _replace_paragraph_text(
+            paragraph,
+            lambda text: _TEMPLATE_VAR_RE.sub(
+                lambda match: (
+                    "{{content}}"
+                    if match.group(1) == "content"
+                    else variables.get(
+                        match.group(1),
+                        f"【待填写：{TEMPLATE_VARIABLES[match.group(1)]}】",
+                    )
+                ),
+                text,
+            ),
+        )
+    return unknown
+
+
+def _prepare_template_body(document) -> None:
+    """Keep a cover before ``{{content}}``; otherwise clear sample content."""
+
+    marker = None
+    for paragraph in document.paragraphs:
+        if _CONTENT_MARKER in paragraph.text:
+            marker = paragraph
+            break
+    if marker is None:
+        _clear_document_body(document)
+        return
+    marker.text = marker.text.replace(_CONTENT_MARKER, "")
+    body = document.element.body
+    found = False
+    for child in list(body):
+        if child is marker._p:
+            found = True
+            body.remove(child)
+            continue
+        if found and child.tag != qn("w:sectPr"):
+            body.remove(child)
+
+
 def _clear_document_body(document) -> None:
     """Keep section properties while removing the template's sample content."""
 
@@ -342,6 +517,7 @@ def markdown_to_docx(
     asset_dir: str | Path | None = None,
     image_width_cm: float = 15.5,
     template_path: str | Path | None = None,
+    template_values: Mapping[str, str] | None = None,
 ) -> DocxResult:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -362,7 +538,16 @@ def markdown_to_docx(
     try:
         if template is not None:
             document = Document(str(template))
-            _clear_document_body(document)
+            _apply_template_variables(
+                document,
+                template_values or {},
+                validate_only=True,
+            )
+            _prepare_template_body(document)
+            _apply_template_variables(
+                document,
+                template_values or {},
+            )
         else:
             document = Document()
             _configure_document(document)

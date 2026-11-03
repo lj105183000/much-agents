@@ -1,6 +1,6 @@
 # 交付物、DOCX 模板与企业资质库
 
-> 状态：已实现（2026-11-02）。DOC 导出复用 Headless LibreOffice；DOCX 支持全局默认模板、项目级模板库与分页预览；资质库提供公司级证书 CRUD 与到期状态展示。
+> 状态：已实现（2026-11-02，2026-11-03 增加模板变量与封面占位）。DOC 导出复用 Headless LibreOffice；DOCX 支持全局默认模板、项目级模板库、模板变量/封面占位与分页预览；资质库提供公司级证书 CRUD 与到期状态展示。
 
 ## 1. Word 97-2003（.doc）导出
 
@@ -58,6 +58,17 @@ BID_DOCX_TEMPLATE=/opt/much-agents/templates/corporate-bid.docx
 - 模板预览：`GET /api/templates/{template_id}/preview?page=N`。首次请求下载 DOCX，经 Headless LibreOffice 转 PDF（与 PDF 导出共用进程内信号量），PDF 缓存在 `private/template-previews/<project_id>/<template_id>/<sha256前16位>.pdf`；再用 PyMuPDF 渲染指定页为 PNG。响应头 `X-Template-Preview-Page` / `X-Template-Preview-Pages` 给出页码/总页数（CORS 已暴露），页越界返回 400，LibreOffice 不可用返回 503，模板文件丢失返回 409。删除模板会清理预览缓存。
 - 审计：`template.create`（名称/SHA-256/大小）、`template.update`（变更字段）、`template.delete`。
 - 前端「编写标书」顶部的「DOCX 模板」面板支持查看、预览（分页 PNG）、下载、上传、启用/停用与删除；只有项目管理员看到写操作，只读角色可查看、预览与下载。LibreOffice 不可用时隐藏预览按钮并提示。
+
+### 2.3 模板变量与封面占位
+
+模板正文、表格、页眉和页脚支持 `{{变量}}`。允许的变量由 `src/bidding/docx_export.py` 的 `TEMPLATE_VARIABLES` 固定，包括：`project_name`、`project_code`、`bid_section`、`tenderer`、`agency`、`location`、`scope`、`duration_days`、`quality_requirement`、`max_price_text`、`bid_deadline`、`bid_open_time`、`planned_start`、`planned_end`、`bid_validity_days`、`company_name`、`legal_representative`、`authorized_agent`、`project_manager`、`date`。
+
+- `{{content}}` 是正文插入点：模板中该段落之前的内容作为封面/固定页保留；该段落及其后的模板示例内容会被删除，生成正文追加在封面之后。
+- 没有 `{{content}}` 时保持原行为：清空模板正文，仅保留样式、页边距、页眉页脚与 `sectPr`。
+- 变量值来自招标文件事实与投标人 profile；缺失值渲染为 `【待填写：标签】`，不会编造。
+- 未知变量（`content` 除外）会让组装/导出明确失败（`BidExportError`），不会静默替换为空。
+- 变量替换优先按 run 保留格式；跨 run 拆分的占位符会退化为单 run 文本。
+- 该功能对项目模板库、`BID_DOCX_TEMPLATE`、CLI 与 legacy `POST /api/bids` 一致生效。
 - 当前边界：没有模板变量/封面占位符、未知变量阻断、公司级/组织级模板、模板版本历史或整本文档模板；legacy `POST /api/bids` 与 CLI 不读取项目模板库。
 
 ## 3. 企业资质库

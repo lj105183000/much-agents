@@ -17,7 +17,7 @@ from .assemble import assemble_bid
 from .checks import build_allowed
 from .config import BidSettings
 from .context import TenderContext
-from .docx_export import markdown_to_docx
+from .docx_export import markdown_to_docx, template_variables
 from .errors import BidGenerationError, BidInputError
 from .graph import build_bid_graph
 from .citations import strip_citation_markers
@@ -171,6 +171,7 @@ def run_bid_writing(
         output_dir / "bid.docx",
         title=f"{context.facts.project_name} 投标文件",
         template_path=settings.docx_template or None,
+        template_values=template_variables(context, profile),
     )
     timings["export"] = time.perf_counter() - started
 
