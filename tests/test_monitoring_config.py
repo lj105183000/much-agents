@@ -53,6 +53,7 @@ def test_ci_trivy_scans_are_blocking() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert 'exit-code: "1"' in workflow
     assert 'exit-code: "0"' not in workflow
+    assert "skip-dirs: deploy/nginx/certs" in workflow
     assert (ROOT / ".trivyignore").is_file()
 
 

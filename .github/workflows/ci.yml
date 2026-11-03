@@ -206,6 +206,8 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # The CI-generated self-signed TLS key is not repository content.
+          skip-dirs: deploy/nginx/certs
       - name: Generate API SBOM
         uses: anchore/sbom-action@v0.24.3
         with:
