@@ -73,6 +73,28 @@ def test_claim_progress_and_terminal_guards(tmp_path: Path) -> None:
     assert store.get("job-1").percent == 100  # type: ignore[union-attr]
 
 
+def test_dlq_can_be_replayed_and_removed(tmp_path: Path) -> None:
+    store, _client, _clock = make_store(tmp_path)
+    create_job(store)
+    store.mark_running("job-1")
+    store.mark_failed("job-1", error="worker crashed", exit_code=1)
+    store.push_dlq(
+        job_id="job-1",
+        task_name="much_agents.parse_document",
+        error="worker crashed",
+    )
+    assert len(store.list_dlq()) == 1
+
+    queued = store.mark_queued("job-1")
+
+    assert queued is not None
+    assert queued.status == "queued"
+    assert queued.error is None
+    assert store.get_view("job-1")["status"] == "queued"  # type: ignore[index]
+    assert store.remove_dlq("job-1") == 1
+    assert store.list_dlq() == []
+
+
 def test_only_if_queued_does_not_overwrite_running(tmp_path: Path) -> None:
     store, _client, _clock = make_store(tmp_path)
     create_job(store)

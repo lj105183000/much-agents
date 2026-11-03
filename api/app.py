@@ -218,6 +218,7 @@ def create_app(
         else None,
         auth_enabled=api_settings.auth_enabled,
         bid_run_repo=bid_run_repo,
+        storage=storage,
     )
     audit_service = audit_service or AuditService(
         AuditRepository(database.session_factory)
@@ -269,6 +270,8 @@ def create_app(
         or (api_settings.upload_dir / "baseline" / "latest.json"),
         reports_dir=api_settings.eval_reports_dir
         or (api_settings.upload_dir / "eval-runs"),
+        report_retention_days=api_settings.eval_report_retention_days,
+        report_max_runs=api_settings.eval_report_max_runs,
     )
     resolved_auth_service = auth_service
     if resolved_auth_service is None and api_settings.auth_enabled:

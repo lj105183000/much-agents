@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,7 +15,11 @@ from api.projects import (
     ProjectService,
     project_role_for_global,
 )
-from tests.fakes import FakeBidRunRepository, FakeProjectRepository
+from tests.fakes import (
+    FakeBidRunRepository,
+    FakeProjectRepository,
+    MemoryStorage,
+)
 
 PROJECT_A = "11111111-1111-1111-1111-111111111111"
 PROJECT_B = "22222222-2222-2222-2222-222222222222"
@@ -235,6 +240,46 @@ def test_project_crud_and_default_project_guard() -> None:
     with pytest.raises(ProjectError) as missing:
         asyncio.run(service.delete_project(project.id))
     assert missing.value.status_code == 404
+
+
+def test_delete_project_removes_private_storage_objects() -> None:
+    repo, runs, _ = make_service()
+    storage = MemoryStorage()
+    service = ProjectService(
+        repo,
+        auth_enabled=True,
+        bid_run_repo=runs,
+        storage=storage,
+    )
+    repo.add_project(PROJECT_A, name="项目A", slug="project-a")
+    asyncio.run(
+        repo.register_document(PROJECT_A, "doc-1", "tender.pdf", None)
+    )
+    runs.runs["run-1"] = SimpleNamespace(
+        run_id="run-1",
+        project_id=PROJECT_A,
+        doc_id="doc-1",
+        status="assembled",
+        created_at=datetime.now(timezone.utc),
+    )
+    for key in (
+        "parsed/doc-1/full.md",
+        "bids/doc-1/run-1/bid.md",
+        "private/profiles/doc-1/run-1.json",
+        f"private/templates/{PROJECT_A}/template.docx",
+        f"private/template-previews/{PROJECT_A}/template.pdf",
+    ):
+        storage.put_bytes(key, b"x")
+
+    asyncio.run(service.delete_project(PROJECT_A))
+
+    assert PROJECT_A not in repo.projects
+    assert not any(
+        key.startswith(("bids/doc-1", "private/templates", "private/template-previews"))
+        for key in storage.objects
+    )
+    assert "private/profiles/doc-1/run-1.json" not in storage.objects
+    assert "parsed/doc-1/full.md" not in storage.objects
 
 
 def test_membership_rules_and_last_manager_guard() -> None:

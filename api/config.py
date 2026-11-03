@@ -116,8 +116,11 @@ class ApiSettings:
     eval_bids_dir: Path | None = None
     eval_baseline: Path | None = None
     eval_reports_dir: Path | None = None
+    eval_report_retention_days: int = 30
+    eval_report_max_runs: int = 200
     allow_unpriced_llm: bool = False
     allow_unbudgeted_runs: bool = False
+    allow_unapproved_export: bool = False
     llm_pricing_configured: bool = False
     missing_price_models: tuple[str, ...] = ()
     bid_run_budget_cents: int = 0
@@ -204,6 +207,11 @@ class ApiSettings:
             errors.append(
                 "BID_RUN_BUDGET_CENTS must be positive in production "
                 "or set ALLOW_UNBUDGETED_RUNS=true"
+            )
+        if not self.bid_require_approval and not self.allow_unapproved_export:
+            errors.append(
+                "BID_REQUIRE_APPROVAL must be true in production "
+                "or set ALLOW_UNAPPROVED_EXPORT=true"
             )
         if self.celery_soft_time_limit_seconds >= self.celery_time_limit_seconds:
             errors.append(
@@ -335,9 +343,18 @@ class ApiSettings:
             eval_reports_dir=_eval_path(
                 "EVAL_REPORTS_DIR", upload_dir / "eval-runs"
             ),
+            eval_report_retention_days=_int(
+                env, "EVAL_REPORT_RETENTION_DAYS", 30, minimum=0
+            ),
+            eval_report_max_runs=_int(
+                env, "EVAL_REPORT_MAX_RUNS", 200, minimum=1
+            ),
             allow_unpriced_llm=_bool(env, "ALLOW_UNPRICED_LLM", False),
             allow_unbudgeted_runs=_bool(
                 env, "ALLOW_UNBUDGETED_RUNS", False
+            ),
+            allow_unapproved_export=_bool(
+                env, "ALLOW_UNAPPROVED_EXPORT", False
             ),
             llm_pricing_configured=bool(pricing["configured"]),
             missing_price_models=tuple(pricing["missing_models"]),

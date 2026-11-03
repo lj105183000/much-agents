@@ -78,6 +78,7 @@ chmod 600 deploy/env.production
 - 数据库/Redis/MinIO 仍使用开发默认凭据或 `CHANGE_ME` 占位符，或 `MCP_API_TOKEN` 太短、仍是占位符。
 - `MAX_PDF_PAGES > 2000`，或认证/Celery 时间参数超出合理范围。主招标 PDF 超过 200 页时由 MinerU 自动分片；附件仍限制 200 页。
 - 价格表未覆盖当前模型（及启用回退时的 `deepseek-chat`），或 `BID_RUN_BUDGET_CENTS` 不是正数。仅在明确接受成本风险时设置 `ALLOW_UNPRICED_LLM=true` / `ALLOW_UNBUDGETED_RUNS=true` 跳过对应检查。
+- `BID_REQUIRE_APPROVAL=false`；仅在明确接受未审批导出时设置 `ALLOW_UNAPPROVED_EXPORT=true`。
 
 `deploy/env.production` 已被 gitignore，**不要提交**。请另存一份到加密的密钥管理系统；备份脚本不会复制它。
 

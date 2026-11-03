@@ -30,6 +30,7 @@ PRODUCTION_ENV = {
     "MINIO_SECRET_KEY": "strong-minio-secret",
     "MCP_API_TOKEN": "0123456789abcdef0123456789abcdef",
     "MAX_PDF_PAGES": "200",
+    "BID_REQUIRE_APPROVAL": "true",
     "BID_RUN_BUDGET_CENTS": "1000",
     "LLM_PRICE_TABLE": (
         '{"deepseek-flash":{"input_per_1k_cny":0.001,'
@@ -102,6 +103,7 @@ def test_production_rejects_unsafe_defaults() -> None:
             "MCP_API_TOKEN",
         ),
         ({"MAX_PDF_PAGES": "2001"}, "MAX_PDF_PAGES"),
+        ({"BID_REQUIRE_APPROVAL": "false"}, "BID_REQUIRE_APPROVAL"),
         ({"AUTH_SESSION_TTL_HOURS": "999"}, "AUTH_SESSION_TTL_HOURS"),
         ({"AUTH_HASH_CONCURRENCY": "99"}, "AUTH_HASH_CONCURRENCY"),
         (
@@ -151,6 +153,14 @@ def test_production_cost_escape_hatches() -> None:
     assert not any(
         "BID_RUN_BUDGET_CENTS" in error
         for error in unbudgeted.production_errors()
+    )
+
+    unapproved = production_settings(
+        BID_REQUIRE_APPROVAL="false", ALLOW_UNAPPROVED_EXPORT="true"
+    )
+    assert not any(
+        "BID_REQUIRE_APPROVAL" in error
+        for error in unapproved.production_errors()
     )
 
 

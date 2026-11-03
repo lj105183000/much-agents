@@ -12,6 +12,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -310,11 +311,15 @@ class EvalConsoleService:
         bids_dir: Path,
         baseline_path: Path,
         reports_dir: Path,
+        report_retention_days: int = 30,
+        report_max_runs: int = 200,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.bids_dir = Path(bids_dir)
         self.baseline_path = Path(baseline_path)
         self.reports_dir = Path(reports_dir)
+        self.report_retention_days = max(0, int(report_retention_days))
+        self.report_max_runs = max(1, int(report_max_runs))
         self._run_lock = Lock()
 
     # ---- overview / cases ------------------------------------------------
@@ -557,6 +562,7 @@ class EvalConsoleService:
                     self.reports_dir / f"{report['id']}.json",
                     report,
                 )
+                self._prune_reports()
             except OSError as exc:
                 raise EvalConsoleError(
                     503, "run history is unavailable"
@@ -564,6 +570,37 @@ class EvalConsoleService:
             return report
         finally:
             self._run_lock.release()
+
+    def _prune_reports(self) -> None:
+        if not self.reports_dir.is_dir():
+            return
+        now = time.time()
+        cutoff = (
+            now - self.report_retention_days * 86400
+            if self.report_retention_days > 0
+            else None
+        )
+        entries: list[tuple[float, Path]] = []
+        for path in self.reports_dir.glob("*.json"):
+            if not _REPORT_ID_RE.fullmatch(path.stem):
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if cutoff is not None and mtime < cutoff:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            entries.append((mtime, path))
+        entries.sort(reverse=True)
+        for _, path in entries[self.report_max_runs :]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def list_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
         if not self.reports_dir.is_dir():

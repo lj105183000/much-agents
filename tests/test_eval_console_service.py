@@ -250,6 +250,38 @@ def test_missing_baseline_records_without_comparison(
     assert report["warnings"]
 
 
+def test_eval_reports_are_pruned_by_age_and_count(tmp_path: Path) -> None:
+    import os
+    import time
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    service = EvalConsoleService(
+        data_dir=tmp_path / "data",
+        bids_dir=tmp_path / "bids",
+        baseline_path=tmp_path / "baseline.json",
+        reports_dir=reports,
+        report_retention_days=1,
+        report_max_runs=2,
+    )
+    now = time.time()
+    names = [f"{index:032x}" for index in range(1, 5)]
+    for index, name in enumerate(names):
+        path = reports / f"{name}.json"
+        path.write_text("{}", encoding="utf-8")
+        os.utime(path, (now - index * 3600, now - index * 3600))
+    old = reports / f"{'f' * 32}.json"
+    old.write_text("{}", encoding="utf-8")
+    os.utime(old, (now - 2 * 86400, now - 2 * 86400))
+
+    service._prune_reports()
+
+    assert not old.exists()
+    assert sorted(path.stem for path in reports.glob("*.json")) == sorted(
+        names[:2]
+    )
+
+
 def test_invalid_baseline_blocks_run(tmp_path: Path) -> None:
     service, _data_dir, baseline_path = _service(tmp_path)
     baseline_path.write_text('{"summary": {}}', encoding="utf-8")

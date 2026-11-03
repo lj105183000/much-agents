@@ -122,6 +122,15 @@ class BidRunLookup(Protocol):
         self, run_id: str, *, project_id: str | None = None
     ) -> Any | None: ...
 
+    async def list_runs(
+        self,
+        *,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[Any]: ...
+
 
 def project_role_for_global(global_role: str) -> str:
     return GLOBAL_TO_PROJECT_ROLE.get(global_role, "viewer")
@@ -479,6 +488,14 @@ class ProjectRepository:
             rows = (await session.execute(statement)).scalars().all()
         return [_document_record(row) for row in rows]
 
+    async def shared_document_ids(self, project_id: str) -> set[str]:
+        statement = select(DocumentRow.doc_id).where(
+            DocumentRow.project_id != project_id
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return set(rows)
+
     async def list_document_ids(self, project_id: str) -> set[str]:
         statement = select(DocumentRow.doc_id).where(
             DocumentRow.project_id == project_id
@@ -504,11 +521,13 @@ class ProjectService:
         auth_enabled: bool = True,
         bid_run_repo: BidRunLookup | None = None,
         default_project_id: str = DEFAULT_PROJECT_ID,
+        storage: Any | None = None,
     ) -> None:
         self.repo = repository
         self.auth_enabled = auth_enabled
         self.bid_run_repo = bid_run_repo
         self.default_project_id = default_project_id
+        self.storage = storage
 
     @property
     def enforced(self) -> bool:
@@ -723,6 +742,43 @@ class ProjectService:
             raise ProjectError(404, "项目不存在")
         return updated
 
+    async def _delete_project_objects(self, project_id: str) -> None:
+        if self.storage is None:
+            return
+        repo = self._require_repo()
+        documents = await repo.list_documents(project_id)
+        shared = await repo.shared_document_ids(project_id)
+        prefixes: list[str] = []
+        for document in documents:
+            if document.doc_id in shared:
+                prefixes.append(
+                    f"parsed/{document.doc_id}/attachments/{project_id}"
+                )
+            else:
+                prefixes.append(f"parsed/{document.doc_id}")
+        if self.bid_run_repo is not None:
+            runs = await self.bid_run_repo.list_runs(
+                project_id=project_id, limit=100_000
+            )
+            for run in runs:
+                prefixes.append(f"bids/{run.doc_id}/{run.run_id}")
+                prefixes.append(
+                    f"private/profiles/{run.doc_id}/{run.run_id}.json"
+                )
+        prefixes.extend(
+            [
+                f"private/templates/{project_id}",
+                f"private/template-previews/{project_id}",
+            ]
+        )
+        try:
+            for prefix in dict.fromkeys(prefixes):
+                await asyncio.to_thread(self.storage.delete_prefix, prefix)
+        except Exception as exc:  # noqa: BLE001 - storage errors block deletion
+            raise ProjectError(
+                503, f"项目对象存储清理失败: {type(exc).__name__}"
+            ) from exc
+
     async def delete_project(self, project_id: str) -> None:
         if project_id == self.default_project_id:
             raise ProjectError(409, "默认项目不能删除")
@@ -732,6 +788,7 @@ class ProjectService:
             raise ProjectError(404, "项目不存在")
         if await repo.count_active_runs(project_id) > 0:
             raise ProjectError(409, "项目仍有正在生成的任务，无法删除")
+        await self._delete_project_objects(project_id)
         if not await repo.delete_project(project_id):
             raise ProjectError(404, "项目不存在")
 

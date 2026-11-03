@@ -48,6 +48,7 @@ COPY migrations ./migrations
 COPY api ./api
 COPY src ./src
 COPY scripts/worker_healthcheck.py ./scripts/worker_healthcheck.py
+COPY bidder_profile.example.json ./
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md ./
 
 RUN mkdir -p /app/upload \

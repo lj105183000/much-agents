@@ -297,6 +297,8 @@ def list_cases(data_dir: Path) -> list[dict[str, Any]]:
                 {
                     "case_id": manifest.get("case_id") or case_dir.name,
                     "doc_id": manifest.get("doc_id"),
+                    "run_id": manifest.get("run_id"),
+                    "content_sha256": manifest.get("content_sha256"),
                     "label_status": manifest.get("label_status"),
                     "counts": manifest.get("counts"),
                     "built_at": manifest.get("built_at"),

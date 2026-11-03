@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from scripts.eval_regression import (
     collect,
@@ -57,6 +58,49 @@ def _write_case(tmp_path, *, placeholder_count: int = 2):
         ),
         encoding="utf-8",
     )
+
+
+def test_collect_uses_manifest_run_id_not_mtime(tmp_path) -> None:
+    labels = tmp_path / "eval-data" / "labels" / "doc-1"
+    labels.mkdir(parents=True)
+    (labels / "manifest.json").write_text(
+        json.dumps(
+            {
+                "case_id": "doc-1",
+                "doc_id": "doc-1",
+                "run_id": "run-old",
+                "label_status": "draft",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for run_id, count in (("old", 1), ("new", 9)):
+        run = tmp_path / "bids" / "doc-1" / f"run-{run_id}"
+        run.mkdir(parents=True)
+        (run / "report.json").write_text(
+            json.dumps(
+                {
+                    "run_id": f"run-{run_id}",
+                    "coverage": {"total": 0, "counts": {}, "items": []},
+                    "placeholders": {"count": count},
+                    "stats": {"characters": 1000, "narrative_sections": 1},
+                    "issues": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    # Make the unselected run newer to prove mtime is not used.
+    newer = tmp_path / "bids" / "doc-1" / "run-new" / "report.json"
+    older = tmp_path / "bids" / "doc-1" / "run-old" / "report.json"
+    newer.touch()
+    older.touch()
+    os.utime(newer, (2000, 2000))
+    os.utime(older, (1000, 1000))
+
+    current = collect(tmp_path / "eval-data", tmp_path / "bids")
+
+    from pathlib import Path
+    assert Path(current["cases"][0]["report"]).parent.name == "run-old"
 
 
 def test_collect_and_compare_pass(tmp_path) -> None:

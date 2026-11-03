@@ -97,12 +97,39 @@ def _reviewed_labels(
     }, warnings
 
 
-def _latest_run_dir(bids_dir: Path, doc_id: str) -> Path | None:
+def _latest_run_dir(
+    bids_dir: Path,
+    doc_id: str,
+    run_id: str | None = None,
+) -> Path | None:
+    if run_id:
+        run_dir = bids_dir / doc_id / run_id
+        report = run_dir / "report.json"
+        if not report.is_file():
+            return None
+        payload = _load(report)
+        reported = (
+            str(payload.get("run_id") or "")
+            if isinstance(payload, dict)
+            else ""
+        )
+        return run_dir if not reported or reported == run_id else None
     candidates = sorted(
         bids_dir.glob(f"{doc_id}/*/report.json"),
         key=lambda path: path.stat().st_mtime,
+        reverse=True,
     )
-    return candidates[-1].parent if candidates else None
+    for path in candidates:
+        payload = _load(path)
+        reported = (
+            str(payload.get("run_id") or "")
+            if isinstance(payload, dict)
+            else ""
+        )
+        if reported and reported != path.parent.name:
+            continue
+        return path.parent
+    return None
 
 
 def _generated_corpus(run_dir: Path) -> tuple[str, set[str]]:
@@ -124,15 +151,20 @@ def score_case(
     case_id: str,
     *,
     doc_id: str | None = None,
+    run_id: str | None = None,
     threshold: float = 0.6,
 ) -> dict[str, Any]:
     labels, label_warnings = _reviewed_labels(data_dir, case_id)
-    run_id = doc_id or case_id
-    run_dir = _latest_run_dir(bids_dir, run_id)
+    run_doc_id = doc_id or case_id
+    run_dir = _latest_run_dir(
+        bids_dir,
+        run_doc_id,
+        run_id.strip() if run_id else None,
+    )
     if run_dir is None:
         return {
             "case_id": case_id,
-            "doc_id": run_id,
+            "doc_id": run_doc_id,
             "status": "missing_run",
             "labels_ready": bool(labels and labels["ready"]),
             "warnings": label_warnings,
@@ -142,7 +174,7 @@ def score_case(
     if not labels or not labels["ready"]:
         return {
             "case_id": case_id,
-            "doc_id": run_id,
+            "doc_id": run_doc_id,
             "run_id": run_dir.name,
             "run_dir": str(run_dir),
             "status": "labels_not_ready",
@@ -214,7 +246,7 @@ def score_case(
     facts_total = len(fact_rows)
     return {
         "case_id": case_id,
-        "doc_id": run_id,
+        "doc_id": run_doc_id,
         "run_id": run_dir.name,
         "run_dir": str(run_dir),
         "status": "ok",

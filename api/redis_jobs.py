@@ -98,6 +98,44 @@ class RedisJobStore(JobStoreProtocol):
         self._client.lpush(DLQ_KEY, payload)
         self._client.ltrim(DLQ_KEY, 0, 999)
 
+    def mark_queued(self, job_id: str) -> Job | None:
+        key = self._key(job_id)
+        raw = self._hgetall(key)
+        if not raw:
+            return None
+        job = self._decode(raw, job_id)
+        if job.status not in {"failed", "queued"}:
+            return None
+        self._call(self._client.hdel, key, "claimed")
+        updated = replace(
+            job,
+            status="queued",
+            started_at=None,
+            finished_at=None,
+            stage=None,
+            percent=0,
+            message="requeued from DLQ",
+            exit_code=None,
+            result=None,
+            error=None,
+        )
+        self._write(key, updated)
+        return updated
+
+    def remove_dlq(self, job_id: str) -> int:
+        removed = 0
+        for item in self._client.lrange(DLQ_KEY, 0, -1):
+            try:
+                payload = json.loads(item)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("job_id") or "") != job_id:
+                continue
+            removed += int(self._client.lrem(DLQ_KEY, 1, item) or 0)
+        return removed
+
     def list_dlq(self, limit: int = 50) -> list[dict[str, Any]]:
         raw = self._client.lrange(DLQ_KEY, 0, max(0, int(limit)) - 1)
         records: list[dict[str, Any]] = []

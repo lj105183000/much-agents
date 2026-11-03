@@ -24,17 +24,33 @@ def load_json(path: Path) -> Any:
 
 
 def latest_report(
-    bids_dir: Path, doc_id: str
+    bids_dir: Path,
+    doc_id: str,
+    run_id: str | None = None,
 ) -> tuple[Path, dict[str, Any]] | None:
+    if run_id:
+        path = bids_dir / doc_id / run_id / "report.json"
+        if not path.is_file():
+            return None
+        payload = load_json(path)
+        if not isinstance(payload, dict):
+            return None
+        reported = str(payload.get("run_id") or "")
+        return (path, payload) if not reported or reported == run_id else None
     candidates = sorted(
         bids_dir.glob(f"{doc_id}/*/report.json"),
         key=lambda path: path.stat().st_mtime,
+        reverse=True,
     )
-    if not candidates:
-        return None
-    path = candidates[-1]
-    payload = load_json(path)
-    return (path, payload) if isinstance(payload, dict) else None
+    for path in candidates:
+        payload = load_json(path)
+        if not isinstance(payload, dict):
+            continue
+        reported = str(payload.get("run_id") or "")
+        if reported and reported != path.parent.name:
+            continue
+        return path, payload
+    return None
 
 
 def _average(values: list[float]) -> float | None:
@@ -59,11 +75,13 @@ def collect(
     for case in list_cases(data_dir):
         case_id = str(case.get("case_id") or case["case_id"])
         doc_id = str(case.get("doc_id") or case_id)
+        run_id = str(case.get("run_id") or "").strip() or None
         l1 = score_case(
             data_dir,
             bids_dir,
             case_id,
             doc_id=doc_id,
+            run_id=run_id,
             threshold=l1_threshold,
         )
         if l1.get("status") == "ok":
@@ -78,7 +96,7 @@ def collect(
                 l1_requirements.append(float(l1["requirement_coverage"]))
             if l1.get("citation_coverage") is not None:
                 l1_citations.append(float(l1["citation_coverage"]))
-        latest = latest_report(bids_dir, doc_id)
+        latest = latest_report(bids_dir, doc_id, run_id)
         if latest is None:
             cases.append(
                 {

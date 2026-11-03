@@ -316,6 +316,7 @@ class FakeClock:
 class FakeRedis:
     def __init__(self) -> None:
         self.hashes: dict[str, dict[str, str]] = {}
+        self.lists: dict[str, list[str]] = {}
         self.expires: dict[str, int] = {}
         self.fail: set[str] = set()
 
@@ -364,6 +365,39 @@ class FakeRedis:
     def ping(self) -> bool:
         self._maybe_fail("ping")
         return True
+
+    def lpush(self, name: str, *values: str) -> int:
+        self._maybe_fail("lpush")
+        bucket = self.lists.setdefault(name, [])
+        for value in values:
+            bucket.insert(0, str(value))
+        return len(bucket)
+
+    def ltrim(self, name: str, start: int, end: int) -> bool:
+        self._maybe_fail("ltrim")
+        bucket = self.lists.get(name, [])
+        stop = len(bucket) + end + 1 if end < 0 else end + 1
+        self.lists[name] = bucket[start:stop]
+        return True
+
+    def lrange(self, name: str, start: int, end: int) -> list[str]:
+        self._maybe_fail("lrange")
+        bucket = self.lists.get(name, [])
+        stop = len(bucket) + end + 1 if end < 0 else end + 1
+        return list(bucket[start:stop])
+
+    def lrem(self, name: str, count: int, value: str) -> int:
+        self._maybe_fail("lrem")
+        bucket = self.lists.get(name, [])
+        removed = 0
+        result: list[str] = []
+        for item in bucket:
+            if item == value and (count == 0 or removed < abs(count)):
+                removed += 1
+                continue
+            result.append(item)
+        self.lists[name] = result
+        return removed
 
     def scan_iter(self, match: str | None = None, count: int | None = None):
         self._maybe_fail("scan_iter")
@@ -2476,6 +2510,13 @@ class FakeProjectRepository:
         ]
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows
+
+    async def shared_document_ids(self, project_id: str) -> set[str]:
+        return {
+            doc_id
+            for (pid, doc_id) in self.documents
+            if pid != project_id
+        }
 
     async def list_document_ids(self, project_id: str) -> set[str]:
         return {
