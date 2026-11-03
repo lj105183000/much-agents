@@ -13,7 +13,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
 from uuid import uuid4
@@ -104,6 +104,7 @@ from src.storage.hydration import (
 )
 from src.storage.keys import private_profile_key, run_prefix
 from src.storage.layout import StorageLayout
+from src.storage.models import content_type_for_name
 
 from .bid_run_mapping import (
     outline_data_from_records,
@@ -111,6 +112,7 @@ from .bid_run_mapping import (
     outputs_from_states,
 )
 from .bid_run_repo import (
+    BidCommentAttachmentRecord,
     BidCommentRecord,
     BidRunRecord,
     BidRunRepository,
@@ -126,6 +128,7 @@ from .projects import DEFAULT_PROJECT_ID
 from .schemas import (
     AnalyticsBudgetTrend,
     AnalyticsOverview,
+    BidCommentAttachmentView,
     BidCommentCreateRequest,
     BidCommentListResponse,
     BidCommentMention,
@@ -177,6 +180,12 @@ from .schemas import (
 logger = logging.getLogger(__name__)
 
 ACTIVE_RUN_STATUSES = frozenset({"queued", "generating", "assembling"})
+COMMENT_MAX_DEPTH = 5
+COMMENT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+COMMENT_ATTACHMENT_MAX_PER_COMMENT = 10
+COMMENT_ATTACHMENT_EXTENSIONS = frozenset(
+    {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".txt", ".md"}
+)
 _RUN_STATUSES = frozenset(
     {
         "draft",
@@ -955,6 +964,7 @@ class BidRunService:
     def _comment_payload(
         record: BidCommentRecord,
         section_title: str | None,
+        attachments: list[BidCommentAttachmentRecord] | None = None,
     ) -> BidCommentView:
         mentions: list[BidCommentMention] = []
         for item in record.mentions:
@@ -969,10 +979,29 @@ class BidRunService:
                     display_name=str(item.get("display_name") or ""),
                 )
             )
+        attachment_views = [
+            BidCommentAttachmentView(
+                attachment_id=item.attachment_id,
+                filename=item.filename,
+                content_type=item.content_type,
+                size_bytes=item.size_bytes,
+                sha256=item.sha256,
+                uploaded_by=item.uploaded_by,
+                uploaded_by_name=item.uploaded_by_name,
+                created_at=item.created_at,
+                download_url=(
+                    f"/api/bid-runs/{record.run_id}/comments/"
+                    f"{record.comment_id}/attachments/"
+                    f"{item.attachment_id}/download"
+                ),
+            )
+            for item in (attachments or [])
+        ]
         return BidCommentView(
             comment_id=record.comment_id,
             run_id=record.run_id,
             parent_comment_id=record.parent_comment_id,
+            depth=record.depth,
             due_at=record.due_at,
             section_id=record.section_id,
             section_title=section_title,
@@ -986,6 +1015,10 @@ class BidRunService:
             resolved_by=record.resolved_by,
             resolved_by_name=record.resolved_by_name,
             resolved_at=record.resolved_at,
+            deleted_at=record.deleted_at,
+            deleted_by=record.deleted_by,
+            deleted_by_name=record.deleted_by_name,
+            attachments=attachment_views,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
@@ -997,6 +1030,7 @@ class BidRunService:
         status: str | None = None,
         section_id: str | None = None,
         limit: int = 200,
+        include_deleted: bool = False,
     ) -> BidCommentListResponse:
         repo = self._repo()
         run = await repo.get_run(run_id)
@@ -1011,11 +1045,22 @@ class BidRunService:
             status=status,
             section_id=section_id,
             limit=limit,
+            include_deleted=include_deleted,
         )
+        attachments = await repo.list_comment_attachments(run_id)
+        attachments_by_comment: dict[
+            str, list[BidCommentAttachmentRecord]
+        ] = {}
+        for item in attachments:
+            attachments_by_comment.setdefault(item.comment_id, []).append(item)
         return BidCommentListResponse(
             run_id=run_id,
             comments=[
-                self._comment_payload(record, titles.get(record.section_id or ""))
+                self._comment_payload(
+                    record,
+                    titles.get(record.section_id or ""),
+                    attachments_by_comment.get(record.comment_id, []),
+                )
                 for record in records
             ],
         )
@@ -1032,8 +1077,11 @@ class BidRunService:
             raise BidRunError(404, f"unknown comment: {comment_id}")
         sections = await repo.get_outline(run_id)
         titles = {section.section_id: section.title for section in sections}
+        attachments = await repo.list_comment_attachments(
+            run_id, comment_id=comment_id
+        )
         return self._comment_payload(
-            record, titles.get(record.section_id or "")
+            record, titles.get(record.section_id or ""), attachments
         )
 
     async def create_comment(
@@ -1065,12 +1113,17 @@ class BidRunService:
         if section_id is not None and section_id not in titles:
             raise BidRunError(422, f"unknown outline section: {section_id}")
         parent_comment_id = (payload.parent_comment_id or "").strip() or None
+        depth = 0
         if parent_comment_id is not None:
             parent = await repo.get_comment(run_id, parent_comment_id)
             if parent is None:
                 raise BidRunError(422, "unknown parent comment")
-            if parent.parent_comment_id is not None:
-                raise BidRunError(422, "only one level of replies is supported")
+            depth = parent.depth + 1
+            if depth > COMMENT_MAX_DEPTH:
+                raise BidRunError(
+                    422,
+                    f"reply depth exceeds {COMMENT_MAX_DEPTH} levels",
+                )
             if section_id is None:
                 section_id = parent.section_id
             elif parent.section_id and section_id != parent.section_id:
@@ -1098,6 +1151,7 @@ class BidRunService:
             assignee_id=payload.assignee_id,
             assignee_name=assignee_name,
             parent_comment_id=parent_comment_id,
+            depth=depth,
             due_at=due_at,
         )
         return self._comment_payload(record, titles.get(section_id or ""))
@@ -1165,8 +1219,13 @@ class BidRunService:
             raise BidRunError(404, f"unknown comment: {comment_id}")
         sections = await repo.get_outline(run_id)
         titles = {section.section_id: section.title for section in sections}
+        attachments = await repo.list_comment_attachments(
+            run_id, comment_id=comment_id
+        )
         return self._comment_payload(
-            updated, titles.get(updated.section_id or "")
+            updated,
+            titles.get(updated.section_id or ""),
+            attachments,
         )
 
     async def delete_comment(
@@ -1199,20 +1258,257 @@ class BidRunService:
             raise BidRunError(404, f"unknown comment: {comment_id}")
         return result[1]
 
-    async def project_board(self, project_id: str) -> ProjectBoardResponse:
+    async def restore_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        actor_id: str | None,
+        actor_name: str,
+        is_admin: bool,
+    ) -> tuple[BidCommentView, int]:
         repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(
+            run_id, comment_id, include_deleted=True
+        )
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        if record.deleted_at is None:
+            raise BidRunError(409, "comment is not deleted")
+        if not is_admin and actor_id != record.author_id:
+            raise BidRunError(403, "only the author can restore a comment")
+        if record.parent_comment_id:
+            parent = await repo.get_comment(
+                run_id,
+                record.parent_comment_id,
+                include_deleted=True,
+            )
+            if parent is None:
+                raise BidRunError(422, "parent comment is missing")
+            if (
+                parent.deleted_at is not None
+                and parent.deletion_batch_id != record.deletion_batch_id
+            ):
+                raise BidRunError(
+                    409, "restore the parent comment first"
+                )
+        result = await repo.restore_comment(run_id, comment_id)
+        if result is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        restored, restored_count = result
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        attachments = await repo.list_comment_attachments(
+            run_id, comment_id=comment_id
+        )
+        return (
+            self._comment_payload(
+                restored,
+                titles.get(restored.section_id or ""),
+                attachments,
+            ),
+            restored_count,
+        )
+
+    async def add_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        filename: str,
+        data: bytes,
+        actor_id: str | None,
+        actor_name: str,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        record = await repo.get_comment(run_id, comment_id)
+        if record is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        raw_name = (filename or "").replace("\\", "/")
+        name = PurePosixPath(raw_name).name.strip()
+        name = "".join(
+            char if char.isprintable() and char not in '<>:"/\\|?*' else "_"
+            for char in name
+        ).strip(" .")
+        if not name or name in {".", ".."}:
+            raise BidRunError(422, "attachment filename is invalid")
+        if len(name) > 200:
+            suffix = PurePosixPath(name).suffix
+            name = f"{PurePosixPath(name).stem[: 200 - len(suffix)]}{suffix}"
+        suffix = PurePosixPath(name).suffix.lower()
+        if suffix not in COMMENT_ATTACHMENT_EXTENSIONS:
+            raise BidRunError(422, "attachment file type is not allowed")
+        if not data:
+            raise BidRunError(422, "attachment is empty")
+        if len(data) > COMMENT_ATTACHMENT_MAX_BYTES:
+            raise BidRunError(413, "attachment is too large")
+        count = await repo.count_comment_attachments(run_id, comment_id)
+        if count >= COMMENT_ATTACHMENT_MAX_PER_COMMENT:
+            raise BidRunError(
+                409,
+                f"at most {COMMENT_ATTACHMENT_MAX_PER_COMMENT} "
+                "attachments per comment",
+            )
+        storage = self.storage
+        if storage is None:
+            raise BidRunError(503, "storage is unavailable")
+        attachment_id = uuid4().hex
+        key = (
+            f"private/comment-attachments/{run.project_id}/"
+            f"{attachment_id}{suffix}"
+        )
+        # Derive the content type from the validated extension instead of
+        # trusting the multipart header, so a mismatched header cannot change
+        # how the stored object is served.
+        resolved_type = content_type_for_name(name)[:128]
+        digest = hashlib.sha256(data).hexdigest()
+        try:
+            storage.put_bytes(
+                key, data, content_type=resolved_type
+            )
+        except StorageError as exc:
+            raise BidRunError(503, "storage is unavailable") from exc
+        try:
+            await repo.add_comment_attachment(
+                attachment_id=attachment_id,
+                project_id=run.project_id,
+                run_id=run_id,
+                comment_id=comment_id,
+                filename=name,
+                content_type=resolved_type,
+                size_bytes=len(data),
+                sha256=digest,
+                storage_key=key,
+                uploaded_by=actor_id,
+                uploaded_by_name=actor_name,
+            )
+        except Exception:
+            try:
+                storage.delete(key)
+            except Exception:  # noqa: BLE001 - best-effort rollback
+                logger.warning(
+                    "could not roll back comment attachment object",
+                    exc_info=True,
+                )
+            raise
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        attachments = await repo.list_comment_attachments(
+            run_id, comment_id=comment_id
+        )
+        return self._comment_payload(
+            record,
+            titles.get(record.section_id or ""),
+            attachments,
+        )
+
+    async def delete_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+        *,
+        actor_id: str | None,
+        is_admin: bool,
+    ) -> BidCommentView:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        comment = await repo.get_comment(run_id, comment_id)
+        if comment is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        attachment = await repo.get_comment_attachment(
+            run_id, comment_id, attachment_id
+        )
+        if attachment is None:
+            raise BidRunError(404, f"unknown attachment: {attachment_id}")
+        if (
+            not is_admin
+            and actor_id != attachment.uploaded_by
+            and actor_id != comment.author_id
+        ):
+            raise BidRunError(
+                403, "only the uploader or comment author can delete"
+            )
+        deleted = await repo.delete_comment_attachment(
+            run_id, comment_id, attachment_id
+        )
+        if deleted is None:
+            raise BidRunError(404, f"unknown attachment: {attachment_id}")
+        storage = self.storage
+        if storage is not None:
+            try:
+                storage.delete(deleted.storage_key)
+            except StorageError:
+                logger.warning(
+                    "could not delete comment attachment object",
+                    exc_info=True,
+                )
+        sections = await repo.get_outline(run_id)
+        titles = {section.section_id: section.title for section in sections}
+        attachments = await repo.list_comment_attachments(
+            run_id, comment_id=comment_id
+        )
+        return self._comment_payload(
+            comment,
+            titles.get(comment.section_id or ""),
+            attachments,
+        )
+
+    async def get_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+    ) -> BidCommentAttachmentRecord:
+        repo = self._repo()
+        run = await repo.get_run(run_id)
+        if run is None:
+            raise BidRunError(404, f"unknown bid run: {run_id}")
+        comment = await repo.get_comment(run_id, comment_id)
+        if comment is None:
+            raise BidRunError(404, f"unknown comment: {comment_id}")
+        attachment = await repo.get_comment_attachment(
+            run_id, comment_id, attachment_id
+        )
+        if attachment is None:
+            raise BidRunError(404, f"unknown attachment: {attachment_id}")
+        return attachment
+
+    async def project_board(
+        self, project_id: str, *, days: int = 30
+    ) -> ProjectBoardResponse:
+        repo = self._repo()
+        window_days = max(1, min(int(days), 365))
         now = datetime.now(timezone.utc)
         due_soon_before = now + timedelta(hours=24)
+        since = now - timedelta(days=window_days)
         assignee_stats = await repo.project_comment_assignee_stats(
             project_id,
             now=now,
             due_soon_before=due_soon_before,
+            since=since,
         )
         section_stats = await repo.project_comment_section_stats(
-            project_id, now=now
+            project_id, now=now, since=since
         )
-        recent = await repo.recent_project_comments(project_id)
-        runs = await repo.list_runs(project_id=project_id, limit=1000)
+        recent = await repo.recent_project_comments(
+            project_id, since=since
+        )
+        runs = [
+            run
+            for run in await repo.list_runs(
+                project_id=project_id, limit=1000
+            )
+            if run.created_at >= since
+        ]
 
         open_count = sum(stat.open_count for stat in assignee_stats)
         resolved_count = sum(stat.resolved_count for stat in assignee_stats)
@@ -1236,6 +1532,7 @@ class BidRunService:
         return ProjectBoardResponse(
             project_id=project_id,
             generated_at=now,
+            window_days=window_days,
             comments=ProjectBoardCommentTotals(
                 open=open_count,
                 resolved=resolved_count,

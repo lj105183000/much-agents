@@ -354,10 +354,29 @@ class BidCommentUpdateRequest(BaseModel):
         return stripped
 
 
+class BidCommentAttachmentView(BaseModel):
+    attachment_id: str
+    filename: str
+    content_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    sha256: str = ""
+    uploaded_by: str | None = None
+    uploaded_by_name: str | None = None
+    created_at: datetime
+    download_url: str
+
+
+class BidCommentAttachmentListResponse(BaseModel):
+    run_id: str
+    comment_id: str
+    attachments: list[BidCommentAttachmentView] = Field(default_factory=list)
+
+
 class BidCommentView(BaseModel):
     comment_id: str
     run_id: str
     parent_comment_id: str | None = None
+    depth: int = 0
     due_at: datetime | None = None
     section_id: str | None = None
     section_title: str | None = None
@@ -371,6 +390,10 @@ class BidCommentView(BaseModel):
     resolved_by: str | None = None
     resolved_by_name: str | None = None
     resolved_at: datetime | None = None
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
+    deleted_by_name: str | None = None
+    attachments: list[BidCommentAttachmentView] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -431,6 +454,7 @@ class ProjectBoardRecentComment(BaseModel):
 class ProjectBoardResponse(BaseModel):
     project_id: str
     generated_at: datetime
+    window_days: int = 30
     comments: ProjectBoardCommentTotals = Field(
         default_factory=ProjectBoardCommentTotals
     )

@@ -1070,11 +1070,16 @@ export const api = {
 
   listBidComments(
     runId: string,
-    options: { status?: 'open' | 'resolved'; sectionId?: string } = {},
+    options: {
+      status?: 'open' | 'resolved'
+      sectionId?: string
+      includeDeleted?: boolean
+    } = {},
   ): Promise<BidCommentListResponse> {
     const query = new URLSearchParams()
     if (options.status) query.set('status', options.status)
     if (options.sectionId) query.set('section_id', options.sectionId)
+    if (options.includeDeleted) query.set('include_deleted', 'true')
     const suffix = query.toString() ? `?${query.toString()}` : ''
     return request<BidCommentListResponse>(
       `/api/bid-runs/${encodeURIComponent(runId)}/comments${suffix}`,
@@ -1117,8 +1122,45 @@ export const api = {
     )
   },
 
-  getProjectBoard(): Promise<ProjectBoard> {
-    return request<ProjectBoard>('/api/project-board')
+  restoreBidComment(
+    runId: string,
+    commentId: string,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}/restore`,
+      { method: 'POST' },
+    )
+  },
+
+  uploadBidCommentAttachment(
+    runId: string,
+    commentId: string,
+    file: File,
+  ): Promise<BidCommentView> {
+    const body = new FormData()
+    body.append('file', file)
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}/attachments`,
+      { method: 'POST', body },
+      UPLOAD_TIMEOUT_MS,
+    )
+  },
+
+  deleteBidCommentAttachment(
+    runId: string,
+    commentId: string,
+    attachmentId: string,
+  ): Promise<BidCommentView> {
+    return request<BidCommentView>(
+      `/api/bid-runs/${encodeURIComponent(runId)}/comments/${encodeURIComponent(commentId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  getProjectBoard(days = 30): Promise<ProjectBoard> {
+    return request<ProjectBoard>(
+      `/api/project-board?days=${encodeURIComponent(String(days))}`,
+    )
   },
 
   approveBidRun(

@@ -709,10 +709,14 @@ class BidCommentRow(Base):
         nullable=False,
     )
     parent_comment_id: Mapped[str | None] = mapped_column(String(36))
+    depth: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    deletion_batch_id: Mapped[str | None] = mapped_column(String(36))
     deleted_by: Mapped[str | None] = mapped_column(String(36))
     deleted_by_name: Mapped[str | None] = mapped_column(String(128))
     section_id: Mapped[str | None] = mapped_column(String(64))
@@ -741,6 +745,40 @@ class BidCommentRow(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class BidCommentAttachmentRow(Base):
+    __tablename__ = "bid_comment_attachments"
+    __table_args__ = (
+        Index("ix_bid_comment_attachments_comment", "comment_id"),
+        Index("ix_bid_comment_attachments_run", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    comment_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("bid_comments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=""
+    )
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    uploaded_by: Mapped[str | None] = mapped_column(String(36))
+    uploaded_by_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
 
 

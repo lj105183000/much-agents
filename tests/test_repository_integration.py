@@ -363,6 +363,8 @@ async def _exercise_comment_due_and_emails() -> None:
     due_comment_id = uuid4().hex
     later_comment_id = uuid4().hex
     reply_comment_id = uuid4().hex
+    grandchild_comment_id = uuid4().hex
+    attachment_id = uuid4().hex
     repository = BidRunRepository(factory)
     now = datetime.now(timezone.utc)
     try:
@@ -450,6 +452,34 @@ async def _exercise_comment_due_and_emails() -> None:
             assignee_id=None,
             assignee_name=None,
             parent_comment_id=due_comment_id,
+            depth=1,
+        )
+        await repository.add_comment(
+            comment_id=grandchild_comment_id,
+            project_id=DEFAULT_PROJECT_ID,
+            run_id=run_id,
+            section_id="s1",
+            author_id=user_id,
+            author_name="Integration User",
+            body="二层回复",
+            mentions=[],
+            assignee_id=None,
+            assignee_name=None,
+            parent_comment_id=reply_comment_id,
+            depth=2,
+        )
+        await repository.add_comment_attachment(
+            attachment_id=attachment_id,
+            project_id=DEFAULT_PROJECT_ID,
+            run_id=run_id,
+            comment_id=due_comment_id,
+            filename="evidence.pdf",
+            content_type="application/pdf",
+            size_bytes=4,
+            sha256="a" * 64,
+            storage_key=f"private/comment-attachments/{DEFAULT_PROJECT_ID}/{attachment_id}.pdf",
+            uploaded_by=user_id,
+            uploaded_by_name="Integration User",
         )
         due = await repository.due_comments(
             before=now + timedelta(hours=24)
@@ -467,7 +497,7 @@ async def _exercise_comment_due_and_emails() -> None:
         by_assignee = {stat.assignee_id: stat for stat in stats}
         assert by_assignee[user_id].open_count == 1
         assert by_assignee[user_id].due_soon_count == 1
-        assert by_assignee[None].open_count == 2
+        assert by_assignee[None].open_count == 3
 
         sections = await repository.project_comment_section_stats(
             DEFAULT_PROJECT_ID, now=now
@@ -476,7 +506,7 @@ async def _exercise_comment_due_and_emails() -> None:
             item for item in sections if item.section_id == "s1"
         )
         assert section.section_title == "施工组织设计"
-        assert section.open_count == 3
+        assert section.open_count == 4
 
         recent = await repository.recent_project_comments(
             DEFAULT_PROJECT_ID, limit=10
@@ -485,6 +515,28 @@ async def _exercise_comment_due_and_emails() -> None:
             item.comment_id for item in recent
         }
 
+        future = now + timedelta(hours=1)
+        assert (
+            await repository.project_comment_assignee_stats(
+                DEFAULT_PROJECT_ID,
+                now=now,
+                due_soon_before=future,
+                since=future,
+            )
+            == []
+        )
+        assert (
+            await repository.recent_project_comments(
+                DEFAULT_PROJECT_ID, since=future, limit=10
+            )
+            == []
+        )
+
+        attachments = await repository.list_comment_attachments(
+            run_id, comment_id=due_comment_id
+        )
+        assert [item.filename for item in attachments] == ["evidence.pdf"]
+
         deleted = await repository.soft_delete_comment(
             run_id,
             due_comment_id,
@@ -492,7 +544,7 @@ async def _exercise_comment_due_and_emails() -> None:
             deleted_by_name="Integration User",
         )
         assert deleted is not None
-        assert deleted[1] == 1
+        assert deleted[1] == 2
         assert await repository.get_comment(run_id, due_comment_id) is None
         assert await repository.due_comments(
             before=now + timedelta(hours=24)
@@ -507,6 +559,27 @@ async def _exercise_comment_due_and_emails() -> None:
         }
         assert user_id not in remaining_by_assignee
         assert remaining_by_assignee[None].open_count == 1
+
+        restored = await repository.restore_comment(
+            run_id, due_comment_id
+        )
+        assert restored is not None
+        assert restored[0].deleted_at is None
+        assert restored[1] == 2
+        assert await repository.get_comment(run_id, reply_comment_id)
+        assert await repository.get_comment(
+            run_id, grandchild_comment_id
+        )
+        removed = await repository.delete_comment_attachment(
+            run_id, due_comment_id, attachment_id
+        )
+        assert removed is not None
+        assert (
+            await repository.list_comment_attachments(
+                run_id, comment_id=due_comment_id
+            )
+            == []
+        )
     finally:
         async with factory() as session:
             await session.execute(

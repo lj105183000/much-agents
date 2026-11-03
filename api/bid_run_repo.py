@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import and_, case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -20,6 +21,7 @@ from src.bidding.cost_metrics import (
 
 from .database import (
     BidApprovalRow,
+    BidCommentAttachmentRow,
     BidCommentRow,
     BidOutlineSectionRow,
     BidQualitySnapshotRow,
@@ -313,7 +315,9 @@ class BidCommentRecord:
     project_id: str
     run_id: str
     parent_comment_id: str | None
+    depth: int
     due_at: datetime | None
+    deletion_batch_id: str | None
     section_id: str | None
     author_id: str | None
     author_name: str
@@ -330,6 +334,22 @@ class BidCommentRecord:
     deleted_by_name: str | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class BidCommentAttachmentRecord:
+    attachment_id: str
+    project_id: str
+    run_id: str
+    comment_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    storage_key: str
+    uploaded_by: str | None
+    uploaded_by_name: str | None
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +505,9 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         project_id=row.project_id,
         run_id=row.run_id,
         parent_comment_id=row.parent_comment_id,
+        depth=int(row.depth or 0),
         due_at=row.due_at,
+        deletion_batch_id=row.deletion_batch_id,
         section_id=row.section_id,
         author_id=row.author_id,
         author_name=row.author_name,
@@ -502,6 +524,25 @@ def _comment_record(row: BidCommentRow) -> BidCommentRecord:
         deleted_by_name=row.deleted_by_name,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _comment_attachment_record(
+    row: BidCommentAttachmentRow,
+) -> BidCommentAttachmentRecord:
+    return BidCommentAttachmentRecord(
+        attachment_id=row.id,
+        project_id=row.project_id,
+        run_id=row.run_id,
+        comment_id=row.comment_id,
+        filename=row.filename,
+        content_type=row.content_type or "application/octet-stream",
+        size_bytes=int(row.size_bytes or 0),
+        sha256=row.sha256,
+        storage_key=row.storage_key,
+        uploaded_by=row.uploaded_by,
+        uploaded_by_name=row.uploaded_by_name,
+        created_at=row.created_at,
     )
 
 
@@ -1857,6 +1898,7 @@ class BidRunRepository:
         assignee_id: str | None,
         assignee_name: str | None,
         parent_comment_id: str | None = None,
+        depth: int = 0,
         due_at: datetime | None = None,
     ) -> BidCommentRecord:
         now = _now()
@@ -1865,6 +1907,7 @@ class BidRunRepository:
             project_id=project_id,
             run_id=run_id,
             parent_comment_id=parent_comment_id,
+            depth=max(0, int(depth)),
             due_at=due_at,
             section_id=section_id,
             author_id=author_id,
@@ -1885,15 +1928,17 @@ class BidRunRepository:
         return record
 
     async def get_comment(
-        self, run_id: str, comment_id: str
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        include_deleted: bool = False,
     ) -> BidCommentRecord | None:
         async with self._session_factory() as session:
             row = await session.get(BidCommentRow, comment_id)
-        if (
-            row is None
-            or row.run_id != run_id
-            or row.deleted_at is not None
-        ):
+        if row is None or row.run_id != run_id:
+            return None
+        if row.deleted_at is not None and not include_deleted:
             return None
         return _comment_record(row)
 
@@ -1904,16 +1949,16 @@ class BidRunRepository:
         status: str | None = None,
         section_id: str | None = None,
         limit: int = 200,
+        include_deleted: bool = False,
     ) -> list[BidCommentRecord]:
         statement = (
             select(BidCommentRow)
-            .where(
-                BidCommentRow.run_id == run_id,
-                BidCommentRow.deleted_at.is_(None),
-            )
+            .where(BidCommentRow.run_id == run_id)
             .order_by(BidCommentRow.created_at.desc())
             .limit(max(1, min(int(limit), 500)))
         )
+        if not include_deleted:
+            statement = statement.where(BidCommentRow.deleted_at.is_(None))
         if status:
             statement = statement.where(BidCommentRow.status == status)
         if section_id:
@@ -1990,6 +2035,7 @@ class BidRunRepository:
         """Soft-delete a comment and its direct replies in one transaction."""
 
         now = _now()
+        batch_id = uuid4().hex
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.get(
@@ -2001,28 +2047,200 @@ class BidRunRepository:
                     or row.deleted_at is not None
                 ):
                     return None
+                descendant_ids: list[str] = []
+                frontier = [comment_id]
+                while frontier and len(descendant_ids) < 1000:
+                    children = await session.execute(
+                        select(BidCommentRow.id).where(
+                            BidCommentRow.run_id == run_id,
+                            BidCommentRow.parent_comment_id.in_(frontier),
+                            BidCommentRow.deleted_at.is_(None),
+                        )
+                    )
+                    frontier = [str(item) for item in children.scalars().all()]
+                    descendant_ids.extend(frontier)
                 row.deleted_at = now
                 row.deleted_by = deleted_by
                 row.deleted_by_name = deleted_by_name
+                row.deletion_batch_id = batch_id
                 row.updated_at = now
-                replies = await session.execute(
-                    update(BidCommentRow)
-                    .where(
-                        BidCommentRow.run_id == run_id,
-                        BidCommentRow.parent_comment_id == comment_id,
-                        BidCommentRow.deleted_at.is_(None),
+                if descendant_ids:
+                    await session.execute(
+                        update(BidCommentRow)
+                        .where(BidCommentRow.id.in_(descendant_ids))
+                        .values(
+                            deleted_at=now,
+                            deleted_by=deleted_by,
+                            deleted_by_name=deleted_by_name,
+                            deletion_batch_id=batch_id,
+                            updated_at=now,
+                        )
                     )
-                    .values(
-                        deleted_at=now,
-                        deleted_by=deleted_by,
-                        deleted_by_name=deleted_by_name,
-                        updated_at=now,
-                    )
-                )
-                reply_count = int(replies.rowcount or 0)
                 await session.flush()
                 record = _comment_record(row)
-        return record, reply_count
+        return record, len(descendant_ids)
+
+    async def restore_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+    ) -> tuple[BidCommentRecord, int] | None:
+        """Restore a soft-deleted comment and its deletion batch."""
+
+        now = _now()
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(
+                    BidCommentRow, comment_id, with_for_update=True
+                )
+                if (
+                    row is None
+                    or row.run_id != run_id
+                    or row.deleted_at is None
+                ):
+                    return None
+                batch_id = row.deletion_batch_id
+                statement = select(BidCommentRow).where(
+                    BidCommentRow.run_id == run_id,
+                    BidCommentRow.deleted_at.is_not(None),
+                )
+                if batch_id:
+                    statement = statement.where(
+                        BidCommentRow.deletion_batch_id == batch_id
+                    )
+                else:
+                    statement = statement.where(
+                        BidCommentRow.id == comment_id
+                    )
+                rows = (
+                    await session.execute(
+                        statement.with_for_update()
+                    )
+                ).scalars().all()
+                ids = [item.id for item in rows]
+                if ids:
+                    await session.execute(
+                        update(BidCommentRow)
+                        .where(BidCommentRow.id.in_(ids))
+                        .values(
+                            deleted_at=None,
+                            deleted_by=None,
+                            deleted_by_name=None,
+                            deletion_batch_id=None,
+                            updated_at=now,
+                        )
+                    )
+                await session.flush()
+                await session.refresh(row)
+                record = _comment_record(row)
+        return record, max(0, len(ids) - 1)
+
+    async def add_comment_attachment(
+        self,
+        *,
+        attachment_id: str,
+        project_id: str,
+        run_id: str,
+        comment_id: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        sha256: str,
+        storage_key: str,
+        uploaded_by: str | None,
+        uploaded_by_name: str | None,
+    ) -> BidCommentAttachmentRecord:
+        row = BidCommentAttachmentRow(
+            id=attachment_id,
+            project_id=project_id,
+            run_id=run_id,
+            comment_id=comment_id,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            storage_key=storage_key,
+            uploaded_by=uploaded_by,
+            uploaded_by_name=uploaded_by_name,
+            created_at=_now(),
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add(row)
+                await session.flush()
+                record = _comment_attachment_record(row)
+        return record
+
+    async def list_comment_attachments(
+        self,
+        run_id: str,
+        *,
+        comment_id: str | None = None,
+    ) -> list[BidCommentAttachmentRecord]:
+        statement = (
+            select(BidCommentAttachmentRow)
+            .where(BidCommentAttachmentRow.run_id == run_id)
+            .order_by(BidCommentAttachmentRow.created_at.asc())
+        )
+        if comment_id is not None:
+            statement = statement.where(
+                BidCommentAttachmentRow.comment_id == comment_id
+            )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+        return [_comment_attachment_record(row) for row in rows]
+
+    async def get_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+    ) -> BidCommentAttachmentRecord | None:
+        statement = select(BidCommentAttachmentRow).where(
+            BidCommentAttachmentRow.id == attachment_id,
+            BidCommentAttachmentRow.run_id == run_id,
+            BidCommentAttachmentRow.comment_id == comment_id,
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+        return _comment_attachment_record(row) if row is not None else None
+
+    async def count_comment_attachments(
+        self, run_id: str, comment_id: str
+    ) -> int:
+        statement = select(func.count(BidCommentAttachmentRow.id)).where(
+            BidCommentAttachmentRow.run_id == run_id,
+            BidCommentAttachmentRow.comment_id == comment_id,
+        )
+        async with self._session_factory() as session:
+            return int(
+                (await session.execute(statement)).scalar_one() or 0
+            )
+
+    async def delete_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+    ) -> BidCommentAttachmentRecord | None:
+        statement = (
+            delete(BidCommentAttachmentRow)
+            .where(
+                BidCommentAttachmentRow.id == attachment_id,
+                BidCommentAttachmentRow.run_id == run_id,
+                BidCommentAttachmentRow.comment_id == comment_id,
+            )
+            .returning(BidCommentAttachmentRow)
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (await session.execute(statement)).scalar_one_or_none()
+                record = (
+                    _comment_attachment_record(row)
+                    if row is not None
+                    else None
+                )
+        return record
 
     async def project_comment_assignee_stats(
         self,
@@ -2030,6 +2248,7 @@ class BidRunRepository:
         *,
         now: datetime,
         due_soon_before: datetime,
+        since: datetime | None = None,
     ) -> list[ProjectCommentAssigneeStat]:
         open_condition = BidCommentRow.status == "open"
         overdue_condition = and_(
@@ -2043,6 +2262,12 @@ class BidRunRepository:
             BidCommentRow.due_at > now,
             BidCommentRow.due_at <= due_soon_before,
         )
+        conditions = [
+            BidCommentRow.project_id == project_id,
+            BidCommentRow.deleted_at.is_(None),
+        ]
+        if since is not None:
+            conditions.append(BidCommentRow.created_at >= since)
         open_count = func.count().filter(open_condition)
         statement = (
             select(
@@ -2059,10 +2284,7 @@ class BidRunRepository:
                 .filter(due_soon_condition)
                 .label("due_soon_count"),
             )
-            .where(
-                BidCommentRow.project_id == project_id,
-                BidCommentRow.deleted_at.is_(None),
-            )
+            .where(*conditions)
             .group_by(
                 BidCommentRow.assignee_id, BidCommentRow.assignee_name
             )
@@ -2094,12 +2316,20 @@ class BidRunRepository:
         project_id: str,
         *,
         now: datetime,
+        since: datetime | None = None,
         limit: int = 20,
     ) -> list[ProjectCommentSectionStat]:
         overdue_condition = and_(
             BidCommentRow.due_at.is_not(None),
             BidCommentRow.due_at <= now,
         )
+        conditions = [
+            BidCommentRow.project_id == project_id,
+            BidCommentRow.status == "open",
+            BidCommentRow.deleted_at.is_(None),
+        ]
+        if since is not None:
+            conditions.append(BidCommentRow.created_at >= since)
         statement = (
             select(
                 BidCommentRow.section_id,
@@ -2117,11 +2347,7 @@ class BidRunRepository:
                     == BidCommentRow.section_id,
                 ),
             )
-            .where(
-                BidCommentRow.project_id == project_id,
-                BidCommentRow.status == "open",
-                BidCommentRow.deleted_at.is_(None),
-            )
+            .where(*conditions)
             .group_by(BidCommentRow.section_id)
             .order_by(func.count().desc())
             .limit(max(1, min(int(limit), 100)))
@@ -2142,8 +2368,16 @@ class BidRunRepository:
         self,
         project_id: str,
         *,
+        since: datetime | None = None,
         limit: int = 20,
     ) -> list[ProjectBoardComment]:
+        conditions = [
+            BidCommentRow.project_id == project_id,
+            BidCommentRow.status == "open",
+            BidCommentRow.deleted_at.is_(None),
+        ]
+        if since is not None:
+            conditions.append(BidCommentRow.created_at >= since)
         statement = (
             select(
                 BidCommentRow,
@@ -2160,11 +2394,7 @@ class BidRunRepository:
                     == BidCommentRow.section_id,
                 ),
             )
-            .where(
-                BidCommentRow.project_id == project_id,
-                BidCommentRow.status == "open",
-                BidCommentRow.deleted_at.is_(None),
-            )
+            .where(*conditions)
             .order_by(
                 BidCommentRow.due_at.asc().nulls_last(),
                 BidCommentRow.created_at.desc(),

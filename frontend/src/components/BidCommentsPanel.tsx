@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, ApiError } from '../api/client'
+import { api, ApiError, downloadArtifact } from '../api/client'
 import type {
+  BidCommentAttachment,
   BidCommentView,
   BidOutlineResponse,
   ProjectMemberBrief,
@@ -8,7 +9,7 @@ import type {
 import { useAuth } from '../auth/useAuth'
 import { usePermissions } from '../hooks/usePermissions'
 import { cn } from '../lib/cn'
-import { formatDate } from '../lib/format'
+import { formatBytes, formatDate } from '../lib/format'
 import {
   Badge,
   Button,
@@ -26,12 +27,13 @@ interface BidCommentsPanelProps {
   outline: BidOutlineResponse | null
 }
 
-type CommentFilter = 'open' | 'resolved' | 'all'
+type CommentFilter = 'open' | 'resolved' | 'all' | 'deleted'
 
 const FILTERS: Array<{ key: CommentFilter; label: string }> = [
   { key: 'open', label: '待处理' },
   { key: 'resolved', label: '已解决' },
   { key: 'all', label: '全部' },
+  { key: 'deleted', label: '已删除' },
 ]
 
 function errorMessage(caught: unknown, fallback: string): string {
@@ -47,6 +49,9 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [attachmentBusyId, setAttachmentBusyId] = useState<string | null>(
+    null,
+  )
   const [filter, setFilter] = useState<CommentFilter>('all')
 
   const [body, setBody] = useState('')
@@ -81,7 +86,10 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
     setMemberError(null)
     try {
       const [commentData, memberData] = await Promise.all([
-        api.listBidComments(runId),
+        api.listBidComments(
+          runId,
+          canReview ? { includeDeleted: true } : {},
+        ),
         api.listProjectMembers().catch((caught: unknown) => {
           setMemberError(errorMessage(caught, '项目成员列表不可用'))
           return { members: [] as ProjectMemberBrief[] }
@@ -99,25 +107,80 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   useEffect(() => {
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId])
+  }, [runId, canReview])
 
   const counts = useMemo(() => {
     let open = 0
     let resolved = 0
+    let deleted = 0
     for (const comment of comments) {
-      if (comment.status === 'resolved') resolved += 1
-      else open += 1
+      if (comment.deleted_at) {
+        deleted += 1
+      } else if (comment.status === 'resolved') {
+        resolved += 1
+      } else {
+        open += 1
+      }
     }
-    return { open, resolved, all: comments.length }
+    return {
+      open,
+      resolved,
+      all: open + resolved,
+      deleted,
+    }
   }, [comments])
 
-  const visible = useMemo(
-    () =>
-      filter === 'all'
-        ? comments
-        : comments.filter((comment) => comment.status === filter),
-    [comments, filter],
-  )
+  const visible = useMemo(() => {
+    if (filter === 'deleted') {
+      return comments.filter((comment) => comment.deleted_at)
+    }
+    const active = comments.filter((comment) => !comment.deleted_at)
+    if (filter === 'all') return active
+    return active.filter((comment) => comment.status === filter)
+  }, [comments, filter])
+
+  const orderedVisible = useMemo(() => {
+    const visibleIds = new Set(
+      visible.map((comment) => comment.comment_id),
+    )
+    const children = new Map<string, BidCommentView[]>()
+    const roots: BidCommentView[] = []
+    for (const comment of visible) {
+      const parentId =
+        comment.parent_comment_id &&
+        visibleIds.has(comment.parent_comment_id)
+          ? comment.parent_comment_id
+          : null
+      if (parentId) {
+        const bucket = children.get(parentId) ?? []
+        bucket.push(comment)
+        children.set(parentId, bucket)
+      } else {
+        roots.push(comment)
+      }
+    }
+    roots.sort(
+      (left, right) =>
+        new Date(right.created_at).getTime() -
+        new Date(left.created_at).getTime(),
+    )
+    for (const bucket of children.values()) {
+      bucket.sort(
+        (left, right) =>
+          new Date(left.created_at).getTime() -
+          new Date(right.created_at).getTime(),
+      )
+    }
+    const ordered: BidCommentView[] = []
+    const visit = (comment: BidCommentView) => {
+      ordered.push(comment)
+      for (const child of children.get(comment.comment_id) ?? []) {
+        visit(child)
+      }
+    }
+    for (const root of roots) visit(root)
+    return ordered
+  }, [visible])
 
   const create = async () => {
     const trimmed = body.trim()
@@ -193,11 +256,11 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
   const remove = async (comment: BidCommentView) => {
     const replyNote =
       comments.some((item) => item.parent_comment_id === comment.comment_id)
-        ? '及其回复'
+        ? '及其所有回复'
         : ''
     if (
       !window.confirm(
-        `确定删除这条评论${replyNote}吗？删除后不可恢复。`,
+        `确定删除这条评论${replyNote}吗？删除后可在「已删除」中恢复。`,
       )
     ) {
       return
@@ -214,6 +277,85 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
     }
   }
 
+  const restore = async (comment: BidCommentView) => {
+    setBusyId(comment.comment_id)
+    setError(null)
+    try {
+      await api.restoreBidComment(runId, comment.comment_id)
+      await load()
+    } catch (caught) {
+      setError(errorMessage(caught, '评论恢复失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const replaceComment = (updated: BidCommentView) => {
+    setComments((current) =>
+      current.map((item) =>
+        item.comment_id === updated.comment_id ? updated : item,
+      ),
+    )
+  }
+
+  const uploadAttachment = async (
+    comment: BidCommentView,
+    file: File,
+  ) => {
+    setAttachmentBusyId(comment.comment_id)
+    setError(null)
+    try {
+      replaceComment(
+        await api.uploadBidCommentAttachment(
+          runId,
+          comment.comment_id,
+          file,
+        ),
+      )
+    } catch (caught) {
+      setError(errorMessage(caught, '附件上传失败'))
+    } finally {
+      setAttachmentBusyId(null)
+    }
+  }
+
+  const deleteAttachment = async (
+    comment: BidCommentView,
+    attachment: BidCommentAttachment,
+  ) => {
+    if (!window.confirm(`确定删除附件「${attachment.filename}」吗？`)) {
+      return
+    }
+    setAttachmentBusyId(comment.comment_id)
+    setError(null)
+    try {
+      replaceComment(
+        await api.deleteBidCommentAttachment(
+          runId,
+          comment.comment_id,
+          attachment.attachment_id,
+        ),
+      )
+    } catch (caught) {
+      setError(errorMessage(caught, '附件删除失败'))
+    } finally {
+      setAttachmentBusyId(null)
+    }
+  }
+
+  const downloadAttachment = async (
+    attachment: BidCommentAttachment,
+  ) => {
+    try {
+      await downloadArtifact(
+        attachment.download_url,
+        attachment.filename,
+      )
+    } catch (caught) {
+      setError(errorMessage(caught, '附件下载失败'))
+    }
+  }
+
   const toggleMention = (userId: string) => {
     setMentions((current) =>
       current.includes(userId)
@@ -226,7 +368,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
     <Card className="p-4 md:p-5">
       <SectionHeader
         title="评审评论与指派"
-        description="围绕整份标书或单个章节留意见、@项目成员并指派处理人；解决后仍保留记录。"
+        description="围绕整份标书或单个章节留意见、@项目成员并指派处理人；支持多级回复、附件与软删除恢复。"
         action={
           <Button
             variant="ghost"
@@ -240,7 +382,9 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
       />
 
       <div className="mt-4 flex flex-wrap gap-1.5">
-        {FILTERS.map((item) => (
+        {FILTERS.filter(
+          (item) => canReview || item.key !== 'deleted',
+        ).map((item) => (
           <button
             key={item.key}
             type="button"
@@ -401,7 +545,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
             className="py-8"
           />
         ) : (
-          visible.map((comment) => {
+          orderedVisible.map((comment) => {
             const authorCanEdit = canEditBody(comment)
             const assigned = comment.assignee_id
               ? memberById.get(comment.assignee_id)
@@ -410,13 +554,31 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
               <article
                 key={comment.comment_id}
                 data-testid="comment-card"
-                className="rounded-2xl border border-slate-800 bg-slate-950/30 p-3"
+                className={cn(
+                  'rounded-2xl border bg-slate-950/30 p-3',
+                  comment.deleted_at
+                    ? 'border-dashed border-slate-800 opacity-80'
+                    : 'border-slate-800',
+                )}
+                style={{
+                  marginLeft: `${Math.min(comment.depth, 6) * 14}px`,
+                }}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
-                    tone={comment.status === 'resolved' ? 'green' : 'amber'}
+                    tone={
+                      comment.deleted_at
+                        ? 'neutral'
+                        : comment.status === 'resolved'
+                          ? 'green'
+                          : 'amber'
+                    }
                   >
-                    {comment.status === 'resolved' ? '已解决' : '待处理'}
+                    {comment.deleted_at
+                      ? '已删除'
+                      : comment.status === 'resolved'
+                        ? '已解决'
+                        : '待处理'}
                   </Badge>
                   {comment.section_title ? (
                     <span className="truncate text-[11px] text-cyan-200/80">
@@ -489,6 +651,91 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                   </p>
                 )}
 
+                {!comment.deleted_at && comment.attachments.length ? (
+                  <div className="mt-2 space-y-1.5">
+                    {comment.attachments.map((attachment) => (
+                      <div
+                        key={attachment.attachment_id}
+                        className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 px-2.5 py-1.5 text-[11px]"
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate text-left text-cyan-200 hover:text-cyan-100"
+                          onClick={() => void downloadAttachment(attachment)}
+                          title="下载附件"
+                        >
+                          {attachment.filename}
+                          <span className="ml-2 text-slate-500">
+                            {formatBytes(attachment.size_bytes)}
+                          </span>
+                        </button>
+                        {canReview ? (
+                          <button
+                            type="button"
+                            className="shrink-0 text-slate-500 hover:text-red-300"
+                            disabled={
+                              attachmentBusyId === comment.comment_id
+                            }
+                            onClick={() =>
+                              void deleteAttachment(comment, attachment)
+                            }
+                          >
+                            删除
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {canReview && !comment.deleted_at ? (
+                  <label
+                    className="mt-2 inline-flex cursor-pointer items-center rounded-lg px-2 py-1 text-[11px] text-slate-400 transition hover:bg-slate-800/80 hover:text-slate-100"
+                    title="单个附件最大 10 MB，每条评论最多 10 个"
+                  >
+                    {attachmentBusyId === comment.comment_id
+                      ? '上传中…'
+                      : '+ 添加附件'}
+                    <input
+                      type="file"
+                      data-testid="comment-attachment-input"
+                      className="hidden"
+                      accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.txt,.md"
+                      disabled={
+                        attachmentBusyId === comment.comment_id
+                      }
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        event.target.value = ''
+                        if (file) {
+                          void uploadAttachment(comment, file)
+                        }
+                      }}
+                    />
+                  </label>
+                ) : null}
+
+                {comment.deleted_at ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                    <span>
+                      已由{' '}
+                      {comment.deleted_by_name ?? '未知用户'} 删除于{' '}
+                      {formatDate(comment.deleted_at)}
+                    </span>
+                    {authorCanEdit ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid="comment-restore"
+                        loading={busyId === comment.comment_id}
+                        onClick={() => void restore(comment)}
+                      >
+                        恢复评论
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {comment.mentions.map((mention) => (
                     <span
@@ -515,7 +762,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                   ) : null}
                 </div>
 
-                {canReview ? (
+                {canReview && !comment.deleted_at ? (
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <Button
                       variant="ghost"
@@ -564,6 +811,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                     <Button
                       variant="ghost"
                       size="sm"
+                      data-testid="comment-reply"
                       onClick={() => {
                         setReplyTo(comment)
                         setSectionId(comment.section_id ?? '')
@@ -587,6 +835,7 @@ export function BidCommentsPanel({ runId, outline }: BidCommentsPanelProps) {
                       <Button
                         variant="ghost"
                         size="sm"
+                        data-testid="comment-delete"
                         className="text-red-300 hover:text-red-200"
                         loading={busyId === comment.comment_id}
                         onClick={() => void remove(comment)}

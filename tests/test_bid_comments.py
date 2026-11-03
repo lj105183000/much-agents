@@ -15,6 +15,8 @@ from api.jobs import JobStore
 from api.projects import DEFAULT_PROJECT_ID, ProjectService
 from api.runner import InlineRunner
 from api.sse import bid_run_event_stream
+from src.storage.layout import StorageLayout
+from src.storage.local import LocalStorage
 from tests.fakes import (
     FakeBidRunRepository,
     FakeCompanyService,
@@ -39,7 +41,7 @@ def sample_profile() -> dict:
     }
 
 
-def make_app(tmp_path: Path):
+def make_app(tmp_path: Path, *, storage=None):
     write_parsed_fixture(tmp_path)
     repo = FakeBidRunRepository()
     project_repo = FakeProjectRepository(bid_runs=repo)
@@ -64,6 +66,7 @@ def make_app(tmp_path: Path):
         company_service=company,  # type: ignore[arg-type]
         store=store,
         dispatch=dispatcher.dispatch,
+        storage=storage,
     )
     app = create_app(
         api_settings=make_api_settings(tmp_path, TASK_BACKEND="local"),
@@ -370,7 +373,24 @@ def test_comment_replies_and_due_dates(tmp_path: Path) -> None:
                 "parent_comment_id": reply_json["comment_id"],
             },
         )
-        assert nested.status_code == 422
+        assert nested.status_code == 201, nested.text
+        assert nested.json()["depth"] == 2
+        assert nested.json()["parent_comment_id"] == reply_json["comment_id"]
+
+        deepest = nested.json()["comment_id"]
+        for expected_depth in (3, 4, 5):
+            layer = client.post(
+                f"/api/bid-runs/{run_id}/comments",
+                json={"body": f"第 {expected_depth} 层", "parent_comment_id": deepest},
+            )
+            assert layer.status_code == 201, layer.text
+            assert layer.json()["depth"] == expected_depth
+            deepest = layer.json()["comment_id"]
+        too_deep = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "第 6 层", "parent_comment_id": deepest},
+        )
+        assert too_deep.status_code == 422
 
         missing_parent = client.post(
             f"/api/bid-runs/{run_id}/comments",
@@ -509,6 +529,16 @@ def test_project_board_aggregates_comments_and_runs(tmp_path: Path) -> None:
         board = client.get("/api/project-board")
         assert board.status_code == 200, board.text
         payload = board.json()
+        assert payload["window_days"] == 30
+        week = client.get("/api/project-board", params={"days": 7})
+        assert week.status_code == 200, week.text
+        assert week.json()["window_days"] == 7
+        assert (
+            client.get(
+                "/api/project-board", params={"days": 0}
+            ).status_code
+            == 422
+        )
         assert payload["comments"] == {
             "open": 3,
             "resolved": 1,
@@ -549,3 +579,189 @@ def test_project_board_aggregates_comments_and_runs(tmp_path: Path) -> None:
         assert refreshed["comments"]["open"] == 1
         assert refreshed["comments"]["unassigned"] == 1
         assert refreshed["comments"]["overdue"] == 0
+
+
+def test_comment_restore_scope_and_parent_protection(tmp_path: Path) -> None:
+    app, repo, _store, _service = make_app(tmp_path)
+    with TestClient(app) as client:
+        run_id, section_id = create_run(client)
+
+        def create(body: str, parent: str | None = None):
+            response = client.post(
+                f"/api/bid-runs/{run_id}/comments",
+                json={"body": body, "parent_comment_id": parent},
+            )
+            assert response.status_code == 201, response.text
+            return response.json()
+
+        root = create("根评论")
+        child = create("子回复", root["comment_id"])
+        grandchild = create("孙回复", child["comment_id"])
+
+        deleted = client.delete(
+            f"/api/bid-runs/{run_id}/comments/{root['comment_id']}"
+        )
+        assert deleted.status_code == 204
+        for item in (root, child, grandchild):
+            assert repo.comments[item["comment_id"]].deleted_at is not None
+            assert (
+                repo.comments[item["comment_id"]].deletion_batch_id
+                == repo.comments[root["comment_id"]].deletion_batch_id
+            )
+
+        hidden = client.get(f"/api/bid-runs/{run_id}/comments")
+        assert hidden.json()["comments"] == []
+        visible = client.get(
+            f"/api/bid-runs/{run_id}/comments",
+            params={"include_deleted": "true"},
+        )
+        assert len(visible.json()["comments"]) == 3
+        assert all(
+            item["deleted_at"] for item in visible.json()["comments"]
+        )
+
+        restored = client.post(
+            f"/api/bid-runs/{run_id}/comments/{root['comment_id']}/restore"
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["deleted_at"] is None
+        assert len(
+            client.get(f"/api/bid-runs/{run_id}/comments").json()[
+                "comments"
+            ]
+        ) == 3
+        not_deleted = client.post(
+            f"/api/bid-runs/{run_id}/comments/{root['comment_id']}/restore"
+        )
+        assert not_deleted.status_code == 409
+
+        parent = create("父评论")
+        reply = create("单独删除的回复", parent["comment_id"])
+        assert (
+            client.delete(
+                f"/api/bid-runs/{run_id}/comments/{reply['comment_id']}"
+            ).status_code
+            == 204
+        )
+        assert (
+            client.delete(
+                f"/api/bid-runs/{run_id}/comments/{parent['comment_id']}"
+            ).status_code
+            == 204
+        )
+        blocked = client.post(
+            f"/api/bid-runs/{run_id}/comments/{reply['comment_id']}/restore"
+        )
+        assert blocked.status_code == 409
+        assert (
+            client.post(
+                f"/api/bid-runs/{run_id}/comments/{parent['comment_id']}/restore"
+            ).status_code
+            == 200
+        )
+        final = client.post(
+            f"/api/bid-runs/{run_id}/comments/{reply['comment_id']}/restore"
+        )
+        assert final.status_code == 200, final.text
+
+
+def test_comment_attachment_upload_download_and_delete(
+    tmp_path: Path,
+) -> None:
+    storage = LocalStorage(
+        StorageLayout(
+            upload_dir=tmp_path / "upload",
+            parsed_dir=tmp_path / "parsed",
+            bids_dir=tmp_path / "bids",
+        )
+    )
+    app, repo, _store, service = make_app(tmp_path, storage=storage)
+    with TestClient(app) as client:
+        run_id, section_id = create_run(client)
+        created = client.post(
+            f"/api/bid-runs/{run_id}/comments",
+            json={"body": "请查看附件", "section_id": section_id},
+        )
+        assert created.status_code == 201, created.text
+        comment_id = created.json()["comment_id"]
+
+        content = b"%PDF-1.4 comment evidence"
+        uploaded = client.post(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments",
+            files={
+                "file": (
+                    "evidence.pdf",
+                    content,
+                    "application/pdf",
+                )
+            },
+        )
+        assert uploaded.status_code == 201, uploaded.text
+        attachments = uploaded.json()["attachments"]
+        assert len(attachments) == 1
+        attachment = attachments[0]
+        assert attachment["filename"] == "evidence.pdf"
+        assert attachment["size_bytes"] == len(content)
+        assert attachment["content_type"].startswith("application/pdf")
+        assert attachment["download_url"].endswith("/download")
+
+        listed = client.get(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments"
+        )
+        assert listed.status_code == 200, listed.text
+        assert len(listed.json()["attachments"]) == 1
+
+        downloaded = client.get(attachment["download_url"])
+        assert downloaded.status_code == 200, downloaded.text
+        assert downloaded.content == content
+        assert "evidence.pdf" in downloaded.headers["content-disposition"]
+
+        rejected = client.post(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments",
+            files={"file": ("payload.exe", b"MZ", "application/octet-stream")},
+        )
+        assert rejected.status_code == 422
+
+        empty = client.post(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments",
+            files={"file": ("empty.txt", b"", "text/plain")},
+        )
+        assert empty.status_code == 422
+
+        with pytest.raises(BidRunError) as forbidden:
+            asyncio.run(
+                service.delete_comment_attachment(
+                    run_id,
+                    comment_id,
+                    attachment["attachment_id"],
+                    actor_id="someone-else",
+                    is_admin=False,
+                )
+            )
+        assert forbidden.value.status_code == 403
+
+        deleted = client.delete(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments/"
+            f"{attachment['attachment_id']}"
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["attachments"] == []
+        assert repo.comment_attachments == {}
+        assert not storage.exists(
+            f"private/comment-attachments/{DEFAULT_PROJECT_ID}/"
+            f"{attachment['attachment_id']}.pdf"
+        )
+
+        second = client.post(
+            f"/api/bid-runs/{run_id}/comments/{comment_id}/attachments",
+            files={"file": ("notes.txt", b"hello", "text/plain")},
+        )
+        assert second.status_code == 201, second.text
+        second_url = second.json()["attachments"][0]["download_url"]
+        assert (
+            client.delete(
+                f"/api/bid-runs/{run_id}/comments/{comment_id}"
+            ).status_code
+            == 204
+        )
+        assert client.get(second_url).status_code == 404

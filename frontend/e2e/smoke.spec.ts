@@ -103,6 +103,51 @@ test('admin creates a bid run and resolves a review comment', async ({
   await logout(page)
 })
 
+test('admin replies, attaches files and restores a comment', async ({
+  page,
+}) => {
+  await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+  await navigate(page, /编写标书/)
+  await page.locator('#bid-doc-id').fill(DOC_ID)
+  await expect(page.getByText('可编写标书')).toBeVisible()
+  await page.getByRole('button', { name: '创建大纲' }).click()
+  await expect(
+    page.getByRole('heading', { name: '评审评论与指派', exact: true }),
+  ).toBeVisible()
+
+  const body = `E2E 线程意见 ${Date.now()}`
+  await page.getByTestId('comment-body').fill(body)
+  await page.getByTestId('comment-submit').click()
+  const parent = page.getByTestId('comment-card').filter({
+    has: page.getByText(body, { exact: true }),
+  })
+  await expect(parent).toBeVisible()
+
+  await parent.getByTestId('comment-reply').click()
+  await page.getByTestId('comment-body').fill('E2E 回复内容')
+  await page.getByTestId('comment-submit').click()
+  await expect(page.getByTestId('comment-card')).toHaveCount(2)
+
+  await parent.getByTestId('comment-attachment-input').setInputFiles({
+    name: 'evidence.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('comment evidence'),
+  })
+  await expect(parent.getByText('evidence.txt')).toBeVisible()
+
+  page.once('dialog', (dialog) => void dialog.accept())
+  await parent.getByTestId('comment-delete').click()
+  await page.getByRole('button', { name: /已删除/ }).click()
+  const deleted = page.getByTestId('comment-card').filter({
+    has: page.getByText(body, { exact: true }),
+  })
+  await expect(deleted.getByText('已删除')).toBeVisible()
+  await deleted.getByTestId('comment-restore').click()
+  await page.getByRole('button', { name: /^全部/ }).click()
+  await expect(page.getByTestId('comment-card')).toHaveCount(2)
+  await logout(page)
+})
+
 test('admin opens the project board', async ({ page }) => {
   await login(page, ADMIN_USERNAME, ADMIN_PASSWORD)
   await navigate(page, /项目看板/)

@@ -77,11 +77,17 @@ def content_disposition(name: str) -> str:
     )
 
 
-def _base_headers(info: ObjectInfo, length: int) -> dict[str, str]:
+def _base_headers(
+    info: ObjectInfo,
+    length: int,
+    *,
+    filename: str | None = None,
+    content_type: str | None = None,
+) -> dict[str, str]:
     headers = {
-        "Content-Type": info.content_type,
+        "Content-Type": content_type or info.content_type,
         "Content-Length": str(length),
-        "Content-Disposition": content_disposition(info.name),
+        "Content-Disposition": content_disposition(filename or info.name),
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-store",
     }
@@ -109,6 +115,9 @@ def stored_artifact_response(
     request: Request,
     storage: Storage,
     info: ObjectInfo,
+    *,
+    filename: str | None = None,
+    content_type: str | None = None,
 ) -> Response:
     """Return a streamed download response for an object-storage artifact."""
     size = max(0, info.size)
@@ -129,12 +138,22 @@ def stored_artifact_response(
 
     if byte_range is None:
         status_code = 200
-        headers = _base_headers(info, size)
+        headers = _base_headers(
+            info,
+            size,
+            filename=filename,
+            content_type=content_type,
+        )
         length: int | None = None
         offset = 0
     else:
         status_code = 206
-        headers = _base_headers(info, byte_range.length)
+        headers = _base_headers(
+            info,
+            byte_range.length,
+            filename=filename,
+            content_type=content_type,
+        )
         headers["Content-Range"] = (
             f"bytes {byte_range.start}-{byte_range.end}/{size}"
         )

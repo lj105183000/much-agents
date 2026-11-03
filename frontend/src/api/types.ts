@@ -823,10 +823,23 @@ export interface BidCommentMention {
   display_name: string
 }
 
+export interface BidCommentAttachment {
+  attachment_id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  sha256: string
+  uploaded_by: string | null
+  uploaded_by_name: string | null
+  created_at: string
+  download_url: string
+}
+
 export interface BidCommentView {
   comment_id: string
   run_id: string
   parent_comment_id: string | null
+  depth: number
   due_at: string | null
   section_id: string | null
   section_title: string | null
@@ -840,6 +853,10 @@ export interface BidCommentView {
   resolved_by: string | null
   resolved_by_name: string | null
   resolved_at: string | null
+  deleted_at: string | null
+  deleted_by: string | null
+  deleted_by_name: string | null
+  attachments: BidCommentAttachment[]
   created_at: string
   updated_at: string
 }
@@ -900,6 +917,7 @@ export interface ProjectBoardRecentComment {
 export interface ProjectBoard {
   project_id: string
   generated_at: string
+  window_days: number
   comments: ProjectBoardCommentTotals
   runs: ProjectBoardRunTotals
   assignees: ProjectBoardAssignee[]

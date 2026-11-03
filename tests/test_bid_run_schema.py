@@ -47,12 +47,28 @@ def test_comment_threads_and_user_email_columns() -> None:
     )
     assert {
         "parent_comment_id",
+        "depth",
         "due_at",
         "deleted_at",
+        "deletion_batch_id",
         "deleted_by",
         "deleted_by_name",
     } <= comment_columns
     assert "email" in Base.metadata.tables["users"].columns
+    attachment_columns = set(
+        Base.metadata.tables["bid_comment_attachments"].columns.keys()
+    )
+    assert {
+        "id",
+        "project_id",
+        "run_id",
+        "comment_id",
+        "filename",
+        "content_type",
+        "size_bytes",
+        "sha256",
+        "storage_key",
+    } <= attachment_columns
 
     comment_indexes = {
         index.name

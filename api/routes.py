@@ -72,7 +72,7 @@ from .auth import (
     require_manage,
     require_user,
 )
-from .bid_runs import BidRunService
+from .bid_runs import COMMENT_ATTACHMENT_MAX_BYTES, BidRunService
 from .bids import BidService
 from .companies import (
     CompanyError,
@@ -123,6 +123,7 @@ from .schemas import (
     BidApprovalListResponse,
     BidApprovalRequest,
     BidApprovalResponse,
+    BidCommentAttachmentListResponse,
     BidCommentCreateRequest,
     BidCommentListResponse,
     BidCommentMention,
@@ -1786,14 +1787,24 @@ def build_router() -> APIRouter:
         ),
         section_id: str | None = Query(default=None, max_length=64),
         limit: int = Query(200, ge=1, le=500),
+        include_deleted: bool = Query(False),
         context: ProjectContext = Depends(require_run_read),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> BidCommentListResponse:
+        if include_deleted and not (
+            context.bypass
+            or context.role in {"manager", "writer", "reviewer"}
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="deleted comments require review permission",
+            )
         return await service.list_comments(
             run_id,
             status=status_value,
             section_id=section_id,
             limit=limit,
+            include_deleted=include_deleted,
         )
 
     @router.post(
@@ -2047,20 +2058,178 @@ def build_router() -> APIRouter:
             resource_id=run_id,
             detail={
                 "comment_id": comment_id,
-                "reply_count": reply_count,
+                "deleted_count": reply_count,
             },
             required=True,
         )
+
+    @router.post(
+        "/bid-runs/{run_id}/comments/{comment_id}/restore",
+        response_model=BidCommentView,
+    )
+    async def restore_bid_run_comment(
+        run_id: str,
+        comment_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentView:
+        result, restored_count = await service.restore_comment(
+            run_id,
+            comment_id,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+            is_admin=user.role == "admin",
+        )
+        await _audit(
+            request,
+            "bid_run.comment.restore",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": comment_id,
+                "restored_count": restored_count,
+            },
+            required=True,
+        )
+        return result
+
+    @router.get(
+        "/bid-runs/{run_id}/comments/{comment_id}/attachments",
+        response_model=BidCommentAttachmentListResponse,
+    )
+    async def list_bid_run_comment_attachments(
+        run_id: str,
+        comment_id: str,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentAttachmentListResponse:
+        view = await service.get_comment(run_id, comment_id)
+        return BidCommentAttachmentListResponse(
+            run_id=run_id,
+            comment_id=comment_id,
+            attachments=view.attachments,
+        )
+
+    @router.post(
+        "/bid-runs/{run_id}/comments/{comment_id}/attachments",
+        status_code=status.HTTP_201_CREATED,
+        response_model=BidCommentView,
+    )
+    async def upload_bid_run_comment_attachment(
+        run_id: str,
+        comment_id: str,
+        request: Request,
+        file: UploadFile = File(...),
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentView:
+        data = await file.read(COMMENT_ATTACHMENT_MAX_BYTES + 1)
+        result = await service.add_comment_attachment(
+            run_id,
+            comment_id,
+            filename=file.filename or "",
+            data=data,
+            actor_id=user.id,
+            actor_name=user.display_name or user.username,
+        )
+        await _audit(
+            request,
+            "bid_run.comment.attachment.upload",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": comment_id,
+                "filename": file.filename or "",
+                "content_type": file.content_type or "",
+                "size_bytes": len(data),
+            },
+            required=True,
+        )
+        return result
+
+    @router.get(
+        "/bid-runs/{run_id}/comments/{comment_id}/attachments/"
+        "{attachment_id}/download",
+    )
+    async def download_bid_run_comment_attachment(
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_run_read),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> Response:
+        attachment = await service.get_comment_attachment(
+            run_id, comment_id, attachment_id
+        )
+        storage = service.storage
+        if storage is None:
+            raise HTTPException(
+                status_code=503, detail="storage is unavailable"
+            )
+        info = storage.stat(attachment.storage_key)
+        if info is None:
+            raise HTTPException(
+                status_code=404, detail="attachment object is missing"
+            )
+        return stored_artifact_response(
+            request,
+            storage,
+            info,
+            filename=attachment.filename,
+            content_type=attachment.content_type,
+        )
+
+    @router.delete(
+        "/bid-runs/{run_id}/comments/{comment_id}/attachments/"
+        "{attachment_id}",
+        response_model=BidCommentView,
+    )
+    async def delete_bid_run_comment_attachment(
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_run_review),
+        user: UserContext = Depends(require_user),
+        service: BidRunService = Depends(get_bid_run_service),
+    ) -> BidCommentView:
+        result = await service.delete_comment_attachment(
+            run_id,
+            comment_id,
+            attachment_id,
+            actor_id=user.id,
+            is_admin=user.role == "admin",
+        )
+        await _audit(
+            request,
+            "bid_run.comment.attachment.delete",
+            context=context,
+            resource_type="bid_run",
+            resource_id=run_id,
+            detail={
+                "comment_id": comment_id,
+                "attachment_id": attachment_id,
+            },
+            required=True,
+        )
+        return result
 
     @router.get(
         "/project-board",
         response_model=ProjectBoardResponse,
     )
     async def get_project_board(
+        days: int = Query(30, ge=1, le=365),
         context: ProjectContext = Depends(require_project_read),
         service: BidRunService = Depends(get_bid_run_service),
     ) -> ProjectBoardResponse:
-        return await service.project_board(context.project_id)
+        return await service.project_board(context.project_id, days=days)
 
     @router.get(
         "/bid-runs/{run_id}/usage",

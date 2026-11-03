@@ -21,13 +21,14 @@ function isOverdue(dueAt: string | null): boolean {
 }
 
 export function BoardView({ onOpenRun }: BoardViewProps) {
+  const [days, setDays] = useState(30)
   const [data, setData] = useState<ProjectBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (windowDays: number) => {
     try {
-      setData(await api.getProjectBoard())
+      setData(await api.getProjectBoard(windowDays))
       setError(null)
     } catch (caught) {
       setError(
@@ -40,21 +41,27 @@ export function BoardView({ onOpenRun }: BoardViewProps) {
 
   const refresh = () => {
     setLoading(true)
-    void load()
+    void load(days)
+  }
+
+  const selectWindow = (value: number) => {
+    if (value === days) return
+    setLoading(true)
+    setDays(value)
   }
 
   useEffect(() => {
     const initial = window.setTimeout(() => {
-      void load()
+      void load(days)
     }, 0)
     const timer = window.setInterval(() => {
-      void load()
+      void load(days)
     }, 30_000)
     return () => {
       window.clearTimeout(initial)
       window.clearInterval(timer)
     }
-  }, [load])
+  }, [days, load])
 
   if (!data) {
     return (
@@ -84,7 +91,7 @@ export function BoardView({ onOpenRun }: BoardViewProps) {
       <Card className="p-4 md:p-5">
         <SectionHeader
           title="项目看板"
-          description="聚合当前项目的待处理评论、逾期风险与投标 run 状态；每 30 秒自动刷新。"
+          description="聚合当前项目时间窗口内的待处理评论、逾期风险与投标 run 状态；每 30 秒自动刷新。"
           action={
             <Button
               variant="ghost"
@@ -101,9 +108,25 @@ export function BoardView({ onOpenRun }: BoardViewProps) {
             {error}
           </p>
         ) : null}
-        <p className="mt-2 text-[11px] text-slate-500">
-          数据生成于 {formatDate(data.generated_at)}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {[7, 30, 90].map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => selectWindow(value)}
+              className={
+                days === value
+                  ? 'rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[11px] font-medium text-cyan-200'
+                  : 'rounded-full border border-slate-800 bg-slate-950/40 px-3 py-1 text-[11px] text-slate-400 hover:border-slate-700'
+              }
+            >
+              近 {value} 天
+            </button>
+          ))}
+          <span className="text-[11px] text-slate-500">
+            数据生成于 {formatDate(data.generated_at)}
+          </span>
+        </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <Stat
             label="待处理评论"

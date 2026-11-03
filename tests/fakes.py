@@ -14,6 +14,7 @@ from api.audit import AuditEvent, AuditRecord, event_hash
 from api.auth import SessionRecord, UserRecord
 from api.bid_run_repo import (
     BidApprovalRecord,
+    BidCommentAttachmentRecord,
     BidCommentRecord,
     BidRunRecord,
     BidTemplateRecord,
@@ -762,6 +763,9 @@ class FakeBidRunRepository:
         self.approvals: dict[str, list[BidApprovalRecord]] = {}
         self.versions: dict[str, list[SectionVersionRecord]] = {}
         self.comments: dict[str, BidCommentRecord] = {}
+        self.comment_attachments: dict[
+            str, BidCommentAttachmentRecord
+        ] = {}
         self.notifications: dict[str, NotificationRecord] = {}
         self.notification_recipients: dict[
             str, list[NotificationRecipient]
@@ -928,6 +932,7 @@ class FakeBidRunRepository:
         assignee_id: str | None,
         assignee_name: str | None,
         parent_comment_id: str | None = None,
+        depth: int = 0,
         due_at: datetime | None = None,
     ) -> BidCommentRecord:
         now = datetime.now(timezone.utc)
@@ -936,7 +941,9 @@ class FakeBidRunRepository:
             project_id=project_id,
             run_id=run_id,
             parent_comment_id=parent_comment_id,
+            depth=depth,
             due_at=due_at,
+            deletion_batch_id=None,
             section_id=section_id,
             author_id=author_id,
             author_name=author_name,
@@ -958,14 +965,16 @@ class FakeBidRunRepository:
         return record
 
     async def get_comment(
-        self, run_id: str, comment_id: str
+        self,
+        run_id: str,
+        comment_id: str,
+        *,
+        include_deleted: bool = False,
     ) -> BidCommentRecord | None:
         record = self.comments.get(comment_id)
-        if (
-            record is None
-            or record.run_id != run_id
-            or record.deleted_at is not None
-        ):
+        if record is None or record.run_id != run_id:
+            return None
+        if record.deleted_at is not None and not include_deleted:
             return None
         return record
 
@@ -976,12 +985,13 @@ class FakeBidRunRepository:
         status: str | None = None,
         section_id: str | None = None,
         limit: int = 200,
+        include_deleted: bool = False,
     ) -> list[BidCommentRecord]:
         rows = [
             record
             for record in self.comments.values()
             if record.run_id == run_id
-            and record.deleted_at is None
+            and (include_deleted or record.deleted_at is None)
             and (status is None or record.status == status)
             and (section_id is None or record.section_id == section_id)
         ]
@@ -1051,30 +1061,161 @@ class FakeBidRunRepository:
         if record is None:
             return None
         now = datetime.now(timezone.utc)
+        batch_id = uuid4().hex
+        descendant_ids: list[str] = []
+        frontier = [comment_id]
+        while frontier and len(descendant_ids) < 1000:
+            frontier = [
+                other_id
+                for other_id, other in self.comments.items()
+                if other.run_id == run_id
+                and other.parent_comment_id in frontier
+                and other.deleted_at is None
+            ]
+            descendant_ids.extend(frontier)
         updated = replace(
             record,
             deleted_at=now,
             deleted_by=deleted_by,
             deleted_by_name=deleted_by_name,
+            deletion_batch_id=batch_id,
             updated_at=now,
         )
         self.comments[comment_id] = updated
-        reply_count = 0
-        for other_id, other in list(self.comments.items()):
-            if (
-                other.run_id == run_id
-                and other.parent_comment_id == comment_id
-                and other.deleted_at is None
-            ):
-                self.comments[other_id] = replace(
-                    other,
-                    deleted_at=now,
-                    deleted_by=deleted_by,
-                    deleted_by_name=deleted_by_name,
-                    updated_at=now,
-                )
-                reply_count += 1
-        return updated, reply_count
+        for other_id in descendant_ids:
+            other = self.comments[other_id]
+            self.comments[other_id] = replace(
+                other,
+                deleted_at=now,
+                deleted_by=deleted_by,
+                deleted_by_name=deleted_by_name,
+                deletion_batch_id=batch_id,
+                updated_at=now,
+            )
+        return updated, len(descendant_ids)
+
+    async def restore_comment(
+        self,
+        run_id: str,
+        comment_id: str,
+    ) -> tuple[BidCommentRecord, int] | None:
+        record = await self.get_comment(
+            run_id, comment_id, include_deleted=True
+        )
+        if record is None or record.deleted_at is None:
+            return None
+        now = datetime.now(timezone.utc)
+        batch_id = record.deletion_batch_id
+        if batch_id:
+            target_ids = [
+                other_id
+                for other_id, other in self.comments.items()
+                if other.run_id == run_id
+                and other.deleted_at is not None
+                and other.deletion_batch_id == batch_id
+            ]
+        else:
+            target_ids = [comment_id]
+        for other_id in target_ids:
+            other = self.comments[other_id]
+            self.comments[other_id] = replace(
+                other,
+                deleted_at=None,
+                deleted_by=None,
+                deleted_by_name=None,
+                deletion_batch_id=None,
+                updated_at=now,
+            )
+        restored = self.comments[comment_id]
+        return restored, max(0, len(target_ids) - 1)
+
+    async def add_comment_attachment(
+        self,
+        *,
+        attachment_id: str,
+        project_id: str,
+        run_id: str,
+        comment_id: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        sha256: str,
+        storage_key: str,
+        uploaded_by: str | None,
+        uploaded_by_name: str | None,
+    ) -> BidCommentAttachmentRecord:
+        record = BidCommentAttachmentRecord(
+            attachment_id=attachment_id,
+            project_id=project_id,
+            run_id=run_id,
+            comment_id=comment_id,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            storage_key=storage_key,
+            uploaded_by=uploaded_by,
+            uploaded_by_name=uploaded_by_name,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.comment_attachments[attachment_id] = record
+        return record
+
+    async def list_comment_attachments(
+        self,
+        run_id: str,
+        *,
+        comment_id: str | None = None,
+    ) -> list[BidCommentAttachmentRecord]:
+        rows = [
+            record
+            for record in self.comment_attachments.values()
+            if record.run_id == run_id
+            and (comment_id is None or record.comment_id == comment_id)
+        ]
+        rows.sort(key=lambda record: record.created_at)
+        return rows
+
+    async def get_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+    ) -> BidCommentAttachmentRecord | None:
+        record = self.comment_attachments.get(attachment_id)
+        if (
+            record is None
+            or record.run_id != run_id
+            or record.comment_id != comment_id
+        ):
+            return None
+        return record
+
+    async def count_comment_attachments(
+        self, run_id: str, comment_id: str
+    ) -> int:
+        return len(
+            [
+                record
+                for record in self.comment_attachments.values()
+                if record.run_id == run_id
+                and record.comment_id == comment_id
+            ]
+        )
+
+    async def delete_comment_attachment(
+        self,
+        run_id: str,
+        comment_id: str,
+        attachment_id: str,
+    ) -> BidCommentAttachmentRecord | None:
+        record = await self.get_comment_attachment(
+            run_id, comment_id, attachment_id
+        )
+        if record is None:
+            return None
+        del self.comment_attachments[attachment_id]
+        return record
 
     async def project_comment_assignee_stats(
         self,
@@ -1082,6 +1223,7 @@ class FakeBidRunRepository:
         *,
         now: datetime,
         due_soon_before: datetime,
+        since: datetime | None = None,
     ) -> list[ProjectCommentAssigneeStat]:
         groups: dict[
             tuple[str | None, str | None], list[BidCommentRecord]
@@ -1090,6 +1232,7 @@ class FakeBidRunRepository:
             if (
                 record.project_id != project_id
                 or record.deleted_at is not None
+                or (since is not None and record.created_at < since)
             ):
                 continue
             key = (record.assignee_id, record.assignee_name)
@@ -1142,6 +1285,7 @@ class FakeBidRunRepository:
         project_id: str,
         *,
         now: datetime,
+        since: datetime | None = None,
         limit: int = 20,
     ) -> list[ProjectCommentSectionStat]:
         groups: dict[str | None, list[BidCommentRecord]] = {}
@@ -1150,6 +1294,7 @@ class FakeBidRunRepository:
                 record.project_id != project_id
                 or record.status != "open"
                 or record.deleted_at is not None
+                or (since is not None and record.created_at < since)
             ):
                 continue
             groups.setdefault(record.section_id, []).append(record)
@@ -1183,6 +1328,7 @@ class FakeBidRunRepository:
         self,
         project_id: str,
         *,
+        since: datetime | None = None,
         limit: int = 20,
     ) -> list[ProjectBoardComment]:
         rows = [
@@ -1191,6 +1337,7 @@ class FakeBidRunRepository:
             if record.project_id == project_id
             and record.status == "open"
             and record.deleted_at is None
+            and (since is None or record.created_at >= since)
         ]
         rows.sort(
             key=lambda record: (

@@ -352,7 +352,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 附件证据链（PDF/CSV/XLSX/OCR、附件上传 API/UI）
 - 审批 UI（意见/override/历史/内容哈希提示）
 - Headless LibreOffice PDF 导出、章节版本历史/diff/恢复
-- 评审评论/@提及/指派/单层回复/截止时间/软删除、项目看板与 SSE 实时进度
+- 评审评论/@提及/指派/多级回复/附件/截止时间/软删除与恢复、项目看板时间窗口与 SSE 实时进度
 - 需求覆盖矩阵（`requirements.json`）与证据引用契约（`citations.json`）
 - 浏览器 E2E（Playwright，隔离 PostgreSQL 栈）与 CI 内置只读 HTTP/SSE 压测 p95 门禁
 - L0 合成 fixture 规则基线进入普通 CI，覆盖覆盖率、占位符/问题密度、事实一致率、合规/一致性/gate 与引用
@@ -370,7 +370,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 
 - 真实 Linux VM 与 DNS/CA 环境验收（工具与清单已备，需部署方执行）
 - 模板变量/公司级模板
-- 多级评论线程、评论附件与看板自定义时间窗口
+- 评论附件在线预览/病毒扫描与看板任意日期范围
 - Alertmanager 真实通知渠道
 - MCP OAuth 与前端配置 UI
 - Cosign 签名
