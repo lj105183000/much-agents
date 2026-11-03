@@ -1,0 +1,77 @@
+{
+  "cases": {
+    "case-l0": {
+      "characters": 5000,
+      "citation_coverage": 0.9,
+      "compliance_blocked": 0,
+      "compliance_fail": 0,
+      "compliance_status": "warn",
+      "consistency_conflict": 0,
+      "consistency_critical_conflict": 0,
+      "consistency_status": "consistent",
+      "fact_consistency": 1.0,
+      "gate_block": 0,
+      "gate_status": "warn",
+      "high_issue_density": 0.0,
+      "high_issues": 0,
+      "invalid_citations": 0,
+      "narrative_coverage": 0.9375,
+      "narrative_sections": 4,
+      "placeholder_density": 1.0,
+      "requirement_coverage": 0.85,
+      "run_id": "run-l0",
+      "template_weight_share": 0.2,
+      "weighted_coverage": 0.85,
+      "weighted_issue_density": 0.75
+    }
+  },
+  "floors": {
+    "compliance_blocked": 0,
+    "consistency_critical_conflict": 0,
+    "fact_consistency": 0.95,
+    "gate_block": 0,
+    "high_issue_density": 0.2,
+    "weighted_coverage": 0.8
+  },
+  "generated_at": "2026-11-03T00:09:20.725544+00:00",
+  "metric_version": "l0-rule-v1",
+  "metrics": {
+    "avg_citation_coverage": 0.9,
+    "avg_fact_consistency": 1.0,
+    "avg_high_issue_density": 0.0,
+    "avg_narrative_coverage": 0.9375,
+    "avg_placeholder_density": 1.0,
+    "avg_requirement_coverage": 0.85,
+    "avg_template_weight_share": 0.2,
+    "avg_weighted_coverage": 0.85,
+    "avg_weighted_issue_density": 0.75,
+    "cases": 1,
+    "compliance_blocked": 0,
+    "compliance_fail": 0,
+    "compliance_status_counts": {
+      "warn": 1
+    },
+    "consistency_conflict": 0,
+    "consistency_critical_conflict": 0,
+    "consistency_status_counts": {
+      "consistent": 1
+    },
+    "gate_block": 0,
+    "gate_status_counts": {
+      "warn": 1
+    },
+    "high_issues": 0,
+    "invalid_citations": 0,
+    "missing_runs": 0,
+    "runs_found": 1
+  },
+  "schema_version": "1.0",
+  "scorecard_digest": "272248195e59d944a55bec8b2fce1d0cc844ff3767360c2ca5ab8a2a8ef142e9",
+  "thresholds": {
+    "max_count_increase": 0,
+    "max_drop": 0.02,
+    "max_issue_increase": 0.2,
+    "max_placeholder_increase": 0.2,
+    "max_template_increase": 0.05
+  }
+}
