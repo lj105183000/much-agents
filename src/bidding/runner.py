@@ -22,6 +22,7 @@ from .errors import BidGenerationError, BidInputError
 from .graph import build_bid_graph
 from .citations import strip_citation_markers
 from .llm import ChatClient, DeepSeekChatClient
+from .llm_usage import usage_scope
 from .models import BidResult, SectionDraft
 from .outline import build_brief, build_outline
 from .profile import BidderProfile, placeholder
@@ -131,8 +132,20 @@ def run_bid_writing(
         progress=report,
     )
     started = time.perf_counter()
-    state = graph.invoke({})
+    with usage_scope(run_id=resolved_run_id) as scope:
+        try:
+            state = graph.invoke({})
+        except Exception:
+            if scope.records:
+                atomic_write_json(
+                    output_dir / "llm_usage.json",
+                    [record.to_dict() for record in scope.records],
+                )
+            raise
     timings["generate"] = time.perf_counter() - started
+    usage_records = [record.to_dict() for record in scope.records]
+    if usage_records:
+        atomic_write_json(output_dir / "llm_usage.json", usage_records)
 
     assembly = state.get("assembly")
     if assembly is None:
@@ -165,7 +178,12 @@ def run_bid_writing(
     all_warnings = list(dict.fromkeys([*warnings, *assembly.warnings, *retrieval_warnings]))
     missing_fields = profile.missing_required_fields()
     calls_attr = getattr(llm, "calls", 0)
-    llm_calls = len(calls_attr) if isinstance(calls_attr, (list, tuple)) else int(calls_attr or 0)
+    fallback_calls = (
+        len(calls_attr)
+        if isinstance(calls_attr, (list, tuple))
+        else int(calls_attr or 0)
+    )
+    llm_calls = len(usage_records) if usage_records else fallback_calls
     final_report = dict(assembly.report)
     final_report.update(
         {
@@ -178,6 +196,7 @@ def run_bid_writing(
             "warnings": all_warnings,
             "timings_seconds": {key: round(value, 3) for key, value in timings.items()},
             "llm_calls": llm_calls,
+            "llm_usage_file": "llm_usage.json" if usage_records else None,
             "docx_paragraphs": docx.paragraphs,
             "docx_tables": docx.tables,
         }

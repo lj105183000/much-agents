@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,9 @@ def test_legacy_runner_strips_citation_markers(tmp_path: Path) -> None:
     assert "[E1]" not in "\n".join(
         paragraph.text for paragraph in document.paragraphs
     )
+    usage_path = result.output_dir / "llm_usage.json"
+    assert usage_path.is_file()
+    assert json.loads(usage_path.read_text(encoding="utf-8"))
 
 
 def test_runner_writes_complete_artifacts(tmp_path: Path) -> None:

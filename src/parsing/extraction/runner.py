@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from ..config import Settings
 from ..models import ParsedDocument
@@ -86,6 +87,8 @@ def extract_document(
     doc: ParsedDocument,
     settings: Settings,
     extractor: DeepSeekExtractor | None = None,
+    *,
+    usage_sink: Callable[[list[dict]], None] | None = None,
 ) -> tuple[StructuredExtraction, dict]:
     payloads = build_payloads(doc, settings.extraction_max_input_chars)
     regex_result = extract_regex(doc, payloads)
@@ -96,6 +99,18 @@ def extract_document(
     }
     warnings: list[str] = []
     llm_usage: list[dict] = []
+
+    def record_usage(usage: dict | None) -> None:
+        if not usage:
+            return
+        row = {
+            "provider": "deepseek",
+            "operation": "extraction",
+            **usage,
+        }
+        llm_usage.append(row)
+        if usage_sink is not None:
+            usage_sink([row])
 
     if not settings.extraction_enabled:
         return StructuredExtraction(), {
@@ -125,25 +140,9 @@ def extract_document(
                     llm_parts.append(
                         structured_from_raw(raw, payload.name, warnings, stats)
                     )
-                    usage = getattr(extractor, "last_usage", None)
-                    if usage:
-                        llm_usage.append(
-                            {
-                                "provider": "deepseek",
-                                "operation": "extraction",
-                                **usage,
-                            }
-                        )
+                    record_usage(getattr(extractor, "last_usage", None))
                 except Exception as exc:  # noqa: BLE001 - vendor errors vary
-                    usage = getattr(extractor, "last_usage", None)
-                    if usage:
-                        llm_usage.append(
-                            {
-                                "provider": "deepseek",
-                                "operation": "extraction",
-                                **usage,
-                            }
-                        )
+                    record_usage(getattr(extractor, "last_usage", None))
                     warnings.append(
                         f"LLM extraction failed for {payload.name}"
                         f" (part {payload.part}): {str(exc)[:200]}"

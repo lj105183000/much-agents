@@ -25,6 +25,7 @@ from .errors import IngestError
 from .ingest import run_ingest
 from .models import Chunk
 from .usage import embedding_usage, mineru_usage
+from .usage_ledger import append_usage, clear_usage
 
 logger = logging.getLogger(__name__)
 
@@ -728,6 +729,20 @@ def attach_evidence(
         )
         stored_source.write_bytes(source.read_bytes())
     warnings = [*setup_warnings, *list(meta.get("warnings") or [])]
+    external_usage: list[dict[str, Any]] = []
+    if str(meta.get("parser") or "") == "mineru":
+        ocr = mineru_usage(
+            int(meta.get("pages") or 0),
+            settings,
+            operation="ocr",
+            metadata={
+                "attachment_id": meta.get("attachment_id"),
+                "model": settings.mineru_model_version,
+            },
+        )
+        if ocr is not None:
+            external_usage.append(ocr)
+            append_usage(parsed_dir, "external", [ocr])
     ingest_summary: dict[str, Any] | None = None
     if ingest:
         try:
@@ -744,24 +759,12 @@ def attach_evidence(
                 warnings.append(f"ingest skipped: {exc}")
             else:
                 raise
-    external_usage: list[dict[str, Any]] = []
-    if str(meta.get("parser") or "") == "mineru":
-        ocr = mineru_usage(
-            int(meta.get("pages") or 0),
-            settings,
-            operation="ocr",
-            metadata={
-                "attachment_id": meta.get("attachment_id"),
-                "model": settings.mineru_model_version,
-            },
-        )
-        if ocr is not None:
-            external_usage.append(ocr)
     embedding = embedding_usage(
         ingest_summary, settings, chunks=len(chunks)
     )
     if embedding is not None:
         external_usage.append(embedding)
+        append_usage(parsed_dir, "external", [embedding])
     storage_synced = False
     if sync_storage:
         sync_paths = [
@@ -776,6 +779,7 @@ def attach_evidence(
             sync_paths,
         )
         warnings.extend(sync_warnings)
+    clear_usage(parsed_dir)
     return {
         "ok": True,
         "doc_id": doc_id,

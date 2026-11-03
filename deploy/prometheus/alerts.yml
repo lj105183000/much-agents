@@ -45,11 +45,40 @@ groups:
           summary: "Much Agents Celery queue backlog"
           description: "A parse/bid/maintenance queue has more than five pending jobs."
 
-      - alert: MuchAgentsDailyCostBudget
-        expr: increase(much_agents_llm_cost_cny_total[24h]) > 0
-        for: 0m
+      - alert: MuchAgentsDailyCostBudgetWarning
+        # Replace 100 with the daily LLM budget for this deployment.
+        expr: increase(much_agents_llm_cost_cny_total[24h]) > 100
+        for: 10m
         labels:
-          severity: info
+          severity: warning
         annotations:
-          summary: "Daily LLM cost is visible"
-          description: "Use this series with your configured budget in a dashboard."
+          summary: "Daily LLM cost exceeds the warning budget"
+          description: "24h LLM cost is above 100 CNY; review project/run budgets."
+
+      - alert: MuchAgentsDailyCostBudgetExceeded
+        # Replace 500 with the hard daily LLM budget for this deployment.
+        expr: increase(much_agents_llm_cost_cny_total[24h]) > 500
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Daily LLM cost exceeds the hard budget"
+          description: "24h LLM cost is above 500 CNY; pause non-critical generation."
+
+      - alert: MuchAgentsBackupStale
+        expr: time() - max(much_agents_backup_last_success_timestamp_seconds) > 93600
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Much Agents backup is older than 26 hours"
+          description: "Check scripts/backup.sh and the systemd timer."
+
+      - alert: MuchAgentsBackupMetricMissing
+        expr: absent_over_time(much_agents_backup_last_success_timestamp_seconds[26h])
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Much Agents backup success metric is missing"
+          description: "Set BACKUP_METRICS_DIR and expose it to Prometheus via node_exporter textfile."

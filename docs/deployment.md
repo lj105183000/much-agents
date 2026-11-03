@@ -269,8 +269,9 @@ docker-compose -f docker-compose.prod.yml --profile monitoring up -d prometheus 
 - Prometheus 从 `api:8001/api/metrics` 抓取，保留 15 天；配置在 `deploy/prometheus/`。
 - Alertmanager 绑定 `127.0.0.1:9093`；`deploy/alertmanager/alertmanager.yml` 默认是一个占位 webhook（`host.docker.internal:9099`），**需要替换为你的 webhook 或 email_configs 后才会真正投递**。Prometheus 已配置 `alerting.alertmanagers` 指向 `alertmanager:9093`。
 - Grafana 仅绑定 `127.0.0.1:3000`，建议通过 SSH 隧道访问；数据源已自动配置为 `http://prometheus:9090`，并预置 `Much Agents Overview` 看板（5xx、readiness、24h LLM 成本、队列深度、run 状态、LLM 调用状态）。
-- 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（信息级）。
-- `METRICS_TOKEN` 非空时，需要给 Prometheus 增加 `authorization` 配置；默认假设 API 只在内部 Compose 网络可达。
+- 告警规则覆盖：API 5xx 比例、readiness 失败、LLM 错误率、Celery 队列积压、每日 LLM 成本（默认 100 CNY warning / 500 CNY page，按部署预算修改 `deploy/prometheus/alerts.yml`）、备份超过 26 小时未成功或指标缺失。
+- Prometheus 启动时把 `METRICS_TOKEN` 写入 `/tmp/metrics_token` 并以 Bearer 抓取 `/api/metrics`；token 为空时仍可用。
+- 备份告警依赖 `BACKUP_METRICS_DIR` 输出 `much_agents_backup_last_success_timestamp_seconds`，并由 node_exporter textfile（或等价抓取）暴露给 Prometheus。
 - `monitoring` profile 默认不启动，不影响普通部署；Grafana 管理员密码缺失时会回退到 `change_me`，生产必须显式设置。
 
 ## 8. 日志与排障

@@ -38,6 +38,7 @@ from .errors import (
 from .extraction import extract_document
 from .ingest import ChromaStore, run_ingest
 from .usage import embedding_usage, mineru_usage
+from .usage_ledger import append_usage, clear_usage
 from .models import ContentBlock, ParseOptions, ParseResult, ParsedDocument, TocEntry
 from .parsers.mineru.parser import MineruParser
 from .parsers.pymupdf_parser import PyMuPDFParser
@@ -243,6 +244,21 @@ def parse_document(
         document.warnings = list(dict.fromkeys(warnings))
         _write_parse_artifacts(document, doc_dir, source_sha256, source_size)
     timings["parse"] = time.perf_counter() - started
+    external_usage: list[dict[str, Any]] = []
+    if document.parser_used == "mineru":
+        mineru = mineru_usage(
+            document.page_count,
+            settings,
+            operation="parse",
+            latency_ms=int(timings.get("parse", 0) * 1000),
+            metadata={
+                "model": settings.mineru_model_version,
+                "parser_requested": options.parser,
+            },
+        )
+        if mineru is not None:
+            external_usage.append(mineru)
+            append_usage(doc_dir, "external", [mineru])
 
     # ---- extract ----
     extraction_method: str | None = None
@@ -261,7 +277,13 @@ def parse_document(
             extraction_status = cached_extraction.get("status")
             project_name = (cached_extraction.get("project_overview") or {}).get("project_name") or ""
         else:
-            result, extraction_meta = extract_document(document, settings)
+            result, extraction_meta = extract_document(
+                document,
+                settings,
+                usage_sink=lambda rows: append_usage(
+                    doc_dir, "llm", rows
+                ),
+            )
             extraction_method = extraction_meta["method"]
             extraction_status = extraction_meta["status"]
             llm_usage = list(extraction_meta.get("llm_usage") or [])
@@ -393,20 +415,6 @@ def parse_document(
     else:
         status = "failed"
 
-    external_usage: list[dict[str, Any]] = []
-    if document.parser_used == "mineru":
-        mineru = mineru_usage(
-            document.page_count,
-            settings,
-            operation="parse",
-            latency_ms=int(timings.get("parse", 0) * 1000),
-            metadata={
-                "model": settings.mineru_model_version,
-                "parser_requested": options.parser,
-            },
-        )
-        if mineru is not None:
-            external_usage.append(mineru)
     embedding = embedding_usage(
         fresh_ingest_summary,
         settings,
@@ -415,8 +423,9 @@ def parse_document(
     )
     if embedding is not None:
         external_usage.append(embedding)
+        append_usage(doc_dir, "external", [embedding])
 
-    return ParseResult(
+    result = ParseResult(
         ok=exit_code == EXIT_OK,
         status=status,
         exit_code=exit_code,
@@ -436,3 +445,5 @@ def parse_document(
         external_usage=external_usage,
         llm_usage=llm_usage,
     )
+    clear_usage(doc_dir)
+    return result

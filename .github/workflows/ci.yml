@@ -169,8 +169,8 @@ jobs:
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          # Report-only until the baseline is triaged; tighten to 1 afterwards.
-          exit-code: "0"
+          # Block on HIGH/CRITICAL; reviewed exceptions go in .trivyignore by ID.
+          exit-code: "1"
       - name: Scan web image (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -178,7 +178,7 @@ jobs:
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
       - name: Scan repository configuration (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -187,7 +187,7 @@ jobs:
           scanners: vuln,secret,config
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
       - name: Generate API SBOM
         uses: anchore/sbom-action@v0.24.3
         with:

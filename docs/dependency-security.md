@@ -46,7 +46,7 @@ uvx --from pip-audit pip-audit -r /tmp/requirements.txt \
   --index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-2026-11-01 本地复核结果：OSV 返回 8 条记录 / 4 个唯一漏洞，全部仍是上表中的 chromadb 漏洞；无新增依赖漏洞。`npm audit --omit=dev --audit-level=high` 返回 0 vulnerabilities。Trivy 镜像扫描需要下载约 131MB 漏洞库；本机访问 `mirror.gcr.io` 被拒绝、GHCR 速度不足，未能完成本地镜像扫描，CI 中仍按 report-only 运行。
+2026-11-01 本地复核结果：OSV 返回 8 条记录 / 4 个唯一漏洞，全部仍是上表中的 chromadb 漏洞；无新增依赖漏洞。`npm audit --omit=dev --audit-level=high` 返回 0 vulnerabilities。Trivy 镜像扫描需要下载约 131MB 漏洞库；本机访问 `mirror.gcr.io` 被拒绝、GHCR 速度不足，未能完成本地镜像扫描。CI Trivy 现为 **阻断模式**（HIGH/CRITICAL 退出码 1）；首次运行若出现新漏洞，必须先评估并记录到本文，只有确认不可达/已缓解时才按精确 GHSA/CVE ID 加入根目录 `.trivyignore`，禁止包级或扫描器级忽略。
 
 如输出中出现新的 ID，不要直接扩大忽略列表；先评估可达性并记录到本文，再修改 `.github/workflows/ci.yml`。
 

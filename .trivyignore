@@ -1,0 +1,3 @@
+# Reviewed Trivy exceptions only.
+# Add one exact vulnerability ID per line with a link to the review in
+# docs/dependency-security.md. Do not ignore packages or whole scanners.

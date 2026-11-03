@@ -40,6 +40,7 @@ from src.parsing.errors import (
 from src.parsing.ingest import ChromaStore, run_ingest
 from src.parsing.models import Chunk, ParseOptions, ParseResult
 from src.parsing.usage import embedding_usage
+from src.parsing.usage_ledger import clear_usage, read_usage
 from src.storage.base import Storage
 from src.storage.errors import StorageError
 from src.storage.hydration import ensure_document_cached, is_remote, sync_document
@@ -225,6 +226,46 @@ def _mark_failed(
         logger.exception("could not mark job %s failed", job_id)
 
 
+def _record_ledger_usage(
+    job: Job,
+    parse_settings: Settings,
+    *,
+    external_usage_recorder: Callable[[Job, Any], None] | None = None,
+    llm_usage_recorder: Callable[[Job, Any], None] | None = None,
+) -> None:
+    """Persist usage collected before a parse/attach job failed."""
+
+    doc_dir = parse_settings.parsed_dir / job.doc_id
+    usage = read_usage(doc_dir)
+    if not usage["external_usage"] and not usage["llm_usage"]:
+        return
+    result = {
+        "kind": "parse",
+        "doc_id": job.doc_id,
+        "external_usage": usage["external_usage"],
+        "llm_usage": usage["llm_usage"],
+    }
+    if external_usage_recorder is not None:
+        try:
+            external_usage_recorder(job, result)
+        except Exception:  # noqa: BLE001 - usage must not mask the failure
+            logger.warning(
+                "could not record failed-job external usage for %s",
+                job.job_id,
+                exc_info=True,
+            )
+    if llm_usage_recorder is not None:
+        try:
+            llm_usage_recorder(job, result)
+        except Exception:  # noqa: BLE001 - usage must not mask the failure
+            logger.warning(
+                "could not record failed-job LLM usage for %s",
+                job.job_id,
+                exc_info=True,
+            )
+    clear_usage(doc_dir)
+
+
 def _hydrate_parse_source(
     job: Job,
     parse_settings: Settings,
@@ -324,9 +365,19 @@ def execute_attach_job(
             allow_ocr=allow_ocr,
         )
     except AttachmentError as exc:
+        _record_ledger_usage(
+            job,
+            parse_settings,
+            external_usage_recorder=external_usage_recorder,
+        )
         _mark_failed(store, job.job_id, error=str(exc), exit_code=EXIT_INPUT)
         return
     except IngestError as exc:
+        _record_ledger_usage(
+            job,
+            parse_settings,
+            external_usage_recorder=external_usage_recorder,
+        )
         _mark_failed(
             store,
             job.job_id,
@@ -336,6 +387,11 @@ def execute_attach_job(
         return
     except Exception as exc:  # noqa: BLE001 - never leave a job running
         logger.exception("attachment job %s crashed", job.job_id)
+        _record_ledger_usage(
+            job,
+            parse_settings,
+            external_usage_recorder=external_usage_recorder,
+        )
         _mark_failed(
             store,
             job.job_id,
@@ -640,10 +696,22 @@ def execute_parse_job(
         )
     except ParsingError as exc:
         logger.warning("parse job %s failed: %s", job_id, exc)
+        _record_ledger_usage(
+            job,
+            parse_settings,
+            external_usage_recorder=external_usage_recorder,
+            llm_usage_recorder=llm_usage_recorder,
+        )
         _mark_failed(store, job_id, error=str(exc), exit_code=_exit_code_for(exc))
         return
     except Exception as exc:  # noqa: BLE001 - never leave a job running
         logger.exception("parse job %s crashed", job_id)
+        _record_ledger_usage(
+            job,
+            parse_settings,
+            external_usage_recorder=external_usage_recorder,
+            llm_usage_recorder=llm_usage_recorder,
+        )
         _mark_failed(
             store,
             job_id,

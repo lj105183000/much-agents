@@ -190,7 +190,7 @@ def test_extraction_cache_invalidated_by_deepseek_key(
 
     calls: list[int] = []
 
-    def fake_extract(document, settings):
+    def fake_extract(document, settings, **kwargs):
         calls.append(1)
         return (
             StructuredExtraction(

@@ -13,6 +13,7 @@ from .agents import ReviserAgent, ReviewerAgent, WriterAgent
 from .checks import AllowedFacts
 from .config import BidSettings
 from .context import TenderContext
+from .llm_usage import MeteredChatClient
 from .models import (
     BidAssembly,
     BidOutline,
@@ -53,9 +54,20 @@ def build_bid_graph(
     allowed: AllowedFacts,
     progress: ProgressFn | None = None,
 ) -> Any:
-    writer = WriterAgent(llm, settings)
-    reviewer = ReviewerAgent(llm, allowed, settings, context.facts)
-    reviser = ReviserAgent(llm, allowed, settings)
+    writer = WriterAgent(
+        MeteredChatClient(llm, operation="writer"), settings
+    )
+    reviewer = ReviewerAgent(
+        MeteredChatClient(llm, operation="reviewer"),
+        allowed,
+        settings,
+        context.facts,
+    )
+    reviser = ReviserAgent(
+        MeteredChatClient(llm, operation="reviser"),
+        allowed,
+        settings,
+    )
     profile_brief = profile.brief()
     section_by_id = {section.id: section for section in outline.sections}
 

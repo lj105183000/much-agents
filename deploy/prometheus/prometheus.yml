@@ -13,6 +13,11 @@ alerting:
 scrape_configs:
   - job_name: much-agents-api
     metrics_path: /api/metrics
+    # The monitoring compose command writes METRICS_TOKEN here (empty when
+    # the API does not require a token).
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/metrics_token
     static_configs:
       - targets: ["api:8001"]
   - job_name: prometheus
