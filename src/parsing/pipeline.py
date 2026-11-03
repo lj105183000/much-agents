@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import shutil
 import time
@@ -303,6 +305,22 @@ def parse_document(
         ],
     )
     timings["chunk"] = time.perf_counter() - started
+    chunk_config = {
+        "size": int(settings.chunk_size),
+        "overlap": int(settings.chunk_overlap),
+        "min_size": int(settings.chunk_min_size),
+        "parser_used": document.parser_used,
+    }
+    chunk_config_sha256 = hashlib.sha256(
+        json.dumps(
+            chunk_config,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    chunks_sha256 = hashlib.sha256(
+        (doc_dir / "chunks.jsonl").read_bytes()
+    ).hexdigest()
 
     # ---- ingest ----
     ingested = False
@@ -325,6 +343,9 @@ def parse_document(
                         data.get("source_sha256") == source_sha256
                         and data.get("collection") == collection_name
                         and data.get("embedding_model") == settings.embedding_model
+                        and data.get("chunks_sha256") == chunks_sha256
+                        and data.get("chunk_config_sha256")
+                        == chunk_config_sha256
                     ):
                         cached_ingest = data
                 except Exception:  # noqa: BLE001
@@ -346,6 +367,9 @@ def parse_document(
                         collection=collection_name,
                         prune_keep_ids=preserved_ids,
                     )
+                    summary["chunks_sha256"] = chunks_sha256
+                    summary["chunk_config"] = chunk_config
+                    summary["chunk_config_sha256"] = chunk_config_sha256
                     fresh_ingest_summary = summary
                     atomic_write_json(ingest_path, summary)
                     ingested = True

@@ -170,7 +170,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 2. **结构对齐**：以 `content_list` 的 `page_idx` + PDF 书签为准；`toc.py` 的 `end_page` 按“下一条同级或更高级目录”计算，避免章级范围被小节截断。页脚哈希水印和页码在 `parsers/footer.py` 清理，不要用 redaction。
 3. **抽取**：`extraction/` 按章节裁剪成 ≤24k 字的 payload，逐段调用 DeepSeek（OpenAI 兼容，JSON 模式），Pydantic 校验；失败或缺少 key 时降级到正则抽取，`method` 会记录 `llm` / `llm+regex` / `regex_fallback`。
 4. **分块与入库**：`chunking.py` 以 TOC section 为边界，默认 700 字/120 重叠，id 形如 `<doc_id>:<section_id>:<ordinal>`；`ingest.py` 用智谱 `embedding-3` 生成向量，`HttpClient` 写入 Chroma 集合 `bidding_documents`，upsert + 清理旧 id。
-5. **缓存**：`meta.json` 记录源文件 sha256；解析/抽取/入库均有缓存，`--force` 强制重跑。退出码：0 成功、2 输入错误、3 解析失败、4 抽取为空、5 入库失败、6 缺少 key 跳过。
+5. **缓存**：`meta.json` 记录源文件 sha256；解析/抽取/入库均有缓存，`--force` 强制重跑。`ingest.json` 额外记录 `chunks_sha256`、`chunk_config` 与 `chunk_config_sha256`（分块大小/重叠/最小长度/parser），任一不一致即重新入库，避免修改分块配置后继续使用旧向量。`POST /api/documents/{doc_id}/ingest` 可对已有解析产物重新分块入库（无需重新上传 PDF，复用 parse 队列/job 轮询）。退出码：0 成功、2 输入错误、3 解析失败、4 抽取为空、5 入库失败、6 缺少 key 跳过。
 
 ### 附件证据（`src/parsing/attachments.py`、`scripts/attach_evidence.py`）
 
@@ -212,6 +212,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 ### FastAPI 上传接口（已实现，`api/`）
 
 - `POST /api/parse`：multipart `file`，查询参数 `parser=auto|mineru|pymupdf`、`extract=true`、`ingest=true`；**默认执行完整流程**；返回 202 + `job_id`/`poll_url`/`doc_id`。
+- `POST /api/documents/{doc_id}/ingest`：对已有 `chunks.jsonl` 重新嵌入并 upsert Chroma，创建 `kind=parse` 且 `payload.ingest_only=true` 的 job，返回 202 + `poll_url`；需 `require_document_write` 并写必达审计。
 - `POST /api/documents/{doc_id}/attachments`：multipart 附件（PDF/CSV/XLSX/XLSM/TXT/MD），查询参数 `ingest=true`、`ocr=true`；创建 `kind=attach` job，复用 parse 队列/worker（`execute_parse_job` 按 kind 分支），返回 202 + `poll_url`；`GET /api/documents/{doc_id}/attachments` 列出附件；`DELETE /api/documents/{doc_id}/attachments/{attachment_id}` 删除 chunks/Chroma/MinIO 对象。三者均挂 `require_document_read|write` 并按项目隔离；上传/删除写审计且 `required=True`。
 - `GET /api/jobs/{job_id}`：200 返回状态/进度/result（失败任务也 200）；未知 404。
 - `GET /api/health`：返回 `storage_backend`/`storage_ok`、`llm_pricing_configured`/`missing_price_models`、`run_budget_cents`/`budget_enforcement` 与 `cost_guardrails_ok`；MinIO 不可达时 `status=degraded` 但仍 200。`GET /api/live` 始终 200；`GET /api/ready` 检查 Redis/DB/storage/Chroma，失败 503，结果缓存 `READINESS_CACHE_SECONDS`；`READINESS_STRICT=false` 时 Chroma 失败返回 200+degraded。`GET /api/metrics` 返回 Prometheus 文本指标，`METRICS_TOKEN` 可要求 Bearer；生产 Nginx 对 `/api/metrics` 返回 404，由内网 Prometheus 直接抓取。

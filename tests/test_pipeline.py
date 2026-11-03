@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -219,14 +220,35 @@ def test_ingest_cache_hit_skips_embedding(
     sample_pdf: Path, tmp_path: Path, monkeypatch
 ) -> None:
     settings = offline_settings(tmp_path, ZHIPU_API_KEY="test")
-    doc_dir = settings.parsed_dir / safe_stem(sample_pdf)
-    doc_dir.mkdir(parents=True, exist_ok=True)
+    first = parse_document(
+        sample_pdf,
+        ParseOptions(parser="pymupdf", extract=False, ingest=False),
+        settings,
+    )
+    doc_dir = first.output_dir
+    chunks_sha256 = hashlib.sha256(
+        (doc_dir / "chunks.jsonl").read_bytes()
+    ).hexdigest()
+    chunk_config = {
+        "size": int(settings.chunk_size),
+        "overlap": int(settings.chunk_overlap),
+        "min_size": int(settings.chunk_min_size),
+        "parser_used": "pymupdf",
+    }
+    chunk_config_sha256 = hashlib.sha256(
+        json.dumps(
+            chunk_config, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
     (doc_dir / "ingest.json").write_text(
         json.dumps(
             {
                 "source_sha256": sha256_file(sample_pdf),
                 "collection": settings.chroma_collection,
                 "embedding_model": settings.embedding_model,
+                "chunks_sha256": chunks_sha256,
+                "chunk_config": chunk_config,
+                "chunk_config_sha256": chunk_config_sha256,
             }
         ),
         encoding="utf-8",
@@ -262,6 +284,75 @@ def test_ingest_cache_hit_skips_embedding(
     assert result.ingested is True
     assert result.collection == settings.chroma_collection
     assert ("ingest", 100, "cache hit") in progress
+
+
+def test_ingest_cache_invalidated_when_chunk_config_changes(
+    sample_pdf: Path, tmp_path: Path, monkeypatch
+) -> None:
+    settings = offline_settings(tmp_path, ZHIPU_API_KEY="test")
+    first = parse_document(
+        sample_pdf,
+        ParseOptions(parser="pymupdf", extract=False, ingest=False),
+        settings,
+    )
+    (first.output_dir / "ingest.json").write_text(
+        json.dumps(
+            {
+                "source_sha256": sha256_file(sample_pdf),
+                "collection": settings.chroma_collection,
+                "embedding_model": settings.embedding_model,
+                "chunks_sha256": "0" * 64,
+                "chunk_config_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeCollection:
+        name = settings.chroma_collection
+
+    class FakeStore:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def ensure_collection(self, name=None):
+            return FakeCollection()
+
+        def existing_ids(self, doc_id: str) -> set[str]:
+            return {"stale"}
+
+    calls: list[int] = []
+
+    def fake_ingest(chunks, **kwargs):
+        calls.append(len(chunks))
+        return {
+            "doc_id": kwargs["doc_id"],
+            "collection": kwargs.get("collection")
+            or settings.chroma_collection,
+            "embedding_model": settings.embedding_model,
+            "chunk_count": len(chunks),
+            "upserted": len(chunks),
+            "deleted_stale": 0,
+            "embedding_usage": {},
+        }
+
+    monkeypatch.setattr("src.parsing.pipeline.ChromaStore", FakeStore)
+    monkeypatch.setattr("src.parsing.pipeline.run_ingest", fake_ingest)
+    result = parse_document(
+        sample_pdf,
+        ParseOptions(parser="pymupdf", extract=False, ingest=True),
+        settings,
+    )
+
+    assert result.exit_code == 0
+    assert result.ingested is True
+    assert calls
+    summary = json.loads(
+        (result.output_dir / "ingest.json").read_text(encoding="utf-8")
+    )
+    assert summary["chunks_sha256"] != "0" * 64
+    assert summary["chunk_config_sha256"] != "0" * 64
+    assert summary["chunk_config"]["parser_used"] == "pymupdf"
 
 
 def test_parse_cache_invalidated_when_source_bytes_change(

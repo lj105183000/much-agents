@@ -1111,6 +1111,39 @@ def build_router() -> APIRouter:
             kind="attach",
         )
 
+    @router.post(
+        "/documents/{doc_id}/ingest",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=JobCreatedResponse,
+    )
+    async def reingest_document(
+        doc_id: str,
+        request: Request,
+        context: ProjectContext = Depends(require_document_write),
+        service: AttachmentService = Depends(get_attachment_service),
+    ) -> JobCreatedResponse:
+        job = await service.submit_reingest(
+            doc_id=doc_id,
+            project_id=context.project_id,
+            created_by=context.user.id,
+        )
+        await _audit(
+            request,
+            "document.reingest",
+            context=context,
+            resource_type="document",
+            resource_id=doc_id,
+            detail={"job_id": job.job_id},
+            required=True,
+        )
+        return JobCreatedResponse(
+            job_id=job.job_id,
+            status=job.status,
+            poll_url=f"/api/jobs/{job.job_id}",
+            doc_id=doc_id,
+            kind="parse",
+        )
+
     @router.get(
         "/documents/{doc_id}/attachments",
         response_model=AttachmentListResponse,

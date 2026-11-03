@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import shutil
@@ -13,6 +14,7 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
+from src.parsing.artifacts import atomic_write_json, read_json, read_jsonl
 from src.parsing.attachments import (
     AttachmentError,
     attach_evidence,
@@ -35,7 +37,9 @@ from src.parsing.errors import (
     ParseError,
     ParsingError,
 )
-from src.parsing.models import ParseOptions, ParseResult
+from src.parsing.ingest import ChromaStore, run_ingest
+from src.parsing.models import Chunk, ParseOptions, ParseResult
+from src.parsing.usage import embedding_usage
 from src.storage.base import Storage
 from src.storage.errors import StorageError
 from src.storage.hydration import ensure_document_cached, is_remote, sync_document
@@ -372,6 +376,182 @@ def execute_attach_job(
             )
 
 
+def execute_reingest_job(
+    job: Job,
+    *,
+    store: JobStoreProtocol,
+    parse_settings: Settings,
+    storage: Storage | None = None,
+    external_usage_recorder: Callable[[Job, Any], None] | None = None,
+) -> None:
+    """Re-embed an existing parsed document without re-parsing the PDF."""
+
+    doc_dir = parse_settings.parsed_dir / job.doc_id
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            ensure_document_cached(
+                storage, parse_settings.parsed_dir, job.doc_id
+            )
+        except StorageError as exc:
+            _mark_failed(
+                store,
+                job.job_id,
+                error=f"parsed document is unavailable: {exc}",
+                exit_code=EXIT_INPUT,
+            )
+            return
+    if not (doc_dir / "chunks.jsonl").is_file():
+        _mark_failed(
+            store,
+            job.job_id,
+            error="parsed document has no chunks",
+            exit_code=EXIT_INPUT,
+        )
+        return
+    try:
+        meta = read_json(doc_dir / "meta.json")
+        payloads = read_jsonl(doc_dir / "chunks.jsonl")
+    except Exception as exc:  # noqa: BLE001 - corrupted artifacts are input errors
+        _mark_failed(
+            store,
+            job.job_id,
+            error=f"could not read parsed artifacts: {exc}",
+            exit_code=EXIT_INPUT,
+        )
+        return
+    chunks: list[Chunk] = []
+    for item in payloads:
+        if not isinstance(item, dict) or not item.get("text"):
+            continue
+        metadata = (
+            item.get("metadata")
+            if isinstance(item.get("metadata"), dict)
+            else {}
+        )
+        chunks.append(
+            Chunk(
+                id=str(item.get("id") or metadata.get("chunk_id") or ""),
+                text=str(item.get("text") or ""),
+                embed_text=str(
+                    item.get("embed_text") or item.get("text") or ""
+                ),
+                metadata=dict(metadata),
+            )
+        )
+    if not chunks:
+        _mark_failed(
+            store,
+            job.job_id,
+            error="parsed document has no usable chunks",
+            exit_code=EXIT_INPUT,
+        )
+        return
+    try:
+        store.update_progress(job.job_id, "ingest", 10, "re-embedding chunks")
+    except JobStoreError:
+        logger.warning("could not persist ingest progress", exc_info=True)
+    payload = job.payload or {}
+    try:
+        summary = run_ingest(
+            chunks,
+            doc_id=job.doc_id,
+            source_sha256=str(meta.get("source_sha256") or ""),
+            settings=parse_settings,
+            store=ChromaStore(parse_settings),
+            collection=str(payload.get("collection") or "").strip() or None,
+            prune=True,
+        )
+    except IngestError as exc:
+        _mark_failed(
+            store,
+            job.job_id,
+            error=str(exc),
+            exit_code=EXIT_SKIPPED if exc.skipped else EXIT_INGEST,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 - never leave a job running
+        logger.exception("re-ingest job %s crashed", job.job_id)
+        _mark_failed(
+            store,
+            job.job_id,
+            error=f"{type(exc).__name__}: {exc}",
+            exit_code=EXIT_INTERNAL,
+        )
+        return
+    chunk_config = {
+        "size": int(parse_settings.chunk_size),
+        "overlap": int(parse_settings.chunk_overlap),
+        "min_size": int(parse_settings.chunk_min_size),
+        "parser_used": str(meta.get("parser_used") or ""),
+    }
+    summary["chunks_sha256"] = hashlib.sha256(
+        (doc_dir / "chunks.jsonl").read_bytes()
+    ).hexdigest()
+    summary["chunk_config"] = chunk_config
+    summary["chunk_config_sha256"] = hashlib.sha256(
+        json.dumps(
+            chunk_config, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    try:
+        atomic_write_json(doc_dir / "ingest.json", summary)
+    except OSError:
+        logger.warning("could not persist ingest summary", exc_info=True)
+    if is_remote(storage):
+        assert storage is not None
+        try:
+            sync_document(storage, parse_settings.parsed_dir, job.doc_id)
+        except StorageError:
+            logger.warning("could not sync re-ingested document", exc_info=True)
+    usage = embedding_usage(summary, parse_settings, chunks=len(chunks))
+    markdown_chars = 0
+    try:
+        markdown_chars = len(
+            (doc_dir / "full.md").read_text(encoding="utf-8")
+        )
+    except OSError:
+        pass
+    parser_used = str(meta.get("parser_used") or "pymupdf")
+    result = {
+        "kind": "parse",
+        "ok": True,
+        "status": "success",
+        "exit_code": 0,
+        "doc_id": job.doc_id,
+        "output_dir": str(doc_dir),
+        "parser_requested": parser_used,
+        "parser_used": parser_used,
+        "page_count": int(meta.get("page_count") or 0),
+        "toc_entries": 0,
+        "markdown_chars": markdown_chars,
+        "extraction_method": meta.get("extraction_method"),
+        "chunk_count": len(chunks),
+        "ingested": True,
+        "collection": summary.get("collection"),
+        "warnings": [],
+        "timings_seconds": {},
+        "error": None,
+        "external_usage": [usage] if usage is not None else [],
+    }
+    if external_usage_recorder is not None:
+        try:
+            external_usage_recorder(job, result)
+        except Exception:  # noqa: BLE001 - usage must not fail a re-ingest
+            logger.warning(
+                "could not record re-ingest usage for %s",
+                job.job_id,
+                exc_info=True,
+            )
+    try:
+        store.mark_succeeded(job.job_id, result)
+    except JobStoreError:
+        logger.exception(
+            "could not persist terminal state for re-ingest job %s",
+            job.job_id,
+        )
+
+
 def execute_parse_job(
     job_id: str,
     *,
@@ -389,6 +569,17 @@ def execute_parse_job(
         return
     if job.kind == "attach":
         execute_attach_job(
+            job,
+            store=store,
+            parse_settings=parse_settings,
+            storage=storage,
+            external_usage_recorder=external_usage_recorder,
+        )
+        return
+    if job.kind == "parse" and bool(
+        (job.payload or {}).get("ingest_only")
+    ):
+        execute_reingest_job(
             job,
             store=store,
             parse_settings=parse_settings,
@@ -776,6 +967,38 @@ class AttachmentService:
                             job_id,
                             exc_info=True,
                         )
+
+    async def submit_reingest(
+        self,
+        *,
+        doc_id: str,
+        project_id: str | None = None,
+        created_by: str | None = None,
+    ) -> Job:
+        """Queue a re-embedding job for an already parsed document."""
+
+        job_id = uuid4().hex
+        payload: dict[str, Any] = {"ingest_only": True}
+        if project_id:
+            payload["project_id"] = project_id
+        if created_by:
+            payload["created_by"] = created_by
+        try:
+            job = self.store.create(
+                job_id=job_id,
+                filename="reingest.json",
+                doc_id=doc_id,
+                parser="",
+                extract=False,
+                ingest=True,
+                source_path=None,
+                kind="parse",
+                payload=payload,
+            )
+            self.dispatch(job)
+            return job
+        except Exception as exc:  # noqa: BLE001 - job store errors become 503
+            raise UploadError(503, "job store is unavailable") from exc
 
     async def list(
         self, doc_id: str, *, project_id: str = ""
