@@ -359,6 +359,7 @@ def test_required_audit_failure_fails_closed(tmp_path: Path) -> None:
     harness = build_harness(tmp_path)
     with TestClient(harness.app) as client:
         admin = harness.login_headers(client, "admin")
+        alice = harness.login_headers(client, "alice", PROJECT_A)
         harness.audit_repo.fail_append = True
         response = client.post(
             "/api/projects",
@@ -367,6 +368,21 @@ def test_required_audit_failure_fails_closed(tmp_path: Path) -> None:
         )
         assert response.status_code == 503
         assert response.json()["detail"] == "audit log is unavailable"
+        created = client.post(
+            "/api/bid-runs",
+            headers=alice,
+            json={
+                "doc_id": "doc-1",
+                "profile": {"company": {"name": "甲公司"}},
+            },
+        )
+        assert created.status_code == 503
+        company = client.post(
+            "/api/companies",
+            headers=admin,
+            json={"profile": {"company": {"name": "甲公司"}}},
+        )
+        assert company.status_code == 503
         # Reads remain available; only the un-audited write is rejected.
         assert client.get("/api/audit", headers=admin).status_code == 200
 

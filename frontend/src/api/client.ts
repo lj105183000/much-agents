@@ -486,6 +486,14 @@ function artifactPath(source: ArtifactSource): string {
   return `/api/documents/${encodeURIComponent(source.docId)}/bids/${encodeURIComponent(source.runId)}/artifacts`
 }
 
+function exportQuery(force: boolean, reason?: string): string {
+  if (!force) return ''
+  const params = new URLSearchParams({ force: 'true' })
+  const trimmed = (reason ?? '').trim()
+  if (trimmed) params.set('reason', trimmed)
+  return `?${params.toString()}`
+}
+
 export const api = {
   health(): Promise<HealthResponse> {
     return request<HealthResponse>('/api/health')
@@ -1164,24 +1172,36 @@ export const api = {
     )
   },
 
-  exportBidRun(runId: string, force = false): Promise<Blob> {
-    const query = force ? '?force=true' : ''
+  exportBidRun(
+    runId: string,
+    force = false,
+    reason?: string,
+  ): Promise<Blob> {
+    const query = exportQuery(force, reason)
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export${query}`,
       { method: 'POST' },
     )
   },
 
-  exportBidRunPdf(runId: string, force = false): Promise<Blob> {
-    const query = force ? '?force=true' : ''
+  exportBidRunPdf(
+    runId: string,
+    force = false,
+    reason?: string,
+  ): Promise<Blob> {
+    const query = exportQuery(force, reason)
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export/pdf${query}`,
       { method: 'POST' },
     )
   },
 
-  exportBidRunDoc(runId: string, force = false): Promise<Blob> {
-    const query = force ? '?force=true' : ''
+  exportBidRunDoc(
+    runId: string,
+    force = false,
+    reason?: string,
+  ): Promise<Blob> {
+    const query = exportQuery(force, reason)
     return requestBlob(
       `/api/bid-runs/${encodeURIComponent(runId)}/export/doc${query}`,
       { method: 'POST' },

@@ -359,6 +359,48 @@ def test_price_status_reports_missing_models() -> None:
     assert price_status([], raw=raw)["configured"] is True
 
 
+def test_price_status_rejects_empty_or_invalid_prices() -> None:
+    empty = json.dumps({"deepseek-flash": {}})
+    assert price_status(["deepseek-flash"], raw=empty) == {
+        "configured": False,
+        "missing_models": ["deepseek-flash"],
+        "models": ["deepseek-flash"],
+    }
+    assert estimate_cost(
+        "deepseek-flash",
+        1000,
+        1000,
+        load_price_table(empty),
+    ) is None
+
+    invalid = json.dumps(
+        {
+            "deepseek-flash": {
+                "input_per_1k_cny": "not-a-number",
+                "output_per_1k_cny": -1,
+            }
+        }
+    )
+    assert price_status(["deepseek-flash"], raw=invalid)["configured"] is False
+    assert estimate_cost(
+        "deepseek-flash",
+        1000,
+        1000,
+        load_price_table(invalid),
+    ) is None
+
+    input_only = json.dumps(
+        {"deepseek-flash": {"input_per_1k_cny": 0.001}}
+    )
+    assert price_status(["deepseek-flash"], raw=input_only)["configured"] is True
+    assert estimate_cost(
+        "deepseek-flash",
+        1000,
+        0,
+        load_price_table(input_only),
+    ) == 0.001
+
+
 def test_unpriced_call_warns_once(monkeypatch, caplog) -> None:
     monkeypatch.delenv("LLM_PRICE_TABLE", raising=False)
     llm_usage_module._unpriced_warned.clear()

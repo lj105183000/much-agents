@@ -448,20 +448,23 @@ export function BidView({
     }
   }
 
+  const promptForceReason = (): string | null => {
+    const entered = window.prompt(
+      '门禁当前阻止导出。请输入强制导出原因（将写入审计）：',
+      '',
+    )
+    const reason = (entered ?? '').trim()
+    return reason || null
+  }
+
   const exportDocx = async (force: boolean) => {
     if (!runId) return
-    if (
-      force &&
-      !window.confirm(
-        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
-      )
-    ) {
-      return
-    }
+    const reason = force ? promptForceReason() : undefined
+    if (force && !reason) return
     setExporting(true)
     setExportError(null)
     try {
-      const blob = await api.exportBidRun(runId, force)
+      const blob = await api.exportBidRun(runId, force, reason ?? undefined)
       const name = safeFilename(run?.project_name || docId || runId || '投标文件')
       downloadBlob(blob, `${name}-投标文件.docx`)
       if (force) {
@@ -487,18 +490,12 @@ export function BidView({
 
   const exportPdf = async (force: boolean) => {
     if (!runId) return
-    if (
-      force &&
-      !window.confirm(
-        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
-      )
-    ) {
-      return
-    }
+    const reason = force ? promptForceReason() : undefined
+    if (force && !reason) return
     setExportingPdf(true)
     setExportError(null)
     try {
-      const blob = await api.exportBidRunPdf(runId, force)
+      const blob = await api.exportBidRunPdf(runId, force, reason ?? undefined)
       const name = safeFilename(run?.project_name || docId || runId || '投标文件')
       downloadBlob(blob, `${name}-投标文件.pdf`)
       if (force) {
@@ -524,18 +521,12 @@ export function BidView({
 
   const exportDoc = async (force: boolean) => {
     if (!runId) return
-    if (
-      force &&
-      !window.confirm(
-        '门禁当前阻止导出。强制导出会跳过检查，确定继续吗？',
-      )
-    ) {
-      return
-    }
+    const reason = force ? promptForceReason() : undefined
+    if (force && !reason) return
     setExportingDoc(true)
     setExportError(null)
     try {
-      const blob = await api.exportBidRunDoc(runId, force)
+      const blob = await api.exportBidRunDoc(runId, force, reason ?? undefined)
       const name = safeFilename(run?.project_name || docId || runId || '投标文件')
       downloadBlob(blob, `${name}-投标文件.doc`)
       if (force) {

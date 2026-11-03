@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -27,6 +28,7 @@ from src.mcp_client.config import (
 from src.mcp_client.manager import (
     McpClientError,
     McpClientManager,
+    _ensure_public_image_url,
     render_arguments,
     threadsafe_external_renderer,
 )
@@ -522,7 +524,18 @@ def test_external_drawing_rejects_bad_mime_and_dimensions(tmp_path: Path) -> Non
     asyncio.run(scenario())
 
 
-def test_external_drawing_can_download_an_image_url(tmp_path: Path) -> None:
+async def _public_image_resolver(host: str, port: int) -> list[str]:
+    del host, port
+    return ["93.184.216.34"]
+
+
+def test_external_drawing_can_download_an_image_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "src.mcp_client.manager._resolve_host_ips",
+        _public_image_resolver,
+    )
     png = _png_bytes()
     requests: list[httpx.Request] = []
 
@@ -574,7 +587,13 @@ def test_external_drawing_can_download_an_image_url(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_external_image_url_rejects_non_image_content(tmp_path: Path) -> None:
+def test_external_image_url_rejects_non_image_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "src.mcp_client.manager._resolve_host_ips",
+        _public_image_resolver,
+    )
     drawing = FakeSession(
         {"render": _text_result("https://files.local/not-an-image")}
     )
@@ -618,6 +637,36 @@ def test_external_image_url_rejects_non_image_content(tmp_path: Path) -> None:
         assert not (tmp_path / "bad.png").exists()
 
     asyncio.run(scenario())
+
+
+def test_external_image_url_guard_rejects_non_public_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def private_resolver(host: str, port: int) -> list[str]:
+        del host, port
+        return ["10.0.0.5"]
+
+    monkeypatch.setattr(
+        "src.mcp_client.manager._resolve_host_ips",
+        private_resolver,
+    )
+
+    for url in (
+        "http://127.0.0.1/image.png",
+        "http://[::1]/image.png",
+        "http://10.0.0.1/image.png",
+        "http://169.254.169.254/latest/meta-data",
+        "https://files.local/image.png",
+        "file:///etc/passwd",
+    ):
+        with pytest.raises(McpClientError):
+            asyncio.run(_ensure_public_image_url(urlsplit(url)))
+
+    asyncio.run(
+        _ensure_public_image_url(
+            urlsplit("https://93.184.216.34/image.png")
+        )
+    )
 
 
 def test_merge_evidence_reserves_budget_and_prefers_local_tender_evidence() -> None:

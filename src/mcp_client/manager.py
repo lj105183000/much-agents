@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import ipaddress
 import logging
 import os
 import re
+import socket
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -53,6 +55,82 @@ _MIME_ALIASES = {
     "image/pjpeg": "image/jpeg",
     "image/x-png": "image/png",
 }
+_UNSAFE_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "0.0.0.0/8",
+        "100.64.0.0/10",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "240.0.0.0/4",
+    )
+)
+
+
+def _is_public_ip(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if address.is_private or address.is_loopback or address.is_link_local:
+        return False
+    if address.is_multicast or address.is_reserved or address.is_unspecified:
+        return False
+    if isinstance(address, ipaddress.IPv4Address) and any(
+        address in network for network in _UNSAFE_IPV4_NETWORKS
+    ):
+        return False
+    return bool(address.is_global)
+
+
+async def _resolve_host_ips(host: str, port: int) -> list[str]:
+    """Resolve a host for the public-address guard; patched in tests."""
+
+    infos = await asyncio.to_thread(
+        socket.getaddrinfo,
+        host,
+        port,
+        0,
+        socket.SOCK_STREAM,
+    )
+    return [str(info[4][0]) for info in infos]
+
+
+async def _ensure_public_image_url(parts: Any) -> None:
+    """Reject loopback/private/link-local/metadata targets before fetching."""
+
+    host = parts.hostname
+    if not host:
+        raise McpClientError("external image URL must use http(s)")
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        raise McpClientError("external image URL has an invalid port") from exc
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            addresses = await _resolve_host_ips(host, port)
+        except OSError as exc:
+            raise McpClientError(
+                "external image host could not be resolved"
+            ) from exc
+        if not addresses:
+            raise McpClientError("external image host could not be resolved")
+        if any(not _is_public_ip(address) for address in addresses):
+            raise McpClientError(
+                "external image host resolves to a non-public address"
+            )
+        return
+    if not _is_public_ip(str(literal)):
+        raise McpClientError(
+            "external image URL must point to a public address"
+        )
 
 
 class McpClientError(RuntimeError):
@@ -529,6 +607,7 @@ class McpClientManager:
             raise McpClientError("external image URL must use http(s)")
         if parts.username or parts.password:
             raise McpClientError("external image URL must not embed credentials")
+        await _ensure_public_image_url(parts)
         async with self._http.stream("GET", url) as response:
             if response.status_code != 200:
                 raise McpClientError(

@@ -52,6 +52,31 @@ describe('bid approval endpoints', () => {
   })
 })
 
+describe('forced bid exports', () => {
+  it('sends the force reason for DOCX, PDF and DOC', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(new Blob(['PK']), { status: 200 }),
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await api.exportBidRun('run-1', true, '门禁特批')
+    await api.exportBidRunPdf('run-1', true, '  审批人确认  ')
+    await api.exportBidRunDoc('run-1', false, 'ignored')
+
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [string, RequestInit]
+    >
+    const docx = new URL(String(calls[0][0]), 'http://localhost')
+    const pdf = new URL(String(calls[1][0]), 'http://localhost')
+    const doc = new URL(String(calls[2][0]), 'http://localhost')
+    expect(docx.searchParams.get('force')).toBe('true')
+    expect(docx.searchParams.get('reason')).toBe('门禁特批')
+    expect(pdf.searchParams.get('reason')).toBe('审批人确认')
+    expect(doc.searchParams.get('force')).toBeNull()
+    expect(doc.searchParams.get('reason')).toBeNull()
+  })
+})
+
 describe('project DOCX templates', () => {
   it('uploads, lists, updates, downloads and deletes templates', async () => {
     const fetchMock = vi.fn(

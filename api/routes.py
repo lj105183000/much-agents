@@ -1055,6 +1055,7 @@ def build_router() -> APIRouter:
             resource_type="document",
             resource_id=job.doc_id,
             detail={"job_id": job.job_id, "filename": job.filename},
+            required=True,
         )
         return JobCreatedResponse(
             job_id=job.job_id,
@@ -1190,6 +1191,7 @@ def build_router() -> APIRouter:
             resource_type="job",
             resource_id=job.job_id,
             detail={"doc_id": payload.doc_id},
+            required=True,
         )
         return BidCreatedResponse(
             job_id=job.job_id,
@@ -1224,6 +1226,7 @@ def build_router() -> APIRouter:
             resource_type="bid_run",
             resource_id=created.run_id,
             detail={"doc_id": payload.doc_id},
+            required=True,
         )
         return created
 
@@ -1462,6 +1465,7 @@ def build_router() -> APIRouter:
                 "revision": result.revision,
                 "invalidated_sections": result.invalidated_sections,
             },
+            required=True,
         )
         return result
 
@@ -1489,6 +1493,7 @@ def build_router() -> APIRouter:
                 "section_count": len(payload.section_ids) if payload else 0,
                 "assemble": payload.assemble if payload else True,
             },
+            required=True,
         )
         return result
 
@@ -1511,6 +1516,7 @@ def build_router() -> APIRouter:
             resource_type="bid_run",
             resource_id=run_id,
             detail={"job_id": result.job_id},
+            required=True,
         )
         return result
 
@@ -1531,6 +1537,7 @@ def build_router() -> APIRouter:
             context=context,
             resource_type="bid_run",
             resource_id=run_id,
+            required=True,
         )
         return result
 
@@ -1552,6 +1559,7 @@ def build_router() -> APIRouter:
             resource_type="bid_run",
             resource_id=run_id,
             detail={"gate_status": result.status},
+            required=True,
         )
         return result
 
@@ -2125,6 +2133,7 @@ def build_router() -> APIRouter:
             context=context,
             resource_type="bid_run",
             resource_id=run_id,
+            required=True,
         )
         return result
 
@@ -2506,6 +2515,7 @@ def build_router() -> APIRouter:
             resource_type="bid_run",
             resource_id=run_id,
             detail={"section_id": section_id},
+            required=True,
         )
         return result
 
@@ -2629,6 +2639,7 @@ def build_router() -> APIRouter:
             resource_type="bid_run",
             resource_id=run_id,
             detail={"section_id": section_id, "job_id": result.job_id},
+            required=True,
         )
         return result
 
@@ -2865,6 +2876,7 @@ def build_router() -> APIRouter:
             resource_type="company",
             resource_id=record.id,
             detail={"company_name": record.company_name},
+            required=True,
         )
         return _company_detail(record)
 
@@ -2908,6 +2920,7 @@ def build_router() -> APIRouter:
             resource_type="company",
             resource_id=company_id,
             detail={"company_name": record.company_name},
+            required=True,
         )
         return _company_detail(record)
 
@@ -2998,6 +3011,7 @@ def build_router() -> APIRouter:
                 if record.expires_at
                 else None,
             },
+            required=True,
         )
         return _qualification_view(record)
 
@@ -3038,6 +3052,7 @@ def build_router() -> APIRouter:
                 "qualification_id": record.id,
                 "changed_fields": sorted(payload.model_fields_set),
             },
+            required=True,
         )
         return _qualification_view(record)
 
@@ -3071,6 +3086,7 @@ def build_router() -> APIRouter:
             resource_type="company",
             resource_id=company_id,
             detail={"qualification_id": qualification_id},
+            required=True,
         )
 
     @router.get("/documents", response_model=DocumentListResponse)

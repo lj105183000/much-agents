@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -185,6 +186,28 @@ def _effective_date(entry: dict[str, Any]) -> date | None:
         return None
 
 
+def _finite_price(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return number
+
+
+def _entry_prices(entry: dict[str, Any]) -> tuple[float | None, float | None]:
+    input_value = entry.get("input_per_1k_cny")
+    if input_value is None:
+        input_value = entry.get("input")
+    output_value = entry.get("output_per_1k_cny")
+    if output_value is None:
+        output_value = entry.get("output")
+    return _finite_price(input_value), _finite_price(output_value)
+
+
 def select_price_entry(
     entries: list[dict[str, Any]] | None,
     as_of: date | None = None,
@@ -197,6 +220,9 @@ def select_price_entry(
     applicable: list[tuple[date, int, dict[str, Any]]] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
+            continue
+        input_price, output_price = _entry_prices(entry)
+        if input_price is None and output_price is None:
             continue
         effective = _effective_date(entry)
         if effective is None or effective <= today:
@@ -285,18 +311,16 @@ def estimate_cost(
         prices = select_price_entry(load_price_entries().get(model, []), as_of)
     if not isinstance(prices, dict):
         return None
-    input_price = prices.get("input_per_1k_cny", prices.get("input"))
-    output_price = prices.get("output_per_1k_cny", prices.get("output"))
-    if input_price is None and output_price is None:
-        return None
-    try:
-        input_value = float(input_price or 0.0)
-        output_value = float(output_price or 0.0)
-    except (TypeError, ValueError):
+    input_value, output_value = _entry_prices(prices)
+    if input_value is None and output_value is None:
         return None
     prompt = max(0, int(prompt_tokens or 0))
     completion = max(0, int(completion_tokens or 0))
-    return round(prompt / 1000.0 * input_value + completion / 1000.0 * output_value, 6)
+    return round(
+        prompt / 1000.0 * (input_value or 0.0)
+        + completion / 1000.0 * (output_value or 0.0),
+        6,
+    )
 
 
 class MeteredChatClient:
