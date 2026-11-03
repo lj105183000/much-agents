@@ -119,8 +119,10 @@ Do not add real tender text, real company/profile data, or L1 labels here.
 `.github/workflows/eval-nightly.yml` is disabled unless the repository variable
 `EVAL_NIGHTLY_ENABLED=true` and a self-hosted runner provides
 `EVAL_DATA_DIR`, `EVAL_BIDS_DIR`, `EVAL_BASELINE`, plus the model secrets.
-It runs `scripts.eval_generate` (one section per case), then
-`scripts.eval_regression` against the baseline.
+It validates the private dataset, runs `scripts.eval_generate` (one section per
+case), then `scripts.eval_regression --require-baseline` against the baseline.
+A missing baseline, or a baseline without L1 fields when L1 cases are ready,
+fails instead of silently passing.
 
 Reviewed labels feed L1 scoring: must-cover points are matched against
 `bid.md`/`sections/*.md` with deterministic 2-gram coverage, facts by value
