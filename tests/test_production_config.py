@@ -101,7 +101,7 @@ def test_production_rejects_unsafe_defaults() -> None:
             {"MCP_API_TOKEN": "CHANGE_ME_MCP_API_SERVICE_TOKEN"},
             "MCP_API_TOKEN",
         ),
-        ({"MAX_PDF_PAGES": "201"}, "MAX_PDF_PAGES"),
+        ({"MAX_PDF_PAGES": "2001"}, "MAX_PDF_PAGES"),
         ({"AUTH_SESSION_TTL_HOURS": "999"}, "AUTH_SESSION_TTL_HOURS"),
         ({"AUTH_HASH_CONCURRENCY": "99"}, "AUTH_HASH_CONCURRENCY"),
         (

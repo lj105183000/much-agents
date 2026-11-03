@@ -139,6 +139,38 @@ def upload(
     )
 
 
+def test_upload_accepts_pdf_above_200_pages(tmp_path: Path) -> None:
+    import pymupdf
+
+    settings = make_api_settings(tmp_path, MAX_PDF_PAGES="300")
+    capture = CaptureParse()
+    app = create_app(
+        api_settings=settings,
+        parse_settings=make_parse_settings(tmp_path),
+        runner=InlineRunner(),
+        parse_func=capture,
+    )
+    document = pymupdf.open()
+    for _ in range(201):
+        document.new_page()
+    pdf_bytes = document.tobytes()
+    document.close()
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/parse?parser=pymupdf&extract=false&ingest=false",
+            files={
+                "file": (
+                    "large.pdf",
+                    pdf_bytes,
+                    "application/pdf",
+                )
+            },
+        )
+        assert response.status_code == 202, response.text
+        assert capture.options and capture.options[0].parser == "pymupdf"
+
+
 def test_health(client: TestClient) -> None:
     response = client.get("/api/health")
     assert response.status_code == 200

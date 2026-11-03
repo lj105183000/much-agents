@@ -889,9 +889,14 @@ class AttachmentService:
                 require_pdf=False,
             )
             try:
+                # Attachment OCR currently processes a single MinerU file;
+                # keep the documented 200-page attachment cap even when the
+                # main tender limit is raised for split parsing.
                 validate_attachment_file(
                     destination,
-                    max_pdf_pages=self.api_settings.max_pdf_pages,
+                    max_pdf_pages=min(
+                        200, self.api_settings.max_pdf_pages
+                    ),
                 )
             except AttachmentError as exc:
                 raise UploadError(

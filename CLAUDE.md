@@ -178,7 +178,7 @@ npm run dist           # electron-builder 打包，输出 frontend/release/
 - 重解析只重建主文档 chunks，但会保留现有 `att:` chunks 与向量（`run_ingest(prune_keep_ids=...)`），不会丢附件证据。
 - 检索时若文档含 `附件：` chunk，每节额外执行一次 BOQ 专项 query 并把附件命中前置合并（主证据按 chunk id 去重后跟进，仍受 `BID_MAX_EVIDENCE_CHARS` 预算限制）；关键词/语义检索均按 metadata `project_id` 过滤，主文档 chunk（无 project_id）对所有项目可见。
 - PDF 用 PyMuPDF 提取文本与 `find_tables()` 表格；无文本层或存在无文本页时自动回退 MinerU OCR（需 `MINERU_API_KEY`，`--no-ocr` 可关闭；已验证扫描件 OCR），CSV/XLSX/XLSM 作为表格 chunk（XLSX 用 openpyxl）。旧 `.xls` 未支持，先另存为 `.xlsx`/CSV/PDF。
-- 上传校验：PDF 拒绝加密与超过 `MAX_PDF_PAGES`；XLSX 校验 zip 结构、条目 ≤2000、解压 ≤100MB（防 zip bomb）；CSV/TXT/MD 仅接受 UTF-8/GB18030 文本、单文件 ≤20MB 并拒绝 NUL；解析上限 20,000 行/500,000 字符。`validate_attachment_file` 在 API 上传与解析前各执行一次。
+- 上传校验：PDF 拒绝加密与超过 `MAX_PDF_PAGES`（默认 2000；主招标超过 200 页由 MinerU 自动分片，附件仍单独限制 200 页）；XLSX 校验 zip 结构、条目 ≤2000、解压 ≤100MB（防 zip bomb）；CSV/TXT/MD 仅接受 UTF-8/GB18030 文本、单文件 ≤20MB 并拒绝 NUL；解析上限 20,000 行/500,000 字符。`validate_attachment_file` 在 API 上传与解析前各执行一次。
 - `--list` 列出附件（`--project-id` 可只列当前项目；legacy 附件标记 `legacy_shared=true`）；`--remove <attachment_id>` 删除当前项目 manifest/chunks 与 Chroma 向量（legacy 附件需先迁移，普通项目删除返回 409；`--no-chroma-delete` 可保留向量），minio 模式同步对象。合成测试附件必须明确标注，并在真实使用前用 `--remove` 清理。
 
 ### 对象存储（`src/storage/`，默认 MinIO）

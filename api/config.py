@@ -178,8 +178,8 @@ class ApiSettings:
             errors.append("MinIO secret key is missing, default, or a placeholder")
         if len(self.mcp_api_token) < 16 or _is_placeholder(self.mcp_api_token):
             errors.append("MCP_API_TOKEN must be a non-trivial secret in production")
-        if not 1 <= self.max_pdf_pages <= 200:
-            errors.append("MAX_PDF_PAGES must be between 1 and the MinerU limit of 200")
+        if not 1 <= self.max_pdf_pages <= 2000:
+            errors.append("MAX_PDF_PAGES must be between 1 and 2000")
         if not 1 <= self.auth_session_ttl_hours <= 168:
             errors.append("AUTH_SESSION_TTL_HOURS must be between 1 and 168")
         if not 1 <= self.auth_login_max_failures <= 20:
@@ -281,7 +281,7 @@ class ApiSettings:
             host=_str(env, "API_HOST", "127.0.0.1"),
             port=_int(env, "API_PORT", 8001),
             max_upload_mb=_int(env, "MAX_UPLOAD_MB", 200),
-            max_pdf_pages=_int(env, "MAX_PDF_PAGES", 200),
+            max_pdf_pages=_int(env, "MAX_PDF_PAGES", 2000),
             job_workers=_int(env, "API_JOB_WORKERS", 1),
             cors_origins=origins,
             task_backend=_choice(env, "TASK_BACKEND", "celery", {"celery", "local"}),
