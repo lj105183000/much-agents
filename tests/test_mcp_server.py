@@ -49,6 +49,16 @@ EXPECTED_TOOLS = {
     "plan_bid_fixes",
     "apply_bid_fix",
     "regenerate_bid_figures",
+    "get_bid_approval",
+    "get_bid_approvals",
+    "approve_bid_run",
+    "reject_bid_run",
+    "list_bid_comments",
+    "create_bid_comment",
+    "update_bid_comment",
+    "list_templates",
+    "get_bid_usage",
+    "get_bid_feedback",
     "get_bid_profile_template",
 }
 
@@ -132,6 +142,80 @@ class Recorder:
             )
         if request.method == "GET" and path == "/api/bids/profile-template":
             return httpx.Response(200, json={"company": {}}, request=request)
+        if request.method == "GET" and path == "/api/bid-runs/run-1/approval":
+            return httpx.Response(
+                200,
+                json={"run_id": "run-1", "status": "approved"},
+                request=request,
+            )
+        if request.method == "GET" and path == "/api/bid-runs/run-1/approvals":
+            return httpx.Response(
+                200,
+                json={"run_id": "run-1", "approvals": []},
+                request=request,
+            )
+        if request.method == "POST" and path in {
+            "/api/bid-runs/run-1/approve",
+            "/api/bid-runs/run-1/reject",
+        }:
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "run_id": "run-1",
+                    "status": "approved"
+                    if path.endswith("/approve")
+                    else "rejected",
+                    "reason": body.get("reason", ""),
+                },
+                request=request,
+            )
+        if request.method == "GET" and path == "/api/bid-runs/run-1/comments":
+            return httpx.Response(
+                200,
+                json={"run_id": "run-1", "comments": [], "total": 0},
+                request=request,
+            )
+        if request.method == "POST" and path == "/api/bid-runs/run-1/comments":
+            body = json.loads(request.content)
+            return httpx.Response(
+                201,
+                json={
+                    "comment_id": "comment-1",
+                    "run_id": "run-1",
+                    "body": body["body"],
+                    "status": "open",
+                },
+                request=request,
+            )
+        if (
+            request.method == "PATCH"
+            and path == "/api/bid-runs/run-1/comments/comment-1"
+        ):
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "comment_id": "comment-1",
+                    "run_id": "run-1",
+                    "status": body.get("status", "open"),
+                },
+                request=request,
+            )
+        if request.method == "GET" and path == "/api/templates":
+            return httpx.Response(200, json={"templates": []}, request=request)
+        if request.method == "GET" and path == "/api/bid-runs/run-1/usage":
+            return httpx.Response(
+                200,
+                json={"run_id": "run-1", "llm_calls": 0},
+                request=request,
+            )
+        if request.method == "GET" and path == "/api/bid-runs/run-1/feedback":
+            return httpx.Response(
+                200,
+                json={"run_id": "run-1", "feedback": []},
+                request=request,
+            )
         if request.method == "POST" and path == "/api/bid-runs":
             body = json.loads(request.content)
             return httpx.Response(
@@ -262,6 +346,46 @@ def test_tool_registry_and_readonly_mapping() -> None:
             assert figures["run_id"] == "run-1"
             template = await invoke(server, "get_bid_profile_template", {})
             assert template == {"company": {}}
+            approval = await invoke(
+                server, "get_bid_approval", {"run_id": "run-1"}
+            )
+            assert approval["status"] == "approved"
+            approved = await invoke(
+                server,
+                "approve_bid_run",
+                {"run_id": "run-1", "reason": "ok"},
+            )
+            assert approved["status"] == "approved"
+            assert approved["reason"] == "ok"
+            comments = await invoke(
+                server,
+                "list_bid_comments",
+                {"run_id": "run-1", "status": "open"},
+            )
+            assert comments["comments"] == []
+            created = await invoke(
+                server,
+                "create_bid_comment",
+                {"run_id": "run-1", "body": "请补充质量措施"},
+            )
+            assert created["comment_id"] == "comment-1"
+            updated = await invoke(
+                server,
+                "update_bid_comment",
+                {
+                    "run_id": "run-1",
+                    "comment_id": "comment-1",
+                    "status": "resolved",
+                },
+            )
+            assert updated["status"] == "resolved"
+            assert (await invoke(server, "list_templates", {}))[
+                "templates"
+            ] == []
+            usage = await invoke(
+                server, "get_bid_usage", {"run_id": "run-1"}
+            )
+            assert usage["run_id"] == "run-1"
         finally:
             await proxy.aclose()
 

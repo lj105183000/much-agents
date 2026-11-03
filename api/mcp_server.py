@@ -702,6 +702,123 @@ def create_server(
         )
 
     @server.tool()
+    async def get_bid_approval(run_id: str) -> dict[str, Any]:
+        """读取 run 的当前审批状态。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/approval"
+        )
+
+    @server.tool()
+    async def get_bid_approvals(run_id: str) -> dict[str, Any]:
+        """读取 run 的审批历史与当前内容哈希。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/approvals"
+        )
+
+    @server.tool()
+    async def approve_bid_run(
+        run_id: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict[str, Any]:
+        """审批 run；override 需要 bid manager 权限且必须说明原因。"""
+        return await api_proxy.post_json(
+            f"/api/bid-runs/{_segment(run_id)}/approve",
+            {"reason": reason, "override": bool(override)},
+        )
+
+    @server.tool()
+    async def reject_bid_run(run_id: str, reason: str = "") -> dict[str, Any]:
+        """驳回 run。"""
+        return await api_proxy.post_json(
+            f"/api/bid-runs/{_segment(run_id)}/reject",
+            {"reason": reason, "override": False},
+        )
+
+    @server.tool()
+    async def list_bid_comments(
+        run_id: str,
+        status: str | None = None,
+        section_id: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """列出评审评论，可按 open/resolved 与章节筛选。"""
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 500))}
+        if status:
+            params["status"] = status
+        if section_id:
+            params["section_id"] = section_id
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/comments",
+            params=params,
+        )
+
+    @server.tool()
+    async def create_bid_comment(
+        run_id: str,
+        body: str,
+        section_id: str | None = None,
+        mentions: list[str] | None = None,
+        assignee_id: str | None = None,
+    ) -> dict[str, Any]:
+        """创建评审评论；提及与处理人必须是项目成员。"""
+        payload: dict[str, Any] = {"body": body}
+        if section_id:
+            payload["section_id"] = section_id
+        if mentions:
+            payload["mentions"] = list(mentions)
+        if assignee_id:
+            payload["assignee_id"] = assignee_id
+        return await api_proxy.post_json(
+            f"/api/bid-runs/{_segment(run_id)}/comments",
+            payload,
+        )
+
+    @server.tool()
+    async def update_bid_comment(
+        run_id: str,
+        comment_id: str,
+        body: str | None = None,
+        status: str | None = None,
+        assignee_id: str | None = None,
+    ) -> dict[str, Any]:
+        """更新评论正文/状态/处理人；传空串 assignee_id 可取消指派。"""
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if status is not None:
+            payload["status"] = status
+        if assignee_id is not None:
+            payload["assignee_id"] = assignee_id
+        return await api_proxy.patch_json(
+            f"/api/bid-runs/{_segment(run_id)}"
+            f"/comments/{_segment(comment_id)}",
+            payload,
+        )
+
+    @server.tool()
+    async def list_templates() -> dict[str, Any]:
+        """列出当前项目的 DOCX 模板元数据。"""
+        return await api_proxy.get_json("/api/templates")
+
+    @server.tool()
+    async def get_bid_usage(run_id: str) -> dict[str, Any]:
+        """读取 run 的 LLM/外部用量、成本、预算与按章节成本。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/usage"
+        )
+
+    @server.tool()
+    async def get_bid_feedback(
+        run_id: str, limit: int = 50
+    ) -> dict[str, Any]:
+        """读取 run 的章节反馈。"""
+        return await api_proxy.get_json(
+            f"/api/bid-runs/{_segment(run_id)}/feedback",
+            params={"limit": max(1, min(int(limit), 200))},
+        )
+
+    @server.tool()
     async def get_bid_profile_template() -> dict[str, Any]:
         """返回空白投标人资料模板，不返回任何公司实际资料。"""
         return await api_proxy.get_json("/api/bids/profile-template")
