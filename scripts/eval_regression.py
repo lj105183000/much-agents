@@ -212,6 +212,36 @@ def compare(
     }
 
 
+def validate_baseline(
+    baseline: Any,
+    current: dict[str, Any] | None = None,
+    *,
+    require_l1: bool = False,
+) -> str | None:
+    """Return a problem description for a missing/incomplete baseline."""
+
+    if not isinstance(baseline, dict):
+        return "baseline is missing or is not a JSON object"
+    summary = baseline.get("summary")
+    if not isinstance(summary, dict) or not summary:
+        return "baseline is missing a summary"
+    for key in ("avg_weighted_coverage", "avg_placeholder_density_per_1k_chars"):
+        if summary.get(key) is None:
+            return f"baseline is missing {key}"
+    if require_l1 and current is not None:
+        current_summary = current.get("summary") or {}
+        l1_ready = int(current_summary.get("l1_cases_ready") or 0)
+        if l1_ready > 0:
+            for key in (
+                "l1_cases_ready",
+                "avg_point_recall",
+                "avg_fact_coverage",
+            ):
+                if summary.get(key) is None:
+                    return f"baseline is missing L1 field {key}"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", default="eval-data")
@@ -222,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-l1-drop", type=float, default=0.02)
     parser.add_argument("--l1-threshold", type=float, default=0.6)
     parser.add_argument("--max-placeholder-increase", type=float, default=0.2)
+    parser.add_argument(
+        "--require-baseline",
+        action="store_true",
+        help="fail with exit 2 when the baseline is missing or lacks required L1 fields",
+    )
     args = parser.parse_args(argv)
 
     current = collect(
@@ -231,6 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     baseline_path = Path(args.baseline)
     baseline = _load(baseline_path) if baseline_path.is_file() else {}
+    if args.require_baseline:
+        problem = validate_baseline(baseline, current, require_l1=True)
+        if problem:
+            print(f"regression: {problem}", file=sys.stderr)
+            return 2
     result = compare(
         current,
         baseline,

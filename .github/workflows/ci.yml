@@ -30,6 +30,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends fonts-wqy-zenhei
       - run: uv run ruff check .
       - run: uv run pytest
+      - name: L0 rule baseline
+        run: |
+          uv run python -m scripts.eval_rule_baseline check \
+            --fixtures tests/eval/fixtures/l0 \
+            --baseline tests/eval/fixtures/l0/baseline.json
 
   migrations:
     runs-on: ubuntu-24.04

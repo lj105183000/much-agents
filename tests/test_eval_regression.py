@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.eval_regression import collect, compare
+from scripts.eval_regression import collect, compare, main, validate_baseline
 
 
 def _write_case(tmp_path, *, placeholder_count: int = 2):
@@ -88,3 +88,80 @@ def test_compare_fails_when_no_runs(tmp_path) -> None:
     result = compare(current, {})
     assert result["ok"] is False
     assert result["checks"][0]["id"] == "runs_found"
+
+
+def test_compare_fails_when_l1_cases_ready_drops() -> None:
+    current = {
+        "summary": {
+            "runs_found": 1,
+            "avg_weighted_coverage": 0.5,
+            "avg_placeholder_density": 1.0,
+            "l1_cases_ready": 1,
+        }
+    }
+    baseline = {
+        "summary": {
+            "avg_weighted_coverage": 0.5,
+            "avg_placeholder_density_per_1k_chars": 1.0,
+            "l1_cases_ready": 2,
+        }
+    }
+
+    result = compare(current, baseline)
+
+    assert result["ok"] is False
+    failed = {item["id"] for item in result["checks"] if not item["ok"]}
+    assert "l1_cases_ready" in failed
+
+
+def test_compare_uses_custom_thresholds() -> None:
+    current = {
+        "summary": {
+            "runs_found": 1,
+            "avg_weighted_coverage": 0.55,
+            "avg_placeholder_density": 1.0,
+        }
+    }
+    baseline = {
+        "summary": {
+            "avg_weighted_coverage": 0.6,
+            "avg_placeholder_density_per_1k_chars": 1.0,
+        }
+    }
+
+    assert compare(current, baseline, max_drop=0.1)["ok"] is True
+    assert compare(current, baseline, max_drop=0.02)["ok"] is False
+
+
+def test_validate_baseline_requires_l1_fields_when_l1_is_ready() -> None:
+    baseline = {
+        "summary": {
+            "avg_weighted_coverage": 0.5,
+            "avg_placeholder_density_per_1k_chars": 1.0,
+        }
+    }
+    current = {"summary": {"l1_cases_ready": 1}}
+
+    problem = validate_baseline(baseline, current, require_l1=True)
+
+    assert problem is not None
+    assert "L1" in problem
+
+
+def test_require_baseline_missing_file_exits_2(tmp_path, capsys) -> None:
+    code = main(
+        [
+            "--data-dir",
+            str(tmp_path / "missing-data"),
+            "--bids-dir",
+            str(tmp_path / "missing-bids"),
+            "--baseline",
+            str(tmp_path / "missing-baseline.json"),
+            "--output",
+            str(tmp_path / "regression.json"),
+            "--require-baseline",
+        ]
+    )
+
+    assert code == 2
+    assert "baseline" in capsys.readouterr().err.lower()

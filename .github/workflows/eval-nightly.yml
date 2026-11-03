@@ -22,6 +22,10 @@ jobs:
         with:
           version: "0.12.12"
           enable-cache: true
+      - run: uv sync --frozen
+      - name: Validate private eval dataset
+        run: |
+          uv run python -m scripts.eval_dataset validate --data-dir "$EVAL_DATA_DIR"
       - name: Generate one small run per eval case
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -37,6 +41,7 @@ jobs:
             --data-dir "$EVAL_DATA_DIR" \
             --bids-dir "$EVAL_BIDS_DIR" \
             --baseline "$EVAL_BASELINE" \
+            --require-baseline \
             --output "$RUNNER_TEMP/regression.json"
       - name: Upload regression report
         if: always()
