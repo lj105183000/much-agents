@@ -116,6 +116,10 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM nginx:1.29-alpine AS web
 
+# The official image is not rebuilt for every Alpine package advisory, so
+# pull the current security updates for its userland.
+RUN apk upgrade --no-cache
+
 COPY deploy/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
 COPY --from=web-build /app/dist /usr/share/nginx/html
