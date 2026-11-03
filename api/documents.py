@@ -177,8 +177,25 @@ def _list_storage_documents(
     limit: int,
     allowed_doc_ids: set[str] | None = None,
 ) -> list[DocumentSummary]:
-    parsed = _storage_docs(storage.list("parsed"), "parsed")
-    runs_by_doc = _storage_bid_runs(storage.list("bids"))
+    if allowed_doc_ids is not None:
+        parsed: dict[str, dict[str, ObjectInfo]] = {}
+        runs_by_doc: dict[str, list[DocumentBidRunSummary]] = {}
+        for doc_id in sorted(allowed_doc_ids):
+            if not is_safe_id(doc_id):
+                continue
+            doc_files = _storage_docs(
+                storage.list(f"parsed/{doc_id}"), "parsed"
+            ).get(doc_id, {})
+            if doc_files:
+                parsed[doc_id] = doc_files
+            doc_runs = _storage_bid_runs(
+                storage.list(f"bids/{doc_id}")
+            ).get(doc_id)
+            if doc_runs:
+                runs_by_doc[doc_id] = doc_runs
+    else:
+        parsed = _storage_docs(storage.list("parsed"), "parsed")
+        runs_by_doc = _storage_bid_runs(storage.list("bids"))
     documents: list[DocumentSummary] = []
     for doc_id, files in parsed.items():
         if allowed_doc_ids is not None and doc_id not in allowed_doc_ids:

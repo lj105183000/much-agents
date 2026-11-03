@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
 import { Icon } from './icons'
@@ -26,13 +26,41 @@ export function Modal({
   size = 'lg',
   footer,
 }: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const previousFocus = useRef<HTMLElement | null>(null)
+
   useEffect(() => {
     if (!open) return
+    previousFocus.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+    const dialog = dialogRef.current
+    const focusable = dialog?.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    )
+    focusable?.[0]?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab' || !focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      previousFocus.current?.focus()
+    }
   }, [open, onClose])
 
   if (!open) return null
@@ -46,6 +74,7 @@ export function Modal({
       }}
     >
       <div
+        ref={dialogRef}
         className={cn(
           'flex max-h-[88vh] w-full flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50',
           SIZES[size],

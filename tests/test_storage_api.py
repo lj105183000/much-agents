@@ -11,6 +11,7 @@ from api.app import create_app
 from api.artifacts import matches_pattern
 from api.bid_run_repo import BidRunRecord
 from api.bid_runs import BidRunService
+from api.documents import list_documents
 from api.jobs import JobStore
 from api.projects import DEFAULT_PROJECT_ID
 from api.runner import InlineRunner
@@ -511,3 +512,37 @@ def test_export_streams_from_storage(tmp_path: Path) -> None:
             "application/vnd.openxmlformats"
         )
         assert response.headers["content-disposition"].startswith("attachment")
+
+
+def test_document_listing_scopes_storage_prefixes(tmp_path: Path) -> None:
+    class RecordingStorage(MemoryStorage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prefixes: list[str] = []
+
+        def list(self, prefix: str):
+            self.prefixes.append(prefix)
+            return super().list(prefix)
+
+    storage = RecordingStorage()
+    for doc_id in ("doc-1", "doc-2"):
+        storage.put_bytes(
+            f"parsed/{doc_id}/meta.json",
+            json.dumps({"doc_id": doc_id, "page_count": 1}).encode(),
+        )
+        storage.put_bytes(f"parsed/{doc_id}/full.md", b"# tender")
+        storage.put_bytes(
+            f"bids/{doc_id}/run-1/bid.md", b"# bid"
+        )
+    documents = list_documents(
+        make_parse_settings(tmp_path),
+        make_bid_settings(tmp_path),
+        storage=storage,
+        allowed_doc_ids={"doc-1"},
+    )
+
+    assert [document.doc_id for document in documents] == ["doc-1"]
+    assert "parsed" not in storage.prefixes
+    assert "bids" not in storage.prefixes
+    assert "parsed/doc-1" in storage.prefixes
+    assert "bids/doc-1" in storage.prefixes
