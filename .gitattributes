@@ -18,3 +18,5 @@ NOTICE text eol=lf
 .python-version text eol=lf
 .env.example text eol=lf
 *.pdf binary
+*.vtt text eol=lf
+*.srt text eol=lf

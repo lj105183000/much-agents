@@ -1,8 +1,10 @@
-# Much Agents
+# Much Agents · 标书哨兵
 
-多 Agent 标书编写系统：把招标文件 PDF 解析为结构化知识，检索相关章节，由多个 Agent 生成投标文件，并完成合规检查、跨章节一致性核对、AI 配图与严格门禁导出。
+[![CI](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml)
 
-[▶ 观看 60 秒产品介绍](https://lj105183000.github.io/much-agents/presentation/) · [源码](https://github.com/lj105183000/much-agents) · [生产验收边界](docs/m1-acceptance-report.md)
+标书哨兵（Much Agents）是多 Agent 标书编写系统：把招标文件 PDF 解析为结构化知识，检索相关章节，由多个 Agent 生成投标文件，并完成合规检查、跨章节一致性核对、AI 配图与严格门禁导出。
+
+[项目主页](https://lj105183000.github.io/much-agents/) · [▶ 观看产品演示（约 74 秒，中文旁白，含字幕）](https://lj105183000.github.io/much-agents/presentation/) · [产品介绍 PDF](https://github.com/lj105183000/much-agents/releases/download/v0.2.0/biaoshu-shaobing-product-intro.pdf) · [PPTX](https://github.com/lj105183000/much-agents/releases/download/v0.2.0/biaoshu-shaobing-product-intro.pptx) · [源码](https://github.com/lj105183000/much-agents) · [生产验收边界](docs/m1-acceptance-report.md)
 
 **产品前端界面**（截图来自同一演示环境，使用合成演示数据）
 
@@ -124,7 +126,7 @@ PDF ──► 解析/抽取 ──► Chroma 向量库 ──► 多 Agent 写�
 | `src/bidding/` | LangGraph 写作、大纲、合规、一致性、修复方案、配图 |
 | `src/storage/` | 本地 / MinIO 对象存储与 hydration |
 | `src/mcp_client/` | 白名单 MCP 客户端 |
-| `migrations/` | Alembic 迁移（`0001`–`0021`） |
+| `migrations/` | Alembic 迁移（`0001`–`0027`） |
 | `frontend/` | React 19 + TypeScript + TailwindCSS 4 + Electron |
 | `deploy/` | Nginx/TLS、生产 Compose 环境模板 |
 | `scripts/` | 一键启动、备份/恢复、worker 健康检查、E2E 编排、压测、LLM 基准与成本对账 |
@@ -303,7 +305,9 @@ uv run python -m scripts.reconcile_costs --since 2026-11-01 --llm-invoice-cny 12
 
 ### 产品与验收
 
-- [产品介绍视频（60 秒，GitHub Pages 播放）](https://lj105183000.github.io/much-agents/presentation/)
+- [项目主页（GitHub Pages）](https://lj105183000.github.io/much-agents/)
+- [产品演示视频（约 74 秒，中文旁白，含字幕）](https://lj105183000.github.io/much-agents/presentation/)
+- [产品介绍 PDF（20 页）](https://github.com/lj105183000/much-agents/releases/download/v0.2.0/biaoshu-shaobing-product-intro.pdf) · [PPTX（20 页）](https://github.com/lj105183000/much-agents/releases/download/v0.2.0/biaoshu-shaobing-product-intro.pptx)
 - [产品前端界面截图](docs/presentation/README.md#前端界面截图)
 - [M1 生产验收报告](docs/m1-acceptance-report.md)
 - [贡献指南](CONTRIBUTING.md)
@@ -365,6 +369,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览
 - 企业资质库、Electron 本地产物目录打开
 - 干净主机验收工具 `scripts/acceptance_check.py`
+- GHCR 发布镜像的 Cosign 无密钥签名与 SPDX SBOM attestation（`release-images.yml`；手动 dispatch 验证通过）
 
 **尚未完成**
 
@@ -373,7 +378,6 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - 评论附件在线预览/病毒扫描与看板任意日期范围
 - Alertmanager 真实通知渠道（渲染器/校验已就绪，需部署方提供 webhook/SMTP）
 - MCP OAuth 与前端配置 UI
-- Cosign 发布镜像签名（`v0.1.0` 镜像签名与 SBOM attestation 已验证；还需用修复后的工作流重跑一次 tag 触发 run）
 - L1 实际标注数据与 L2 评测校准
 
 ## License
