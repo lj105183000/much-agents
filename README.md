@@ -1,6 +1,30 @@
 # Much Agents · 标书哨兵
 
-[![CI](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/lj105183000/much-agents/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lj105183000/much-agents?style=flat-square&label=release&logo=github&logoColor=white)](https://github.com/lj105183000/much-agents/releases)
+[![License](https://img.shields.io/github/license/lj105183000/much-agents?style=flat-square&label=license)](https://github.com/lj105183000/much-agents/blob/main/LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://github.com/lj105183000/much-agents/blob/main/pyproject.toml)
+[![Node.js](https://img.shields.io/badge/node-22-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://github.com/lj105183000/much-agents/blob/main/frontend/package.json)
+
+[![FastAPI](https://img.shields.io/badge/-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![LangGraph](https://img.shields.io/badge/-LangGraph-1C3C3C?style=flat-square)](https://langchain-ai.github.io/langgraph/)
+[![React 19](https://img.shields.io/badge/-React%2019-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![Electron](https://img.shields.io/badge/-Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
+[![PostgreSQL 16](https://img.shields.io/badge/-PostgreSQL%2016-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/-Redis-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![MinIO](https://img.shields.io/badge/-MinIO-C72E49?style=flat-square&logo=minio&logoColor=white)](https://min.io/)
+[![Chroma](https://img.shields.io/badge/-Chroma-FF6B6B?style=flat-square)](https://www.trychroma.com/)
+[![Docker](https://img.shields.io/badge/-Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+
+[![GHCR](https://img.shields.io/badge/GHCR-container%20images-2496ED?style=flat-square&logo=github&logoColor=white)](https://github.com/lj105183000/much-agents/blob/main/.github/workflows/release-images.yml)
+[![Cosign](https://img.shields.io/badge/cosign-signed-2F855A?style=flat-square&logo=github&logoColor=white)](https://github.com/lj105183000/much-agents/blob/main/.github/workflows/release-images.yml)
+[![SBOM](https://img.shields.io/badge/SBOM-SPDX-2F855A?style=flat-square&logo=github&logoColor=white)](https://github.com/lj105183000/much-agents/blob/main/.github/workflows/release-images.yml)
+[![Trivy](https://img.shields.io/badge/Trivy-scanned-2F855A?style=flat-square&logo=github&logoColor=white)](https://github.com/lj105183000/much-agents/actions/workflows/ci.yml)
+
+[![Last commit](https://img.shields.io/github/last-commit/lj105183000/much-agents?style=flat-square&label=last%20commit)](https://github.com/lj105183000/much-agents/commits/main)
+[![Commit activity](https://img.shields.io/github/commit-activity/m/lj105183000/much-agents?style=flat-square&label=commits%2Fmonth)](https://github.com/lj105183000/much-agents/graphs/commit-activity)
+[![Top language](https://img.shields.io/github/languages/top/lj105183000/much-agents?style=flat-square)](https://github.com/lj105183000/much-agents)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/lj105183000/much-agents/blob/main/CONTRIBUTING.md)
 
 标书哨兵（Much Agents）是多 Agent 标书编写系统：把招标文件 PDF 解析为结构化知识，检索相关章节，由多个 Agent 生成投标文件，并完成合规检查、跨章节一致性核对、AI 配图与严格门禁导出。
 
