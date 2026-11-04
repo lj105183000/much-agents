@@ -701,7 +701,7 @@ eval-data/
 | `EVAL_DATA_DIR` | 空 | 私有评测数据目录 |
 | `EVAL_MODE` | `replay` | `record/replay/live` |
 | `GIT_SHA` | 构建注入 | report/provenance |
-| `APP_VERSION` | 0.1.0 | report/provenance |
+| `APP_VERSION` | 0.2.0 | report/provenance |
 
 ## 附录 C：验收清单
 

@@ -326,7 +326,7 @@ def create_app(
     docs_enabled = api_settings.docs_enabled and not api_settings.is_production
     app = FastAPI(
         title="Much Agents API",
-        version="0.1.0",
+        version="0.2.0",
         description="Upload a tender PDF, poll parsing jobs, and write bid documents.",
         lifespan=lifespan,
         docs_url="/docs" if docs_enabled else None,

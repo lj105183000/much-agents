@@ -71,7 +71,7 @@ def build_provenance(
         "max_tokens": getattr(settings, "max_tokens", None),
         "prompt_fingerprint": prompt_fingerprint(),
         "git_sha": os.environ.get("GIT_SHA", ""),
-        "app_version": os.environ.get("APP_VERSION", "0.1.0"),
+        "app_version": os.environ.get("APP_VERSION", "0.2.0"),
         "llm_calls": int(llm_calls),
         "timings_seconds": dict(timings_seconds or {}),
     }

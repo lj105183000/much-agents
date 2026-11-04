@@ -637,7 +637,7 @@ def build_router() -> APIRouter:
         return HealthResponse(
             status=status_value,
             service="much-agents-api",
-            version="0.1.0",
+            version="0.2.0",
             jobs=jobs,
             task_backend=backend,
             redis_ok=redis_ok,
