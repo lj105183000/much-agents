@@ -60,14 +60,16 @@
 
 **生产验收资产补强（2026-11-03）**：新增 `scripts/render_alertmanager.py`，从 `deploy/env.production` 渲染 `deploy/alertmanager/alertmanager.yml`（gitignored、0600；拒绝占位 webhook、无效收件人、隐式 TLS 与空渠道），CI Docker job 用 `amtool check-config` 校验；`scripts/acceptance_check.py` 新增 `monitoring` 检查与 `--require-monitoring`。新增 `.github/workflows/release-images.yml`：`v*` tag 或手动触发时推送 GHCR，用 GitHub Actions OIDC 做 Cosign 无密钥签名、SPDX SBOM attestation 并校验；`ci.yml` 移除旧的静态密钥签名步骤。真实 webhook/SMTP 值仍需部署方执行。
 
-**发布签名验证（2026-11-03）**：`v0.1.0` 镜像已推送到 GHCR。首次 tag 触发的 run 在 `cosign verify-attestation` 阶段被 GitHub Actions 对超长 SBOM 输出的 secret scanning 卡住并取消（已知 cosign/GHA 交互问题），修复为丢弃 stdout 并加 `timeout 120` 后，手动触发的 `Release images`（run `41628354933`）4m17s 全绿，Cosign 签名与 SPDX attestation 校验通过。剩余：用修复后的工作流重跑一次 tag 触发 run。
+**发布签名验证（2026-11-03）**：`v0.1.0` 镜像已推送到 GHCR。首次 tag 触发的 run 在 `cosign verify-attestation` 阶段被 GitHub Actions 对超长 SBOM 输出的 secret scanning 卡住并取消（已知 cosign/GHA 交互问题），修复为丢弃 stdout 并加 `timeout 120` 后，手动触发的 `Release images`（run `41628354933`）4m17s 全绿，Cosign 签名与 SPDX attestation 校验通过。
+
+**发布签名复验（2026-11-04）**：`v0.2.0` tag 触发的 `Release images`（run `41797677627`）全绿，Cosign 签名与 SPDX SBOM attestation 校验通过。
 
 **Alertmanager 配置权限修复（2026-11-03）**：CI 发现 0600 的渲染文件无法被非特权 Alertmanager 容器读取。新增 monitoring profile 的一次性 `alertmanager-config` init 容器，以 root 读取宿主机文件并复制到命名卷（0444），Alertmanager 以只读方式挂载该卷；CI 改为通过同一 init 容器 + `amtool check-config` 校验。
 
 仍待实施（按优先级）：
 
 - force override 的角色细化（force 导出仍仅限 admin；审批 override 当前允许评审角色）。
-- 发布镜像的 Cosign 无密钥签名已落地并验证（OIDC + GHCR + SBOM attestation，无长期私钥）；剩余动作是用修复后的工作流重跑一次 tag 触发 run。
+- 发布镜像的 Cosign 无密钥签名已落地并验证（OIDC + GHCR + SBOM attestation，无长期私钥）；`v0.2.0` tag 触发的发布 workflow 已验证通过。
 - Alertmanager 配置渲染器、CI `amtool check-config` 与验收检查已落地；实际 webhook/SMTP 地址与凭据仍需部署方在 `deploy/env.production` 提供。
 - L1 人工复核与 L2 judge 的人工标注校准（judge、校准工具、复核清单与夜间 workflow 骨架已落地）。
 - MinerU/Embedding 配额、PITR。
@@ -186,7 +188,7 @@
 | 版本/反馈 | 人工编辑覆盖 `final_markdown`；无 `bid_section_versions`；无反馈/采纳入口；编辑/重写会删除 gate/compliance/consistency/report | 无法构造“修改前→修改后”样本，无法衡量真实采纳 |
 | 模型调用 | 两个重复的 DeepSeek 客户端；`llm.py:127-129` 静默 fallback 到 `deepseek-chat`；不检查 `finish_reason` | 实际模型不可知；截断内容静默返回 |
 | 检索 | Chroma 单集合；embedding 模型/维度不入集合版本；reviewer 只看前 3 条证据（`src/bidding/prompts.py:153`） | 检索不可复现；审查与完整证据不一致 |
-| 供应链 | MinIO/Chroma/Postgres/Redis 已固定 digest；CI 有 Trivy/Syft，发布 tag 由 `release-images.yml` 推送 GHCR 并做 Cosign 无密钥签名 + SBOM attestation | 首次发布 tag 时验证远端签名与 attestation |
+| 供应链 | MinIO/Chroma/Postgres/Redis 已固定 digest；CI 有 Trivy/Syft，发布 tag 由 `release-images.yml` 推送 GHCR 并做 Cosign 无密钥签名 + SBOM attestation | `v0.2.0` tag 触发的运行已验证远端签名与 attestation |
 
 ### 2.3 单机 Demo 可接受、生产不可接受的边界
 

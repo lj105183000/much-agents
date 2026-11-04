@@ -369,7 +369,7 @@ P0 内网小团队上线闭环已实现，并完成本地 Docker Desktop 生产�
 - DOC（Word 97-2003）导出、全局/项目级 DOCX 模板库与预览
 - 企业资质库、Electron 本地产物目录打开
 - 干净主机验收工具 `scripts/acceptance_check.py`
-- GHCR 发布镜像的 Cosign 无密钥签名与 SPDX SBOM attestation（`release-images.yml`；手动 dispatch 验证通过）
+- GHCR 发布镜像的 Cosign 无密钥签名与 SPDX SBOM attestation（`release-images.yml`；`v0.2.0` tag 触发与手动 dispatch 均验证通过）
 
 **尚未完成**
 
