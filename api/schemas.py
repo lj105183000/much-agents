@@ -13,7 +13,7 @@ from .jobs import JobKind, JobState
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"] = "ok"
     service: str = "much-agents-api"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     jobs: int = 0
     task_backend: Literal["celery", "local"] = "celery"
     redis_ok: bool | None = None
